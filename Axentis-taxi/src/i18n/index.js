@@ -1,0 +1,96 @@
+const translations = {
+  ru: {
+    // Auth
+    register: 'Регистрация',
+    login: 'Войти',
+    firstName: 'Имя',
+    lastName: 'Фамилия',
+    phone: 'Номер телефона',
+    password: 'Пароль',
+    confirmPassword: 'Подтверждение пароля',
+    haveAccount: 'Уже есть аккаунт?',
+    noAccount: 'Нет аккаунта?',
+    passwordMin: 'Минимум 8 символов',
+    passwordMismatch: 'Пароли не совпадают',
+    // Home
+    whereToGo: 'Куда едем?',
+    from: 'Откуда',
+    to: 'Куда',
+    orderTaxi: 'Заказать такси',
+    searching: 'Поиск водителя...',
+    driverFound: 'Водитель найден!',
+    driverArrived: 'Водитель прибыл',
+    tripInProgress: 'Поездка начата',
+    cancel: 'Отмена',
+    noDriversFound: 'Нет доступных водителей',
+    estimatedPrice: 'Примерная цена',
+    // Profile
+    profile: 'Профиль',
+    darkMode: 'Тёмный режим',
+    language: 'Язык',
+    support: 'Поддержка',
+    logout: 'Выйти',
+    save: 'Сохранить',
+    uploadPhoto: 'Загрузить фото',
+    // Misc
+    home: 'Главная',
+    history: 'История',
+    sum: 'сум',
+    km: 'км',
+    min: 'мин',
+    loading: 'Загрузка...',
+    error: 'Ошибка',
+    success: 'Успешно',
+    retry: 'Повторить',
+  },
+  uz: {
+    // Auth
+    register: "Ro'yxatdan o'tish",
+    login: 'Kirish',
+    firstName: 'Ism',
+    lastName: 'Familiya',
+    phone: 'Telefon raqam',
+    password: 'Parol',
+    confirmPassword: 'Parolni tasdiqlash',
+    haveAccount: 'Akkauntingiz bormi?',
+    noAccount: "Akkauntingiz yo'qmi?",
+    passwordMin: 'Kamida 8 belgi',
+    passwordMismatch: 'Parollar mos kelmaydi',
+    // Home
+    whereToGo: 'Qayerga boramiz?',
+    from: 'Qaerdan',
+    to: 'Qayerga',
+    orderTaxi: 'Taksi buyurtma qilish',
+    searching: 'Haydovchi qidirilmoqda...',
+    driverFound: 'Haydovchi topildi!',
+    driverArrived: 'Haydovchi keldi',
+    tripInProgress: 'Safar boshlandi',
+    cancel: 'Bekor qilish',
+    noDriversFound: "Mavjud haydovchi yo'q",
+    estimatedPrice: 'Taxminiy narx',
+    // Profile
+    profile: 'Profil',
+    darkMode: "Qorong'u rejim",
+    language: 'Til',
+    support: 'Qo\'llab-quvvatlash',
+    logout: 'Chiqish',
+    save: 'Saqlash',
+    uploadPhoto: 'Rasm yuklash',
+    // Misc
+    home: 'Asosiy',
+    history: 'Tarix',
+    sum: "so'm",
+    km: 'km',
+    min: 'min',
+    loading: 'Yuklanmoqda...',
+    error: 'Xato',
+    success: 'Muvaffaqiyatli',
+    retry: 'Qayta urinish',
+  },
+};
+
+export function t(lang, key) {
+  return translations[lang]?.[key] || translations.ru[key] || key;
+}
+
+export default translations;

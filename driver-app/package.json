@@ -1,0 +1,29 @@
+{
+  "name": "axentis-taxi-driver",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios"
+  },
+  "dependencies": {
+    "expo": "~55.0.7",
+    "expo-status-bar": "~55.0.4",
+    "expo-location": "~18.1.5",
+    "expo-secure-store": "~14.1.4",
+    "expo-image-picker": "~16.1.4",
+    "react": "19.2.0",
+    "react-native": "0.83.2",
+    "react-native-maps": "1.20.1",
+    "@react-navigation/native": "^7.1.6",
+    "@react-navigation/bottom-tabs": "^7.3.10",
+    "@react-navigation/stack": "^7.3.2",
+    "react-native-screens": "^4.10.0",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-gesture-handler": "~2.24.0",
+    "axios": "^1.7.9",
+    "@react-native-async-storage/async-storage": "2.1.2"
+  },
+  "private": true
+}
