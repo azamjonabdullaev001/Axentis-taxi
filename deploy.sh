@@ -50,23 +50,23 @@ echo "[5/6] Открытие портов..."
 if command -v ufw &> /dev/null; then
     ufw allow 22/tcp    # SSH
     ufw allow 80/tcp    # HTTP
-    ufw allow 8080/tcp  # Backend API
-    ufw allow 3000/tcp  # Admin Panel
+    ufw allow 8181/tcp  # Axentis Backend API
+    ufw allow 3001/tcp  # Axentis Admin Panel
     ufw --force enable
 fi
 
-# 6. Запуск Docker Compose
+# 6. Запуск Docker Compose (отдельный project-name, не трогает старый проект)
 echo "[6/6] Запуск приложения..."
-docker compose down 2>/dev/null || true
-docker compose up -d --build
+docker compose -p axentis-taxi down 2>/dev/null || true
+docker compose -p axentis-taxi up -d --build
 
 echo ""
 echo "=============================="
 echo "  Деплой завершён успешно!   "
 echo "=============================="
 echo ""
-echo "  Backend API:   http://109.123.253.238:8080"
-echo "  Admin Panel:   http://109.123.253.238:3000"
+echo "  Backend API:   http://109.123.253.238:8181"
+echo "  Admin Panel:   http://109.123.253.238:3001"
 echo ""
-echo "Статус контейнеров:"
-docker compose ps
+echo "Статус контейнеров Axentis Taxi:"
+docker compose -p axentis-taxi ps
