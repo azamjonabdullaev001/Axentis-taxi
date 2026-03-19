@@ -21,31 +21,22 @@ if ! command -v docker &> /dev/null; then
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     apt-get update -y
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    apt-get install -y docker-ce docker-ce-cli containerd.io
     systemctl enable docker
     systemctl start docker
     echo "Docker установлен!"
 else
-    echo "Docker уже установлен, проверяем docker-compose-plugin..."
+    echo "Docker уже установлен."
 fi
 
-# Устанавливаем docker-compose-plugin если docker compose недоступен
-if ! docker compose version &> /dev/null; then
-    echo "Устанавливаем docker-compose-plugin..."
-    apt-get install -y docker-compose-plugin
-fi
-
-# Определяем команду для compose
-if docker compose version &> /dev/null; then
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    COMPOSE_CMD="docker-compose"
-else
-    echo "Устанавливаем docker-compose standalone..."
-    curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+# Устанавливаем docker-compose если недоступен
+if ! command -v docker-compose &> /dev/null; then
+    echo "Устанавливаем docker-compose..."
+    curl -SL "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
-    COMPOSE_CMD="docker-compose"
+    echo "docker-compose установлен!"
 fi
+COMPOSE_CMD="docker-compose"
 echo "Используем: $COMPOSE_CMD"
 
 # 3. Установка Git
