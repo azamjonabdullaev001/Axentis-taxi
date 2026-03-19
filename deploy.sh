@@ -57,8 +57,9 @@ fi
 
 # 6. Запуск Docker Compose (отдельный project-name, не трогает старый проект)
 echo "[6/6] Запуск приложения..."
-docker compose -p axentis-taxi down 2>/dev/null || true
-docker compose -p axentis-taxi up -d --build
+export COMPOSE_PROJECT_NAME=axentis-taxi
+docker compose down 2>/dev/null || true
+docker compose up -d --build
 
 echo ""
 echo "=============================="
@@ -69,4 +70,4 @@ echo "  Backend API:   http://109.123.253.238:8181"
 echo "  Admin Panel:   http://109.123.253.238:3001"
 echo ""
 echo "Статус контейнеров Axentis Taxi:"
-docker compose -p axentis-taxi ps
+docker compose ps
