@@ -409,9 +409,9 @@ export default function HomeScreen() {
       pickupLockedRef.current = true;
       setPickupCoords(coords);
       setPickupText(t(lang, 'determiningAddress'));
-      // После выбора «Отсюда» автоматически переходим к выбору «Куда»
-      setMapMode('dest');
       reverseGeocode(coords).then((label) => setPickupText(label));
+      // Закрываем режим — финиш не сбрасывается
+      setMapMode(null);
     } else if (mapMode === 'dest') {
       setDestCoords(coords);
       const typed = destInputText.trim();
@@ -523,7 +523,7 @@ export default function HomeScreen() {
       >
         {/* Позиция пользователя — острый конец значка указывает на точку */}
         {userLocation && (
-          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} tracksViewChanges>
+          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} tracksViewChanges={false}>
             <Image source={USER_ICON} style={{ width: 36, height: 36 }} resizeMode="contain" />
           </Marker>
         )}
@@ -535,6 +535,7 @@ export default function HomeScreen() {
             coordinate={{ latitude: driver.lat, longitude: driver.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
+            tracksViewChanges={false}
             rotation={((driver.heading ?? 0) + 180) % 360}
           >
             <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
@@ -543,13 +544,13 @@ export default function HomeScreen() {
 
         {/* Пин отправления */}
         {pickupCoords && !mapMode && (
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges>
+          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}>
             <Image source={PICKUP_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
           </Marker>
         )}
         {/* Пин назначения */}
         {destCoords && !mapMode && (
-          <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges>
+          <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}>
             <Image source={DEST_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
           </Marker>
         )}
@@ -563,6 +564,7 @@ export default function HomeScreen() {
             }}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
+            tracksViewChanges={false}
             rotation={((driverDisplayLocation.heading ?? 0) + 180) % 360}
           >
             <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
