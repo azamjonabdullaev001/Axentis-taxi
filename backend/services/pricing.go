@@ -42,17 +42,20 @@ func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPri
 		if ps.SurgeMultiplier > 0 {
 			surge = ps.SurgeMultiplier
 		}
-		// Формула: service_fee (базовый сбор) + distance_km * price_per_km
-		basePrice = math.Round(ps.ServiceFee + distanceKm*ps.PricePerKm)
-		totalPrice = math.Round(basePrice * surge)
+		// Цена = сервисный сбор + (км × цена_за_км), затем ×коэффициент
+		// Округление ВВЕРХ до ближайших 200 сум (минимальная единица в Узбекистане)
+		rawBase := ps.ServiceFee + distanceKm*ps.PricePerKm
+		basePrice = math.Ceil(rawBase/200) * 200
+		totalPrice = math.Ceil((basePrice*surge)/200) * 200
 		return
 	}
-	// Fallback при ошибке БД: 2000 сум базовый + 200 за каждые 100 м
+	// Fallback при ошибке БД
 	blocks := math.Ceil(distanceKm * 10)
 	if blocks < 1 {
 		blocks = 1
 	}
-	basePrice = math.Round((2000 + blocks*200) * surge)
+	rawBase := 2000 + blocks*200
+	basePrice = math.Ceil(rawBase/200) * 200
 	totalPrice = basePrice
 	return
 }

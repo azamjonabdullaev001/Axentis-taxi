@@ -187,8 +187,10 @@ export default function HomeScreen() {
     const base = Number(pricingSettings.service_fee) || 2000;
     const perKm = Number(pricingSettings.price_per_km) || 2000;
     const surge = Number(pricingSettings.surge_multiplier) || 1;
-    // Базовый сбор + стоимость за км × расстояние × коэффициент
-    return Math.round((base + distanceKm * perKm) * surge);
+    // Сервисный сбор + км × цена_за_км × коэффициент
+    // Округление ВВЕРХ до ближайших 200 сум (минимальная денежная единица в Узбекистане)
+    const raw = (base + distanceKm * perKm) * surge;
+    return Math.ceil(raw / 200) * 200;
   }
 
   function togglePanel() {
@@ -621,7 +623,7 @@ export default function HomeScreen() {
             style={{ width: 48, height: 48, marginTop: -24 }}
             resizeMode="contain"
           />
-          <View style={s.centerPinShadow} />
+
         </View>
       )}
 
