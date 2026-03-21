@@ -702,6 +702,19 @@ export default function HomeScreen() {
         )}
       </MapView>
 
+      {/* Floating GPS button — always visible */}
+      <TouchableOpacity
+        style={[s.floatingGpsBtn, { backgroundColor: colors.card, bottom: panelHeight + 12 }]}
+        onPress={() => {
+          if (userLocation) {
+            mapRef.current?.animateToRegion({ ...userLocation, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+          }
+        }}
+        activeOpacity={0.7}
+      >
+        <Ionicons name="navigate" size={22} color={colors.primary} />
+      </TouchableOpacity>
+
       {/* Center crosshair during map selection — PNG иконка, острый кончик в центре экрана */}
       {mapMode && (
         <View style={s.centerPinContainer} pointerEvents="none">
@@ -1024,6 +1037,14 @@ function makeStyles(colors) {
     gpsLocateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     gpsLocateText: { fontSize: 14, fontWeight: '600' },
     priceInline: { fontSize: 14, fontWeight: '700' },
+
+    // Floating GPS button
+    floatingGpsBtn: {
+      position: 'absolute', right: 14, width: 44, height: 44,
+      borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25, shadowRadius: 3,
+    },
 
     // Выбор тарифа
     tariffRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
