@@ -148,6 +148,12 @@ export default function HomeScreen() {
   const [driverDisplayLocation, setDriverDisplayLocation] = useState(null);
   const [driverInfo, setDriverInfo] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
+  // tracksViewChanges=true пока иконки не загрузились, затем false — без мигания
+  const [iconsReady, setIconsReady] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setIconsReady(true), 800);
+    return () => clearTimeout(t);
+  }, []);
   const [routePreviewCoords, setRoutePreviewCoords] = useState([]);
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
@@ -523,7 +529,7 @@ export default function HomeScreen() {
       >
         {/* Позиция пользователя — острый конец значка указывает на точку */}
         {userLocation && (
-          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} tracksViewChanges={false}>
+          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} tracksViewChanges={!iconsReady}>
             <Image source={USER_ICON} style={{ width: 36, height: 36 }} resizeMode="contain" />
           </Marker>
         )}
@@ -535,7 +541,7 @@ export default function HomeScreen() {
             coordinate={{ latitude: driver.lat, longitude: driver.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            tracksViewChanges={false}
+            tracksViewChanges={!iconsReady}
             rotation={((driver.heading ?? 0) + 180) % 360}
           >
             <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
@@ -544,13 +550,13 @@ export default function HomeScreen() {
 
         {/* Пин отправления */}
         {pickupCoords && !mapMode && (
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}>
+          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={!iconsReady}>
             <Image source={PICKUP_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
           </Marker>
         )}
         {/* Пин назначения */}
         {destCoords && !mapMode && (
-          <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}>
+          <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={!iconsReady}>
             <Image source={DEST_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
           </Marker>
         )}
@@ -564,7 +570,7 @@ export default function HomeScreen() {
             }}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            tracksViewChanges={false}
+            tracksViewChanges={!iconsReady}
             rotation={((driverDisplayLocation.heading ?? 0) + 180) % 360}
           >
             <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
