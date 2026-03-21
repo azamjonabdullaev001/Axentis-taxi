@@ -6,6 +6,8 @@ import (
 	"math"
 	"time"
 
+	"axentis-taxi/models"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
 )
