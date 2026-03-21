@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"time"
 
@@ -62,6 +63,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 
 	passengerID := c.GetString("user_id")
 	basePrice, totalPrice, surge := h.pricingService.CalculatePrice(req.DistanceKm)
+	lockedPerKm := h.pricingService.GetEffectivePricePerKm()
 
 	tripType := req.TripType
 	if tripType != "free" {
@@ -72,12 +74,12 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	err := h.db.QueryRow(context.Background(),
 		`INSERT INTO orders (passenger_id, pickup_lat, pickup_lng, pickup_address,
 		 destination_lat, destination_lng, destination_address, distance_km,
-		 base_price, total_price, surge_multiplier, service_fee, status, trip_type)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 2000, 'searching', $12)
+		 base_price, total_price, surge_multiplier, service_fee, status, trip_type, locked_price_per_km)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 2000, 'searching', $12, $13)
 		 RETURNING id`,
 		passengerID, req.PickupLat, req.PickupLng, req.PickupAddress,
 		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
-		req.DistanceKm, basePrice, totalPrice, surge, tripType,
+		req.DistanceKm, basePrice, totalPrice, surge, tripType, lockedPerKm,
 	).Scan(&orderID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order"})
@@ -87,11 +89,34 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	go h.matchingService.FindAndNotifyDrivers(orderID, req.PickupLat, req.PickupLng)
 
 	c.JSON(http.StatusCreated, gin.H{
-		"order_id":    orderID,
-		"status":      "searching",
-		"total_price": totalPrice,
-		"surge":       surge,
+		"order_id":             orderID,
+		"status":               "searching",
+		"total_price":          totalPrice,
+		"surge":                surge,
+		"locked_price_per_km":  lockedPerKm,
 	})
+}
+
+func (h *OrderHandler) UpdateOrderDistance(c *gin.Context) {
+	orderID := c.Param("id")
+	userID := c.GetString("user_id")
+
+	var req struct {
+		DrivenKm float64 `json:"driven_km"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.DrivenKm < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid driven_km"})
+		return
+	}
+
+	h.db.Exec(context.Background(),
+		`UPDATE orders SET distance_km = $1
+		 WHERE id = $2 AND trip_type = 'free' AND status = 'in_progress'
+		 AND passenger_id = $3`,
+		req.DrivenKm, orderID, userID,
+	)
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *OrderHandler) GetOrder(c *gin.Context) {
@@ -336,15 +361,24 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	userID := c.GetString("user_id")
 	now := time.Now()
 
-	var waitFee, basePrice, serviceFee float64
+	var waitFee, basePrice, serviceFee, lockedPerKm, distKm float64
 	var waitStarted *time.Time
+	var tripType string
 	h.db.QueryRow(context.Background(),
-		`SELECT wait_started_at, COALESCE(base_price,0), service_fee
+		`SELECT wait_started_at, COALESCE(base_price,0), service_fee,
+		 COALESCE(locked_price_per_km,0), COALESCE(distance_km,0), COALESCE(trip_type,'standard')
 		 FROM orders WHERE id = $1`, orderID,
-	).Scan(&waitStarted, &basePrice, &serviceFee)
+	).Scan(&waitStarted, &basePrice, &serviceFee, &lockedPerKm, &distKm, &tripType)
 
 	waitFee = h.pricingService.CalculateWaitFee(waitStarted, 2)
-	totalPrice := basePrice + waitFee + serviceFee
+	var totalPrice float64
+	if tripType == "free" && lockedPerKm > 0 {
+		// Free tariff: price = service_fee + driven_km × locked_rate + wait_fee
+		raw := serviceFee + distKm*lockedPerKm + waitFee
+		totalPrice = math.Ceil(raw/200) * 200
+	} else {
+		totalPrice = math.Ceil((basePrice+waitFee+serviceFee)/200) * 200
+	}
 
 	var driverID string
 	tag, err := h.db.Exec(context.Background(),

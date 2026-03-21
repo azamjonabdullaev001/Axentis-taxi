@@ -51,6 +51,7 @@ export const orderAPI = {
   getOrder: (id) => api.get(`/orders/${id}`),
   getHistory: () => api.get('/orders/history'),
   cancelOrder: (id) => api.post(`/orders/${id}/cancel`),
+  updateOrderDistance: (id, drivenKm) => api.put(`/orders/${id}/distance`, { driven_km: drivenKm }),
   getAvailableDrivers: () => api.get('/drivers/locations'),
   updatePassengerLocation: (lat, lng, heading = null) => api.put('/passenger/location', { lat, lng, heading }),
   updatePassengerLocationSharing: (share_live_location) => api.put('/passenger/location-sharing', { share_live_location }),

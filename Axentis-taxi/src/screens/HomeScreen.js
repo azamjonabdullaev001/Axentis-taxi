@@ -193,6 +193,8 @@ export default function HomeScreen() {
   const freeRideKmRef = useRef(0);
   const prevFreeDriverPosRef = useRef(null);
   const tariffTypeRef = useRef('standard');
+  const [lockedPricePerKm, setLockedPricePerKm] = useState(0);
+  const lockedPricePerKmRef = useRef(0);
 
   // Анимация пунктира "последней мили
   useEffect(() => {
@@ -375,6 +377,18 @@ export default function HomeScreen() {
   useEffect(() => { orderStatusRef.current = orderStatus; }, [orderStatus]);
   useEffect(() => { orderIDRef.current = orderID; }, [orderID]);
   useEffect(() => { tariffTypeRef.current = tariffType; }, [tariffType]);
+  useEffect(() => { lockedPricePerKmRef.current = lockedPricePerKm; }, [lockedPricePerKm]);
+
+  // Периодически сохраняем пройденные км на сервере (свободный тариф, каждые 5 сек)
+  useEffect(() => {
+    if (orderStatus !== ORDER_STATUS.IN_PROGRESS || tariffType !== 'free' || !orderID) return;
+    const interval = setInterval(() => {
+      if (freeRideKmRef.current > 0) {
+        orderAPI.updateOrderDistance(orderID, freeRideKmRef.current).catch(() => {});
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [orderStatus, tariffType, orderID]);
 
   // Available drivers polling
   useEffect(() => {
@@ -403,8 +417,16 @@ export default function HomeScreen() {
     socket.on('driver_arrived', () => { setOrderStatus(ORDER_STATUS.ARRIVED); });
     socket.on('trip_started', () => { setOrderStatus(ORDER_STATUS.IN_PROGRESS); });
     socket.on('trip_completed', (data) => {
+      // Для свободного тарифа отправляем финальные км и считаем цену по зафиксированному тарифу
+      if (tariffTypeRef.current === 'free' && orderIDRef.current && freeRideKmRef.current > 0) {
+        orderAPI.updateOrderDistance(orderIDRef.current, freeRideKmRef.current).catch(() => {});
+      }
+      const rate = lockedPricePerKmRef.current || pricingSettings.price_per_km || 2000;
+      const finalPrice = tariffTypeRef.current === 'free'
+        ? Math.ceil((freeRideKmRef.current * rate) / 200) * 200
+        : data.total_price;
       setOrderStatus(ORDER_STATUS.COMPLETED);
-      Alert.alert(t(lang,'tripCompleted'), `${t(lang,'total')}: ${data.total_price?.toLocaleString()} ${t(lang,'sum')}`, [
+      Alert.alert(t(lang,'tripCompleted'), `${t(lang,'total')}: ${finalPrice?.toLocaleString()} ${t(lang,'sum')}`, [
         { text: 'OK', onPress: resetOrder },
       ]);
     });
@@ -520,6 +542,8 @@ export default function HomeScreen() {
     freeRideKmRef.current = 0;
     setFreeRideKm(0);
     prevFreeDriverPosRef.current = null;
+    setLockedPricePerKm(0);
+    lockedPricePerKmRef.current = 0;
   }
 
   function calcDistanceKm(a, b) {
@@ -564,6 +588,9 @@ export default function HomeScreen() {
       const { data } = await orderAPI.createOrder(payload);
       setOrderID(data.order_id);
       setEstimatedPrice(data.total_price);
+      const locked = data.locked_price_per_km || pricingSettings.price_per_km || 2000;
+      setLockedPricePerKm(locked);
+      lockedPricePerKmRef.current = locked;
     } catch (e) {
       setOrderStatus(ORDER_STATUS.IDLE);
       Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Ошибка создания заказа');
@@ -717,7 +744,7 @@ export default function HomeScreen() {
               </Text>
             ) : tariffType === 'free' ? (
               <Text style={[s.priceInline, { color: colors.textSecondary }]}>
-                {(pricingSettings.price_per_km || 2000).toLocaleString()} {t(lang, 'sum')}/км
+                {(lockedPricePerKm || pricingSettings.price_per_km || 2000).toLocaleString()} {t(lang, 'sum')}/км
               </Text>
             ) : null}
           </View>
@@ -931,10 +958,10 @@ export default function HomeScreen() {
           {tariffType === 'free' ? (
             <>
               <Text style={[s.priceHint, { color: colors.textSecondary }]}>
-                {freeRideKm.toFixed(2)} км × {(pricingSettings.price_per_km || 2000).toLocaleString()} сум/км
+                {freeRideKm.toFixed(2)} км × {(lockedPricePerKm || pricingSettings.price_per_km || 2000).toLocaleString()} сум/км
               </Text>
               <Text style={[s.priceText, { color: colors.primary }]}>
-                ~{(Math.ceil((freeRideKm * (pricingSettings.price_per_km || 2000)) / 200) * 200).toLocaleString()} {t(lang, 'sum')}
+                ~{(Math.ceil((freeRideKm * (lockedPricePerKm || pricingSettings.price_per_km || 2000)) / 200) * 200).toLocaleString()} {t(lang, 'sum')}
               </Text>
             </>
           ) : (

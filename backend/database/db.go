@@ -144,6 +144,8 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS trip_type VARCHAR(20) DEFAULT 'stand
 -- Allow free-tariff orders without a destination
 ALTER TABLE orders ALTER COLUMN destination_lat DROP NOT NULL;
 ALTER TABLE orders ALTER COLUMN destination_lng DROP NOT NULL;
+-- Lock price_per_km (with surge) at order creation so admin changes don't affect in-flight orders
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS locked_price_per_km DECIMAL(12,2) DEFAULT 0;
 
 INSERT INTO price_settings (price_per_km, price_per_minute_wait, free_wait_minutes, service_fee, surge_multiplier)
 SELECT 2000, 500, 2, 2000, 1.0
