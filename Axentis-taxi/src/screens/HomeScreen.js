@@ -705,10 +705,16 @@ export default function HomeScreen() {
       {/* Floating GPS button — always visible */}
       <TouchableOpacity
         style={[s.floatingGpsBtn, { backgroundColor: colors.card, bottom: panelHeight + 12 }]}
-        onPress={() => {
-          if (userLocation) {
-            mapRef.current?.animateToRegion({ ...userLocation, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+        onPress={async () => {
+          let loc = userLocation;
+          if (!loc) {
+            try {
+              const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+              loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+              setUserLocation(loc);
+            } catch { return; }
           }
+          mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 400);
         }}
         activeOpacity={0.7}
       >
