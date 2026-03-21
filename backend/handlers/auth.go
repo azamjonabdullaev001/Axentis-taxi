@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"axentis-taxi/config"
 	"axentis-taxi/middleware"
@@ -110,6 +111,12 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		return
 	}
 
+	normalizedCarNumber := normalizeCarNumber(req.CarNumber)
+	if !isValidUzCarNumber(normalizedCarNumber) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Uzbekistan car number"})
+		return
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
@@ -140,7 +147,7 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 
 	_, err = tx.Exec(context.Background(),
 		`INSERT INTO drivers (user_id, car_number) VALUES ($1, $2)`,
-		userID, strings.ToUpper(req.CarNumber),
+		userID, normalizedCarNumber,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})
@@ -203,11 +210,11 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 
 	var user models.User
 	err := h.db.QueryRow(context.Background(),
-		`SELECT id, first_name, last_name, phone, role, avatar_url, dark_mode, language, created_at
+		`SELECT id, first_name, last_name, phone, role, avatar_url, dark_mode, language, share_live_location, created_at
 		 FROM users WHERE id = $1`,
 		userID,
 	).Scan(&user.ID, &user.FirstName, &user.LastName, &user.Phone,
-		&user.Role, &user.AvatarURL, &user.DarkMode, &user.Language, &user.CreatedAt)
+		&user.Role, &user.AvatarURL, &user.DarkMode, &user.Language, &user.ShareLiveLocation, &user.CreatedAt)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
@@ -216,9 +223,9 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 	if role == "driver" {
 		var driver models.Driver
 		err = h.db.QueryRow(context.Background(),
-			`SELECT id, car_number, is_available FROM drivers WHERE user_id = $1`,
+			`SELECT id, car_number, is_available, current_lat, current_lng, current_heading, last_seen FROM drivers WHERE user_id = $1`,
 			userID,
-		).Scan(&driver.ID, &driver.CarNumber, &driver.IsAvailable)
+		).Scan(&driver.ID, &driver.CarNumber, &driver.IsAvailable, &driver.CurrentLat, &driver.CurrentLng, &driver.CurrentHeading, &driver.LastSeen)
 		if err == nil {
 			c.JSON(http.StatusOK, gin.H{"user": user, "driver": driver})
 			return
@@ -257,6 +264,27 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Profile updated"})
 }
 
+func (h *AuthHandler) SavePushToken(c *gin.Context) {
+	userID := c.GetString("user_id")
+	var req struct {
+		PushToken string `json:"push_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !strings.HasPrefix(req.PushToken, "ExponentPushToken[") &&
+		!strings.HasPrefix(req.PushToken, "ExpoPushToken[") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Expo push token format"})
+		return
+	}
+	h.db.Exec(context.Background(),
+		`UPDATE users SET push_token = $1, updated_at = NOW() WHERE id = $2`,
+		req.PushToken, userID,
+	)
+	c.JSON(http.StatusOK, gin.H{"message": "Push token registered"})
+}
+
 func generateUserToken(userID, role, secret string) (string, error) {
 	claims := &middleware.Claims{
 		UserID: userID,
@@ -285,4 +313,50 @@ func isValidUzPhone(phone string) bool {
 	}
 	digits := strings.TrimPrefix(phone, "+")
 	return len(digits) == 12
+}
+
+func normalizeCarNumber(carNumber string) string {
+	var normalized strings.Builder
+	for _, char := range strings.ToUpper(carNumber) {
+		if unicode.IsDigit(char) || (char >= 'A' && char <= 'Z') {
+			normalized.WriteRune(char)
+		}
+	}
+	return normalized.String()
+}
+
+func isValidUzCarNumber(carNumber string) bool {
+	validRegions := map[string]struct{}{
+		"01": {}, "10": {}, "20": {}, "30": {}, "40": {}, "50": {}, "60": {},
+		"70": {}, "75": {}, "80": {}, "85": {}, "90": {}, "95": {},
+	}
+
+	if len(carNumber) < 6 || len(carNumber) > 8 {
+		return false
+	}
+
+	regionCode := carNumber[:2]
+	if _, ok := validRegions[regionCode]; !ok {
+		return false
+	}
+
+	suffix := carNumber[2:]
+	if len(suffix) < 4 || len(suffix) > 6 {
+		return false
+	}
+
+	hasLetter := false
+	hasDigit := false
+	for _, char := range suffix {
+		switch {
+		case unicode.IsDigit(char):
+			hasDigit = true
+		case char >= 'A' && char <= 'Z':
+			hasLetter = true
+		default:
+			return false
+		}
+	}
+
+	return hasLetter && hasDigit
 }

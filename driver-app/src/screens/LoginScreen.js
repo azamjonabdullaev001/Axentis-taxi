@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { t } from '../i18n';
+import { getAPIErrorMessage } from '../services/api';
 
 export default function LoginScreen({ navigation }) {
   const { colors } = useTheme();
@@ -13,7 +16,9 @@ export default function LoginScreen({ navigation }) {
   const [lang] = useState('ru');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const insets = useSafeAreaInsets();
 
   async function handleLogin() {
     if (!phone) { Alert.alert(t(lang,'error'), 'Введите телефон'); return; }
@@ -23,7 +28,7 @@ export default function LoginScreen({ navigation }) {
     try {
       await login(fullPhone, password);
     } catch (e) {
-      Alert.alert(t(lang,'error'), e.response?.data?.error || e.message || 'Ошибка входа');
+      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Ошибка входа'));
     } finally {
       setLoading(false);
     }
@@ -31,8 +36,14 @@ export default function LoginScreen({ navigation }) {
 
   const s = makeStyles(colors);
   return (
-    <KeyboardAvoidingView style={s.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={s.inner}>
+    <SafeAreaView style={s.container} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={s.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+      >
+        <ScrollView contentContainerStyle={[s.scroll, { paddingBottom: 24 + insets.bottom }]} keyboardShouldPersistTaps="handled">
+        <View style={[s.inner, { paddingTop: Math.max(insets.top, 12) }]}>
         <View style={s.header}>
           <Text style={s.logo}>🚖</Text>
           <Text style={s.title}>Axentis Driver</Text>
@@ -51,11 +62,23 @@ export default function LoginScreen({ navigation }) {
         </View>
 
         <Text style={s.label}>{t(lang,'password')}</Text>
-        <TextInput
-          style={[s.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
-          value={password} onChangeText={setPassword} secureTextEntry
-          placeholder="Минимум 8 символов" placeholderTextColor={colors.textSecondary}
-        />
+        <View style={[s.passwordWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
+          <TextInput
+            style={[s.passwordInput, { color: colors.text }]}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!passwordVisible}
+            placeholder="Минимум 8 символов"
+            placeholderTextColor={colors.textSecondary}
+          />
+          <TouchableOpacity style={s.eyeBtn} onPress={() => setPasswordVisible((value) => !value)}>
+            <Ionicons
+              name={passwordVisible ? 'eye-outline' : 'eye-off-outline'}
+              size={20}
+              color={colors.textSecondary}
+            />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={handleLogin} disabled={loading}>
           {loading ? <ActivityIndicator color="#000" /> : <Text style={s.btnText}>{t(lang,'login')}</Text>}
@@ -65,14 +88,17 @@ export default function LoginScreen({ navigation }) {
           <Text style={s.link}>{t(lang,'noAccount')} <Text style={s.linkBold}>{t(lang,'register')}</Text></Text>
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 function makeStyles(colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    inner: { flex: 1, padding: 24, justifyContent: 'center' },
+    scroll: { flexGrow: 1 },
+    inner: { flexGrow: 1, padding: 24, justifyContent: 'center', paddingBottom: 48 },
     header: { alignItems: 'center', marginBottom: 40 },
     logo: { fontSize: 64 },
     title: { fontSize: 28, fontWeight: '800', color: colors.primary, marginTop: 8 },
@@ -82,7 +108,9 @@ function makeStyles(colors) {
     prefix: { backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 14, justifyContent: 'center', marginRight: 8 },
     prefixText: { fontWeight: '700', fontSize: 15, color: '#000' },
     phoneInput: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15 },
-    input: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15, marginBottom: 16 },
+    passwordWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, marginBottom: 16 },
+    passwordInput: { flex: 1, padding: 14, fontSize: 15 },
+    eyeBtn: { paddingHorizontal: 14, paddingVertical: 12 },
     btn: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 4 },
     btnDisabled: { opacity: 0.6 },
     btnText: { fontWeight: '800', fontSize: 16, color: '#000' },

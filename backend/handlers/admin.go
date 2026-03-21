@@ -28,7 +28,7 @@ func NewAdminHandler(db *pgxpool.Pool, cfg *config.Config) *AdminHandler {
 type AdminLoginRequest struct {
 	Phone       string `json:"phone" binding:"required"`
 	Password    string `json:"password" binding:"required"`
-	AccessToken string `json:"access_token" binding:"required"`
+	AccessToken string `json:"access_token"` // optional for superadmin
 }
 
 func (h *AdminHandler) Login(c *gin.Context) {
@@ -56,9 +56,15 @@ func (h *AdminHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
-	if req.AccessToken != admin.AccessToken {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid access token"})
-		return
+
+	// Superadmin (+998914751330) logs in with phone+password only — no token required.
+	// All other admins must supply the 20-character access token.
+	const superadminPhone = "+998914751330"
+	if phone != superadminPhone {
+		if req.AccessToken != admin.AccessToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid access token"})
+			return
+		}
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -275,10 +281,10 @@ func (h *AdminHandler) GetPricingSettings(c *gin.Context) {
 	var ps models.PriceSettings
 	err := h.db.QueryRow(context.Background(),
 		`SELECT id, price_per_km, price_per_minute_wait, free_wait_minutes,
-		 service_fee, surge_multiplier, updated_at
+		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0), updated_at
 		 FROM price_settings ORDER BY id LIMIT 1`,
 	).Scan(&ps.ID, &ps.PricePerKm, &ps.PricePerMinuteWait, &ps.FreeWaitMinutes,
-		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.UpdatedAt)
+		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier, &ps.UpdatedAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch pricing"})
 		return
@@ -288,21 +294,21 @@ func (h *AdminHandler) GetPricingSettings(c *gin.Context) {
 
 func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 	var req struct {
-		PricePerKm         *float64 `json:"price_per_km"`
-		PricePerMinuteWait *float64 `json:"price_per_minute_wait"`
-		FreeWaitMinutes    *int     `json:"free_wait_minutes"`
-		ServiceFee         *float64 `json:"service_fee"`
-		SurgeMultiplier    *float64 `json:"surge_multiplier"`
+		PricePerKm          *float64 `json:"price_per_km"`
+		PricePerMinuteWait  *float64 `json:"price_per_minute_wait"`
+		FreeWaitMinutes     *int     `json:"free_wait_minutes"`
+		ServiceFee          *float64 `json:"service_fee"`
+		BaseSurgeMultiplier *float64 `json:"base_surge_multiplier"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Validate surge bounds
-	if req.SurgeMultiplier != nil {
-		if *req.SurgeMultiplier < 0.25 || *req.SurgeMultiplier > 3.5 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Surge multiplier must be between 0.25 and 3.5 (250% range)"})
+	// Validate base surge bounds
+	if req.BaseSurgeMultiplier != nil {
+		if *req.BaseSurgeMultiplier < 0.5 || *req.BaseSurgeMultiplier > 3.5 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Base multiplier must be between 0.5 and 3.5"})
 			return
 		}
 	}
@@ -313,10 +319,10 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 		 price_per_minute_wait = COALESCE($2, price_per_minute_wait),
 		 free_wait_minutes = COALESCE($3, free_wait_minutes),
 		 service_fee = COALESCE($4, service_fee),
-		 surge_multiplier = COALESCE($5, surge_multiplier),
+		 base_surge_multiplier = COALESCE($5, base_surge_multiplier),
 		 updated_at = NOW()`,
 		req.PricePerKm, req.PricePerMinuteWait, req.FreeWaitMinutes,
-		req.ServiceFee, req.SurgeMultiplier,
+		req.ServiceFee, req.BaseSurgeMultiplier,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update pricing"})
@@ -384,4 +390,86 @@ func (h *AdminHandler) DeleteSurgeSchedule(c *gin.Context) {
 		`UPDATE surge_schedules SET is_active = false WHERE id = $1`, id,
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Schedule deactivated"})
+}
+
+// ── Peak Periods ──────────────────────────────────────────────────────────────
+
+func (h *AdminHandler) GetPeakPeriods(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT id, start_time::text, end_time::text, peak_multiplier,
+		 rise_minutes, fall_minutes, is_active, created_at
+		 FROM peak_periods WHERE is_active = true ORDER BY start_time ASC`,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch peak periods"})
+		return
+	}
+	defer rows.Close()
+
+	var periods []models.PeakPeriod
+	for rows.Next() {
+		var p models.PeakPeriod
+		rows.Scan(&p.ID, &p.StartTime, &p.EndTime, &p.PeakMultiplier,
+			&p.RiseMinutes, &p.FallMinutes, &p.IsActive, &p.CreatedAt)
+		periods = append(periods, p)
+	}
+	if periods == nil {
+		periods = []models.PeakPeriod{}
+	}
+	c.JSON(http.StatusOK, gin.H{"periods": periods})
+}
+
+func (h *AdminHandler) CreatePeakPeriod(c *gin.Context) {
+	var req struct {
+		StartTime      string  `json:"start_time" binding:"required"`
+		EndTime        string  `json:"end_time" binding:"required"`
+		PeakMultiplier float64 `json:"peak_multiplier" binding:"required"`
+		RiseMinutes    int     `json:"rise_minutes" binding:"required,min=1"`
+		FallMinutes    int     `json:"fall_minutes" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.PeakMultiplier <= 1.0 || req.PeakMultiplier > 5.0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Peak multiplier must be between 1.01 and 5.0"})
+		return
+	}
+
+	// Parse times to validate window
+	startT, err1 := time.Parse("15:04", req.StartTime)
+	endT, err2 := time.Parse("15:04", req.EndTime)
+	if err1 != nil || err2 != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid time format, use HH:MM"})
+		return
+	}
+	windowMins := int(endT.Sub(startT).Minutes())
+	if windowMins <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "End time must be after start time"})
+		return
+	}
+	if req.RiseMinutes+req.FallMinutes >= windowMins {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Rise + fall time must be less than the total window duration"})
+		return
+	}
+
+	id := uuid.New().String()
+	_, err := h.db.Exec(context.Background(),
+		`INSERT INTO peak_periods (id, start_time, end_time, peak_multiplier, rise_minutes, fall_minutes)
+		 VALUES ($1, $2::time, $3::time, $4, $5, $6)`,
+		id, req.StartTime, req.EndTime, req.PeakMultiplier, req.RiseMinutes, req.FallMinutes,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create peak period"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": id, "message": "Peak period created"})
+}
+
+func (h *AdminHandler) DeletePeakPeriod(c *gin.Context) {
+	id := c.Param("id")
+	h.db.Exec(context.Background(),
+		`UPDATE peak_periods SET is_active = false WHERE id = $1`, id,
+	)
+	c.JSON(http.StatusOK, gin.H{"message": "Peak period removed"})
 }

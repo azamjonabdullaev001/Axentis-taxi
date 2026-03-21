@@ -18,10 +18,14 @@ export const COLORS = {
 
 export function ThemeProvider({ children }) {
   const [isDark, setIsDark] = useState(true); // Drivers prefer dark by default
+  const [lang, setLangState] = useState('ru');
 
   useEffect(() => {
     AsyncStorage.getItem('dark_mode').then((v) => {
       if (v !== null) setIsDark(v === 'true');
+    });
+    AsyncStorage.getItem('language').then((l) => {
+      if (l) setLangState(l);
     });
   }, []);
 
@@ -31,8 +35,13 @@ export function ThemeProvider({ children }) {
     AsyncStorage.setItem('dark_mode', String(next));
   }
 
+  function setLang(code) {
+    setLangState(code);
+    AsyncStorage.setItem('language', code);
+  }
+
   return (
-    <ThemeContext.Provider value={{ isDark, toggleTheme, colors: isDark ? COLORS.dark : COLORS.light }}>
+    <ThemeContext.Provider value={{ isDark, toggleTheme, colors: isDark ? COLORS.dark : COLORS.light, lang, setLang }}>
       {children}
     </ThemeContext.Provider>
   );

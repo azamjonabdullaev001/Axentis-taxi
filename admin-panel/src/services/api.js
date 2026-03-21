@@ -32,6 +32,9 @@ export const adminAPI = {
   getSurgeSchedules: () => api.get('/admin/surge-schedules'),
   createSurgeSchedule: (d) => api.post('/admin/surge-schedules', d),
   deleteSurgeSchedule: (id) => api.delete(`/admin/surge-schedules/${id}`),
+  getPeakPeriods: () => api.get('/admin/peak-periods'),
+  createPeakPeriod: (d) => api.post('/admin/peak-periods', d),
+  deletePeakPeriod: (id) => api.delete(`/admin/peak-periods/${id}`),
   getAdmins: () => api.get('/admin/admins'),
   createAdmin: (d) => api.post('/admin/admins', d),
 }

@@ -12,12 +12,13 @@ import (
 )
 
 type MatchingService struct {
-	db  *pgxpool.Pool
-	hub *Hub
+	db   *pgxpool.Pool
+	hub  *Hub
+	push *PushService
 }
 
-func NewMatchingService(db *pgxpool.Pool, hub *Hub) *MatchingService {
-	return &MatchingService{db: db, hub: hub}
+func NewMatchingService(db *pgxpool.Pool, hub *Hub, push *PushService) *MatchingService {
+	return &MatchingService{db: db, hub: hub, push: push}
 }
 
 type DriverCandidate struct {
@@ -120,6 +121,8 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 	}
 	data, _ := json.Marshal(msg)
 	s.hub.SendToUser(userID, data)
+	// Also send Expo push notification so the driver is alerted even if the app is killed
+	go s.push.SendNewOrderPush(userID, orderData.PickupAddress, orderData.DestinationAddress, orderData.ID)
 }
 
 func (s *MatchingService) notifyPassengerNoDrivers(orderID string) {

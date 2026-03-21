@@ -1,18 +1,39 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, Dimensions, Animated,
+  View, Text, TouchableOpacity, StyleSheet, TextInput,
+  ActivityIndicator, Alert, Image,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { orderAPI } from '../services/api';
+import { authAPI, orderAPI } from '../services/api';
 import socket from '../services/socket';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { t } from '../i18n';
+import { initializeNotifications, getExpoPushToken } from '../services/notifications';
 
-const { height } = Dimensions.get('window');
+const CAR_ICON = require('../../assets/car-photo.png');
+
+// Обратное геокодирование: координаты → название улицы/района
+async function reverseGeocode(coords) {
+  try {
+    const results = await Location.reverseGeocodeAsync(coords);
+    if (results?.length > 0) {
+      const r = results[0];
+      const parts = [r.name, r.street, r.district, r.city].filter(Boolean);
+      if (parts.length > 0) return parts.slice(0, 2).join(', ');
+    }
+  } catch {}
+  return `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`;
+}
+
+// Расчёт цены: 2000 сум за заказ + 200 сум за каждые 100м (ceil)
+function calcPrice(distanceKm) {
+  const blocks = Math.ceil(distanceKm * 10);
+  return 2000 + Math.max(blocks, 1) * 200;
+}
 
 const ORDER_STATUS = {
   IDLE: 'idle',
@@ -23,94 +44,232 @@ const ORDER_STATUS = {
   COMPLETED: 'completed',
 };
 
-// Status colors for route line: going to pickup = blue, in progress = green
 const ROUTE_COLORS = {
   accepted: '#2196F3',
   arrived: '#FF9800',
   in_progress: '#4CAF50',
 };
 
+const LOCATION_CFG = {
+  idle:   { accuracy: Location.Accuracy.Balanced, timeInterval: 10000, distanceInterval: 20 },
+  active: { accuracy: Location.Accuracy.High,     timeInterval: 200,   distanceInterval: 2  },
+};
+
 export default function HomeScreen() {
-  const { colors } = useTheme();
-  const { user } = useAuth();
-  const [lang, setLang] = useState('ru');
+  const { colors, lang } = useTheme();
+  const { user, updateUser } = useAuth();
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
 
   const mapRef = useRef(null);
+  const locationSubscriptionRef = useRef(null);
+  const orderStatusRef = useRef(ORDER_STATUS.IDLE);
+  const orderIDRef = useRef(null);
+  const sharingLocationRef = useRef(user?.share_live_location !== false);
+  const pickupLockedRef = useRef(false);
+
   const [region, setRegion] = useState({
     latitude: 41.2995, longitude: 69.2401,
     latitudeDelta: 0.05, longitudeDelta: 0.05,
   });
 
+  // Map selection mode: null | 'pickup' | 'dest'
+  const [mapMode, setMapMode] = useState(null);
+  // Address label typed while in dest map mode
+  const [destInputText, setDestInputText] = useState('');
+
   const [userLocation, setUserLocation] = useState(null);
   const [pickupCoords, setPickupCoords] = useState(null);
-  const [destCoords, setDestCoords] = useState(null);
   const [pickupText, setPickupText] = useState('');
+  const [destCoords, setDestCoords] = useState(null);
   const [destText, setDestText] = useState('');
-  const [selectingFor, setSelectingFor] = useState(null); // 'pickup' | 'dest'
 
   const [orderID, setOrderID] = useState(null);
   const [orderStatus, setOrderStatus] = useState(ORDER_STATUS.IDLE);
   const [estimatedPrice, setEstimatedPrice] = useState(null);
   const [driverLocation, setDriverLocation] = useState(null);
+  // Smooth interpolation: display position lerps toward received target at 60fps
+  const driverTargetRef = useRef(null);
+  const driverDisplayRef = useRef(null);
+  const smoothTimerRef = useRef(null);
+  const [driverDisplayLocation, setDriverDisplayLocation] = useState(null);
   const [driverInfo, setDriverInfo] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
+  const [availableDrivers, setAvailableDrivers] = useState([]);
+  const [recentTrips, setRecentTrips] = useState([]);
 
-  const sheetAnim = useRef(new Animated.Value(0)).current;
-  const panelRef = useRef(null);
+  // Keep sharingLocationRef in sync with profile changes
+  useEffect(() => {
+    sharingLocationRef.current = user?.share_live_location !== false;
+  }, [user?.share_live_location]);
 
+  // Вычисляем высоту панели для позиционирования GPS-кнопки
+  const PANEL_HEIGHT = 190;
+
+  // ── Mount: permissions, GPS, push token, recent trips ────────────────────
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setUserLocation(coords);
       setPickupCoords(coords);
-      setPickupText('Ваше местоположение');
+      setPickupText(t(lang, 'yourLocation'));
       setRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+      // Сразу входим в режим выбора точки отправления
+      setMapMode('pickup');
+      // Фоновое геокодирование текущей позиции
+      reverseGeocode(coords).then((label) => setPickupText(label));
     })();
+
+    (async () => {
+      try {
+        const granted = await initializeNotifications();
+        if (granted) {
+          const token = await getExpoPushToken();
+          if (token) authAPI.savePushToken(token).catch(() => {});
+        }
+      } catch {}
+    })();
+
+    (async () => {
+      try {
+        const { data } = await orderAPI.getHistory();
+        const completed = (data.orders || [])
+          .filter((o) => o.status === 'completed')
+          .slice(0, 3);
+        setRecentTrips(completed);
+      } catch {}
+    })();
+
+    return () => {
+      locationSubscriptionRef.current?.remove?.();
+      clearInterval(smoothTimerRef.current);
+    };
   }, []);
 
+  // ── Adaptive location tracking ────────────────────────────────────────────
   useEffect(() => {
-    AsyncStorage.getItem('language').then((l) => { if (l) setLang(l); });
+    let cancelled = false;
+    const isActive = [ORDER_STATUS.ACCEPTED, ORDER_STATUS.ARRIVED, ORDER_STATUS.IN_PROGRESS].includes(orderStatus);
+    const cfg = isActive ? LOCATION_CFG.active : LOCATION_CFG.idle;
+
+    (async () => {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== 'granted' || cancelled) return;
+
+      locationSubscriptionRef.current?.remove?.();
+      locationSubscriptionRef.current = null;
+
+      const sub = await Location.watchPositionAsync(cfg, (watchLoc) => {
+        const nextCoords = {
+          latitude: watchLoc.coords.latitude,
+          longitude: watchLoc.coords.longitude,
+        };
+        setUserLocation(nextCoords);
+        if (!pickupLockedRef.current) {
+          setPickupCoords(nextCoords);
+          setPickupText(t(lang, 'yourLocation'));
+        }
+        if (
+          sharingLocationRef.current &&
+          orderIDRef.current &&
+          [ORDER_STATUS.ACCEPTED, ORDER_STATUS.ARRIVED, ORDER_STATUS.IN_PROGRESS].includes(orderStatusRef.current)
+        ) {
+          orderAPI.updatePassengerLocation(
+            nextCoords.latitude, nextCoords.longitude,
+            typeof watchLoc.coords.heading === 'number' ? watchLoc.coords.heading : null,
+          ).catch(() => {});
+        }
+      });
+
+      if (cancelled) sub.remove();
+      else locationSubscriptionRef.current = sub;
+    })();
+
+    return () => { cancelled = true; };
+  }, [orderStatus]);
+
+  // ── Smooth driver marker interpolation at 60fps ───────────────────────────
+  // Receives updates at 10ms from WS; lerps display to target every 16ms (60fps)
+  useEffect(() => {
+    clearInterval(smoothTimerRef.current);
+    const isActive = [ORDER_STATUS.ACCEPTED, ORDER_STATUS.ARRIVED, ORDER_STATUS.IN_PROGRESS].includes(orderStatus);
+    if (!isActive) return;
+
+    smoothTimerRef.current = setInterval(() => {
+      const target = driverTargetRef.current;
+      const display = driverDisplayRef.current;
+      if (!target) return;
+      if (!display) {
+        driverDisplayRef.current = { ...target };
+        setDriverDisplayLocation({ ...target });
+        return;
+      }
+      const lerp = (a, b) => a + (b - a) * 0.25;
+      const next = {
+        latitude: lerp(display.latitude, target.latitude),
+        longitude: lerp(display.longitude, target.longitude),
+        heading: target.heading,
+      };
+      driverDisplayRef.current = next;
+      setDriverDisplayLocation({ ...next });
+    }, 16);
+
+    return () => clearInterval(smoothTimerRef.current);
+  }, [orderStatus]);
+
+  useEffect(() => { orderStatusRef.current = orderStatus; }, [orderStatus]);
+  useEffect(() => { orderIDRef.current = orderID; }, [orderID]);
+
+  // Available drivers polling
+  useEffect(() => {
+    let disposed = false;
+    async function fetchAvailableDrivers() {
+      try {
+        const { data } = await orderAPI.getAvailableDrivers();
+        if (!disposed) setAvailableDrivers(data.drivers || []);
+      } catch {
+        if (!disposed) setAvailableDrivers([]);
+      }
+    }
+    fetchAvailableDrivers();
+    const timer = setInterval(fetchAvailableDrivers, 5000);
+    return () => { disposed = true; clearInterval(timer); };
   }, []);
 
+  // Socket events
   useEffect(() => {
-    const userID = user?.id;
-    if (!userID) return;
+    if (!user?.id) return;
 
     socket.on('order_accepted', (data) => {
       setOrderStatus(ORDER_STATUS.ACCEPTED);
       setDriverInfo(data.driver || null);
-      showPanel();
     });
-    socket.on('driver_arrived', () => {
-      setOrderStatus(ORDER_STATUS.ARRIVED);
-    });
-    socket.on('trip_started', (data) => {
-      setOrderStatus(ORDER_STATUS.IN_PROGRESS);
-    });
+    socket.on('driver_arrived', () => { setOrderStatus(ORDER_STATUS.ARRIVED); });
+    socket.on('trip_started', () => { setOrderStatus(ORDER_STATUS.IN_PROGRESS); });
     socket.on('trip_completed', (data) => {
       setOrderStatus(ORDER_STATUS.COMPLETED);
-      Alert.alert('Поездка завершена!', `Итого: ${data.total_price?.toLocaleString()} сум`, [
+      Alert.alert(t(lang,'tripCompleted'), `${t(lang,'total')}: ${data.total_price?.toLocaleString()} ${t(lang,'sum')}`, [
         { text: 'OK', onPress: resetOrder },
       ]);
     });
     socket.on('driver_location', (data) => {
-      setDriverLocation({ latitude: data.lat, longitude: data.lng });
-      if (pickupCoords) {
-        setRouteCoords([
-          { latitude: data.lat, longitude: data.lng },
-          orderStatus === ORDER_STATUS.IN_PROGRESS ? destCoords : pickupCoords,
-        ].filter(Boolean));
-      }
+      const pos = { latitude: data.lat, longitude: data.lng, heading: data.heading ?? 0 };
+      driverTargetRef.current = pos;
+      setDriverLocation(pos);
+      setRouteCoords([
+        { latitude: data.lat, longitude: data.lng },
+        orderStatusRef.current === ORDER_STATUS.IN_PROGRESS ? destCoords : pickupCoords,
+      ].filter(Boolean));
     });
     socket.on('no_drivers', () => {
       setOrderStatus(ORDER_STATUS.IDLE);
-      Alert.alert('Нет водителей', t(lang, 'noDriversFound'));
+      Alert.alert(t(lang, 'noDriversTitle'), t(lang, 'noDriversFound'));
     });
     socket.on('order_cancelled', () => {
-      Alert.alert('Заказ отменён', 'Водитель отменил заказ');
+      Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByDriver'));
       resetOrder();
     });
 
@@ -118,10 +277,53 @@ export default function HomeScreen() {
       ['order_accepted','driver_arrived','trip_started','trip_completed',
        'driver_location','no_drivers','order_cancelled'].forEach(socket.off.bind(socket));
     };
-  }, [user, pickupCoords, destCoords, orderStatus, lang]);
+  }, [user, pickupCoords, destCoords, lang]);
 
-  function showPanel() {
-    Animated.spring(sheetAnim, { toValue: 1, useNativeDriver: true }).start();
+  // ── Map selection helpers ─────────────────────────────────────────────────
+  function enterMapMode(mode) {
+    setMapMode(mode);
+    if (mode === 'pickup' && userLocation) {
+      mapRef.current?.animateToRegion({ ...userLocation, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+    } else if (mode === 'dest' && destCoords) {
+      mapRef.current?.animateToRegion({ ...destCoords, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+    }
+  }
+
+  async function confirmMapSelection() {
+    const coords = { latitude: region.latitude, longitude: region.longitude };
+    if (mapMode === 'pickup') {
+      pickupLockedRef.current = true;
+      setPickupCoords(coords);
+      setPickupText(t(lang, 'determiningAddress'));
+      // После выбора «Отсюда» автоматически переходим к выбору «Куда»
+      setMapMode('dest');
+      reverseGeocode(coords).then((label) => setPickupText(label));
+    } else if (mapMode === 'dest') {
+      setDestCoords(coords);
+      const typed = destInputText.trim();
+      if (typed) {
+        setDestText(typed);
+      } else {
+        setDestText(t(lang, 'determiningAddress'));
+        reverseGeocode(coords).then((label) => setDestText(label));
+      }
+      setDestInputText('');
+      setMapMode(null);
+    }
+  }
+
+  function cancelMapMode() {
+    setDestInputText('');
+    // При отмене возвращаемся в idle (показываем панель с инпутами)
+    setMapMode(null);
+  }
+
+  function resetPickupToGPS() {
+    pickupLockedRef.current = false;
+    if (userLocation) {
+      setPickupCoords(userLocation);
+      setPickupText(t(lang, 'yourLocation'));
+    }
   }
 
   function resetOrder() {
@@ -129,23 +331,15 @@ export default function HomeScreen() {
     setOrderStatus(ORDER_STATUS.IDLE);
     setEstimatedPrice(null);
     setDriverLocation(null);
+    setDriverDisplayLocation(null);
+    driverTargetRef.current = null;
+    driverDisplayRef.current = null;
     setDriverInfo(null);
     setRouteCoords([]);
     setDestCoords(null);
     setDestText('');
-  }
-
-  function handleMapPress(e) {
-    if (!selectingFor) return;
-    const coords = e.nativeEvent.coordinate;
-    if (selectingFor === 'pickup') {
-      setPickupCoords(coords);
-      setPickupText(`${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`);
-    } else {
-      setDestCoords(coords);
-      setDestText(`${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`);
-    }
-    setSelectingFor(null);
+    setDestInputText('');
+    setMapMode(null);
   }
 
   function calcDistanceKm(a, b) {
@@ -162,7 +356,7 @@ export default function HomeScreen() {
 
   async function handleOrder() {
     if (!pickupCoords || !destCoords) {
-      Alert.alert(t(lang,'error'), 'Укажите точку отправления и назначения');
+      Alert.alert(t(lang, 'error'), t(lang, 'selectDestHint'));
       return;
     }
     setOrderStatus(ORDER_STATUS.SEARCHING);
@@ -181,20 +375,17 @@ export default function HomeScreen() {
       setEstimatedPrice(data.total_price);
     } catch (e) {
       setOrderStatus(ORDER_STATUS.IDLE);
-      Alert.alert(t(lang,'error'), e.response?.data?.error || 'Ошибка создания заказа');
+      Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Ошибка создания заказа');
     }
   }
 
   async function handleCancel() {
     if (!orderID) { resetOrder(); return; }
-    try {
-      await orderAPI.cancelOrder(orderID);
-    } catch {}
+    try { await orderAPI.cancelOrder(orderID); } catch {}
     resetOrder();
   }
 
   const s = makeStyles(colors);
-
   const routeColor = ROUTE_COLORS[orderStatus] || '#2196F3';
 
   return (
@@ -205,23 +396,47 @@ export default function HomeScreen() {
         provider={PROVIDER_GOOGLE}
         region={region}
         onRegionChangeComplete={setRegion}
-        onPress={handleMapPress}
         showsUserLocation
         showsMyLocationButton={false}
       >
-        {pickupCoords && (
-          <Marker coordinate={pickupCoords} title="Откуда">
-            <View style={s.markerPickup}><Text style={s.markerText}>A</Text></View>
+        {/* Available drivers while idle — car icon rotated by heading (+180° because front of PNG faces down) */}
+        {orderStatus === ORDER_STATUS.IDLE && availableDrivers.map((driver) => (
+          <Marker
+            key={driver.user_id}
+            coordinate={{ latitude: driver.lat, longitude: driver.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            flat
+            rotation={((driver.heading ?? 0) + 180) % 360}
+          >
+            <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
+          </Marker>
+        ))}
+
+        {/* Пин отправления — простая иконка, без надписи A */}
+        {pickupCoords && !mapMode && (
+          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 1 }}>
+            <Text style={{ fontSize: 30, lineHeight: 32 }}>📍</Text>
           </Marker>
         )}
-        {destCoords && (
-          <Marker coordinate={destCoords} title="Куда">
-            <View style={s.markerDest}><Text style={s.markerText}>B</Text></View>
+        {/* Пин назначения — чистый пин без уродливого квадрата B */}
+        {destCoords && !mapMode && (
+          <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 1 }}>
+            <Text style={{ fontSize: 30, lineHeight: 32 }}>🚩</Text>
           </Marker>
         )}
-        {driverLocation && (
-          <Marker coordinate={driverLocation} title="Водитель">
-            <Text style={{ fontSize: 28 }}>🚖</Text>
+
+        {/* Active driver car - smoothly interpolated from 10ms WS updates (+180° because front of PNG faces down) */}
+        {driverDisplayLocation && (
+          <Marker
+            coordinate={{
+              latitude: driverDisplayLocation.latitude,
+              longitude: driverDisplayLocation.longitude,
+            }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            flat
+            rotation={((driverDisplayLocation.heading ?? 0) + 180) % 360}
+          >
+            <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
           </Marker>
         )}
         {routeCoords.length >= 2 && (
@@ -234,108 +449,201 @@ export default function HomeScreen() {
         )}
       </MapView>
 
-      {/* My location button */}
-      <TouchableOpacity style={s.locationBtn} onPress={() => {
-        if (userLocation) {
-          mapRef.current?.animateToRegion({ ...userLocation, latitudeDelta: 0.02, longitudeDelta: 0.02 });
-        }
-      }}>
+      {/* Center crosshair during map selection */}
+      {mapMode && (
+        <View style={s.centerPinContainer} pointerEvents="none">
+          <View style={s.centerPinShadow} />
+          <Text style={s.centerPinIcon}>{mapMode === 'pickup' ? '📍' : '🎯'}</Text>
+        </View>
+      )}
+
+      {/* GPS кнопка — чуть выше панели, справа */}
+      <TouchableOpacity
+        style={[
+          s.locationBtn,
+          { bottom: tabBarHeight + PANEL_HEIGHT + 12, right: 16 },
+        ]}
+        onPress={() => {
+          if (userLocation) {
+            pickupLockedRef.current = false;
+            setPickupCoords(userLocation);
+            setPickupText('Ваше местоположение');
+            mapRef.current?.animateToRegion({ ...userLocation, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+          }
+        }}
+      >
         <Text style={{ fontSize: 22 }}>📍</Text>
       </TouchableOpacity>
 
-      {/* Bottom panel */}
-      {orderStatus === ORDER_STATUS.IDLE && (
-        <View style={[s.panel, { backgroundColor: colors.background }]}>
-          <Text style={[s.panelTitle, { color: colors.text }]}>{t(lang,'whereToGo')}</Text>
+      {/* ── IDLE panel ── */}
+      {orderStatus === ORDER_STATUS.IDLE && !mapMode && (
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+          <View style={s.handleWrap}>
+            <View style={[s.handle, { backgroundColor: colors.border }]} />
+          </View>
 
-          <TouchableOpacity style={[s.locationInput, { borderColor: colors.border, backgroundColor: colors.card }]}
-            onPress={() => setSelectingFor('pickup')}>
-            <Text style={s.dotA}>•</Text>
-            <Text style={[s.locationText, { color: pickupText ? colors.text : colors.textSecondary }]}>
-              {pickupText || t(lang,'from')}
-            </Text>
-          </TouchableOpacity>
+          {/* Route input card */}
+          <View style={[s.inputCard, { borderColor: colors.border, backgroundColor: colors.card }]}>
+            {/* Pickup row — тап входит в режим выбора на карте */}
+            <TouchableOpacity style={s.inputRow} onPress={() => enterMapMode('pickup')} activeOpacity={0.8}>
+              <View style={s.dotGreen} />
+              <Text
+                style={[s.inputText, { color: pickupText ? colors.text : colors.textSecondary }]}
+                numberOfLines={1}
+              >
+                {pickupText || t(lang, 'from')}
+              </Text>
+              <TouchableOpacity style={s.inputIconBtn} onPress={() => enterMapMode('pickup')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={{ fontSize: 18 }}>🗺️</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
 
-          <TouchableOpacity style={[s.locationInput, { borderColor: colors.border, backgroundColor: colors.card }]}
-            onPress={() => setSelectingFor('dest')}>
-            <Text style={s.dotB}>■</Text>
-            <Text style={[s.locationText, { color: destText ? colors.text : colors.textSecondary }]}>
-              {destText || t(lang,'to')}
-            </Text>
-          </TouchableOpacity>
+            <View style={[s.inputConnector, { backgroundColor: colors.border }]} />
 
+            {/* Destination row */}
+            <View style={s.inputRow}>
+              <View style={s.dotRed} />
+              <TextInput
+                style={[s.inputText, { color: colors.text, flex: 1 }]}
+                placeholder={t(lang, 'to')}
+                placeholderTextColor={colors.textSecondary}
+                value={destText}
+                onChangeText={(text) => {
+                  setDestText(text);
+                  if (!text) setDestCoords(null);
+                }}
+              />
+              <TouchableOpacity style={s.inputIconBtn} onPress={() => enterMapMode('dest')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={{ fontSize: 18 }}>🗺️</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Price + order button */}
           {destCoords && (
-            <Text style={[s.priceHint, { color: colors.textSecondary }]}>
-              ~{Math.round(calcDistanceKm(pickupCoords, destCoords) * 2000 + 2000).toLocaleString()} {t(lang,'sum')}
-            </Text>
+            <View style={s.orderSection}>
+              <Text style={[s.priceHint, { color: colors.textSecondary }]}>
+                ~{calcPrice(calcDistanceKm(pickupCoords, destCoords)).toLocaleString()} {t(lang, 'sum')}
+              </Text>
+              <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
+                <Text style={s.orderBtnText}>{t(lang, 'orderTaxi')}</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
-          <TouchableOpacity
-            style={[s.orderBtn, { backgroundColor: colors.primary, opacity: destCoords ? 1 : 0.5 }]}
-            onPress={handleOrder}
-            disabled={!destCoords}
-          >
-            <Text style={s.orderBtnText}>{t(lang,'orderTaxi')}</Text>
-          </TouchableOpacity>
+          {/* Recent trips quick-select */}
+          {recentTrips.length > 0 && (
+            <View style={[s.historySection, { borderTopColor: colors.border }]}>
+              {recentTrips.map((trip) => (
+                <TouchableOpacity
+                  key={trip.id}
+                  style={s.historyRow}
+                  onPress={() => {
+                    if (trip.destination_address) setDestText(trip.destination_address);
+                    if (trip.destination_lat && trip.destination_lng) {
+                      const coords = { latitude: Number(trip.destination_lat), longitude: Number(trip.destination_lng) };
+                      setDestCoords(coords);
+                      mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+                    } else {
+                      enterMapMode('dest');
+                    }
+                  }}
+                >
+                  <Text style={{ fontSize: 14, marginRight: 10, color: colors.textSecondary }}>🕐</Text>
+                  <Text style={[s.historyText, { color: colors.text }]} numberOfLines={1}>
+                    {trip.destination_address || t(lang, 'to')}
+                  </Text>
+                  {trip.total_price ? (
+                    <Text style={[s.historyMeta, { color: colors.textSecondary }]}>
+                      {parseFloat(trip.total_price).toLocaleString()} {t(lang, 'sum')}
+                    </Text>
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
       )}
 
+      {/* ── Map selection confirm bar ── */}
+      {orderStatus === ORDER_STATUS.IDLE && mapMode && (
+        <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+          {/* Заголовок текущего режима */}
+          <Text style={[s.mapModeLabel, { color: colors.textSecondary }]}>
+            {mapMode === 'pickup' ? t(lang,'selectPickupPoint') : t(lang,'selectDestination')}
+          </Text>
+          {mapMode === 'dest' && (
+            <TextInput
+              style={[s.mapInputText, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
+              placeholder={t(lang,'optionalName')}
+              placeholderTextColor={colors.textSecondary}
+              value={destInputText}
+              onChangeText={setDestInputText}
+            />
+          )}
+          <View style={s.mapModeBtns}>
+            <TouchableOpacity style={[s.cancelMapBtn, { borderColor: colors.border }]} onPress={cancelMapMode}>
+              <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>{t(lang,'back')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.confirmMapBtn, { backgroundColor: colors.primary }]} onPress={confirmMapSelection}>
+              <Text style={{ color: '#000', fontWeight: '800', fontSize: 15 }}>
+                {mapMode === 'pickup' ? t(lang,'fromHere') : t(lang,'toHere')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ── SEARCHING panel ── */}
       {orderStatus === ORDER_STATUS.SEARCHING && (
-        <View style={[s.panel, { backgroundColor: colors.background }]}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[s.statusText, { color: colors.text }]}>{t(lang,'searching')}</Text>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+          <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
+          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 8 }} />
+          <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'searching')}</Text>
           <TouchableOpacity style={[s.cancelBtn, { borderColor: colors.border }]} onPress={handleCancel}>
-            <Text style={{ color: colors.error }}>{t(lang,'cancel')}</Text>
+            <Text style={{ color: colors.error }}>{t(lang, 'cancel')}</Text>
           </TouchableOpacity>
         </View>
       )}
 
+      {/* ── ACCEPTED / ARRIVED panel ── */}
       {(orderStatus === ORDER_STATUS.ACCEPTED || orderStatus === ORDER_STATUS.ARRIVED) && (
-        <View style={[s.panel, { backgroundColor: colors.background }]}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+          <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>
-            {orderStatus === ORDER_STATUS.ACCEPTED ? t(lang,'driverFound') : t(lang,'driverArrived')}
+            {orderStatus === ORDER_STATUS.ACCEPTED ? t(lang, 'driverFound') : t(lang, 'driverArrived')}
           </Text>
           {driverInfo && (
             <View style={[s.driverCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={s.driverCardRow}>
-                <Text style={s.driverCardIcon}>🚖</Text>
+                <Image source={CAR_ICON} style={s.driverCardCarIcon} resizeMode="contain" />
                 <View style={{ flex: 1 }}>
-                  <Text style={[s.driverName, { color: colors.text }]}>
-                    {driverInfo.first_name} {driverInfo.last_name}
-                  </Text>
-                  <Text style={[s.driverDetail, { color: colors.textSecondary }]}>
-                    📱 {driverInfo.phone}
-                  </Text>
-                  <Text style={[s.driverDetail, { color: colors.primary, fontWeight: '700' }]}>
-                    🚗 {driverInfo.car_number}
-                  </Text>
+                  <Text style={[s.driverName, { color: colors.text }]}>{driverInfo.first_name} {driverInfo.last_name}</Text>
+                  <Text style={[s.driverDetail, { color: colors.textSecondary }]}>📱 {driverInfo.phone}</Text>
+                  <Text style={[s.driverDetail, { color: colors.primary, fontWeight: '700' }]}>🚗 {driverInfo.car_number}</Text>
                 </View>
               </View>
             </View>
           )}
-          <Text style={[s.priceText, { color: colors.primary }]}>
-            {estimatedPrice?.toLocaleString()} {t(lang,'sum')}
-          </Text>
+          <Text style={[s.priceText, { color: colors.primary }]}>{estimatedPrice?.toLocaleString()} {t(lang, 'sum')}</Text>
           <TouchableOpacity style={[s.cancelBtn, { borderColor: colors.border }]} onPress={handleCancel}>
-            <Text style={{ color: colors.error }}>{t(lang,'cancel')}</Text>
+            <Text style={{ color: colors.error }}>{t(lang, 'cancel')}</Text>
           </TouchableOpacity>
         </View>
       )}
 
+      {/* ── IN_PROGRESS panel ── */}
       {orderStatus === ORDER_STATUS.IN_PROGRESS && (
-        <View style={[s.panel, { backgroundColor: colors.background }]}>
-          <Text style={[s.statusText, { color: colors.text }]}>{t(lang,'tripInProgress')}</Text>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+          <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
+          <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'tripInProgress')}</Text>
           {driverInfo && (
             <View style={[s.driverCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={s.driverCardRow}>
-                <Text style={s.driverCardIcon}>🚖</Text>
+                <Image source={CAR_ICON} style={s.driverCardCarIcon} resizeMode="contain" />
                 <View style={{ flex: 1 }}>
-                  <Text style={[s.driverName, { color: colors.text }]}>
-                    {driverInfo.first_name} {driverInfo.last_name}
-                  </Text>
-                  <Text style={[s.driverDetail, { color: colors.primary, fontWeight: '700' }]}>
-                    🚗 {driverInfo.car_number}
-                  </Text>
+                  <Text style={[s.driverName, { color: colors.text }]}>{driverInfo.first_name} {driverInfo.last_name}</Text>
+                  <Text style={[s.driverDetail, { color: colors.primary, fontWeight: '700' }]}>🚗 {driverInfo.car_number}</Text>
                 </View>
               </View>
             </View>
@@ -343,17 +651,7 @@ export default function HomeScreen() {
           <View style={s.progressBar}>
             <View style={[s.progressFill, { backgroundColor: colors.primary }]} />
           </View>
-          <Text style={[s.priceText, { color: colors.primary }]}>
-            {estimatedPrice?.toLocaleString()} {t(lang,'sum')}
-          </Text>
-        </View>
-      )}
-
-      {selectingFor && (
-        <View style={s.selectHint}>
-          <Text style={s.selectHintText}>
-            {selectingFor === 'pickup' ? '📍 Нажмите на карту для выбора точки отправления' : '🎯 Нажмите на карту для выбора цели'}
-          </Text>
+          <Text style={[s.priceText, { color: colors.primary }]}>{estimatedPrice?.toLocaleString()} {t(lang, 'sum')}</Text>
         </View>
       )}
     </View>
@@ -364,53 +662,92 @@ function makeStyles(colors) {
   return StyleSheet.create({
     container: { flex: 1 },
     map: { flex: 1 },
+
     locationBtn: {
-      position: 'absolute', top: 100, right: 16,
-      backgroundColor: colors.background, borderRadius: 12,
-      padding: 10, elevation: 4, shadowOpacity: 0.2, shadowRadius: 4,
+      position: 'absolute',
+      backgroundColor: colors.background, borderRadius: 24,
+      padding: 10, elevation: 6, shadowOpacity: 0.25, shadowRadius: 6, shadowColor: '#000',
     },
+
+    // Center crosshair
+    centerPinContainer: {
+      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    centerPinShadow: {
+      position: 'absolute',
+      width: 16, height: 4, borderRadius: 8,
+      backgroundColor: 'rgba(0,0,0,0.25)',
+      marginTop: 40,
+    },
+    centerPinIcon: { fontSize: 40, lineHeight: 42 },
+
+    // Bottom panels
     panel: {
-      position: 'absolute', bottom: 0, left: 0, right: 0,
+      position: 'absolute', left: 0, right: 0,
       borderTopLeftRadius: 24, borderTopRightRadius: 24,
-      padding: 20, paddingBottom: 36,
-      elevation: 12, shadowOpacity: 0.15, shadowRadius: 8,
+      paddingHorizontal: 16, paddingTop: 0,
+      elevation: 14, shadowOpacity: 0.15, shadowRadius: 8, shadowColor: '#000',
     },
-    panelTitle: { fontSize: 18, fontWeight: '700', marginBottom: 16 },
-    locationInput: {
-      flexDirection: 'row', alignItems: 'center', borderWidth: 1,
-      borderRadius: 12, padding: 14, marginBottom: 10,
-    },
-    locationText: { flex: 1, fontSize: 15 },
-    dotA: { fontSize: 20, color: '#43A047', marginRight: 10 },
-    dotB: { fontSize: 14, color: '#E53935', marginRight: 10 },
-    priceHint: { textAlign: 'center', marginBottom: 12, fontSize: 15 },
-    orderBtn: { borderRadius: 14, padding: 16, alignItems: 'center' },
+    handleWrap: { alignItems: 'center', paddingTop: 10, paddingBottom: 8 },
+    handle: { width: 44, height: 4, borderRadius: 2 },
+
+    // Input card
+    inputCard: { borderWidth: 1, borderRadius: 14, overflow: 'hidden', marginBottom: 10 },
+    inputRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 13 },
+    inputConnector: { height: 1, marginLeft: 36, marginRight: 14 },
+    dotGreen: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#43A047', marginRight: 12 },
+    dotRed: { width: 10, height: 10, borderRadius: 3, backgroundColor: '#E53935', marginRight: 12 },
+    inputText: { flex: 1, fontSize: 15 },
+    inputIconBtn: { paddingLeft: 10, padding: 4 },
+
+    // Order section
+    orderSection: { marginBottom: 6 },
+    priceHint: { textAlign: 'center', marginBottom: 8, fontSize: 14 },
+    orderBtn: { borderRadius: 14, padding: 14, alignItems: 'center' },
     orderBtnText: { fontWeight: '800', fontSize: 16, color: '#000' },
-    statusText: { textAlign: 'center', fontSize: 17, fontWeight: '600', marginVertical: 12 },
+
+    // Recent trips
+    historySection: { borderTopWidth: 1, marginTop: 8, paddingTop: 6 },
+    historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 4 },
+    historyText: { flex: 1, fontSize: 14 },
+    historyMeta: { fontSize: 12, marginLeft: 8 },
+
+    // Map selection confirm bar
+    mapModeBar: {
+      position: 'absolute', left: 0, right: 0,
+      borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16,
+      elevation: 14, shadowOpacity: 0.15, shadowRadius: 8, shadowColor: '#000',
+    },
+    mapModeLabel: { fontSize: 12, textAlign: 'center', marginBottom: 10 },
+    mapInputText: {
+      borderWidth: 1, borderRadius: 10, padding: 10,
+      fontSize: 14, marginBottom: 10,
+    },
+    mapModeBtns: { flexDirection: 'row', gap: 10 },
+    cancelMapBtn: { flex: 1, borderWidth: 1.5, borderRadius: 14, padding: 13, alignItems: 'center' },
+    confirmMapBtn: { flex: 2, borderRadius: 14, padding: 13, alignItems: 'center' },
+
+    // Status panels
+    statusText: { textAlign: 'center', fontSize: 17, fontWeight: '600', marginVertical: 8 },
     cancelBtn: { borderWidth: 1, borderRadius: 12, padding: 12, alignItems: 'center', marginTop: 8 },
     priceText: { textAlign: 'center', fontSize: 22, fontWeight: '800', marginBottom: 8 },
     progressBar: { height: 6, backgroundColor: colors.border, borderRadius: 3, marginVertical: 12 },
     progressFill: { height: 6, width: '60%', borderRadius: 3 },
-    selectHint: {
-      position: 'absolute', top: 60, left: 16, right: 16,
-      backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: 12, padding: 12,
-    },
-    selectHintText: { color: '#fff', textAlign: 'center', fontSize: 14 },
-    markerPickup: {
-      backgroundColor: '#43A047', borderRadius: 8, padding: 6,
-      borderWidth: 2, borderColor: '#fff',
-    },
-    markerDest: {
-      backgroundColor: '#E53935', borderRadius: 8, padding: 6,
-      borderWidth: 2, borderColor: '#fff',
-    },
-    markerText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-    driverCard: {
-      borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 12,
-    },
+
+    // Driver card
+    driverCard: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 12 },
     driverCardRow: { flexDirection: 'row', alignItems: 'center' },
     driverCardIcon: { fontSize: 32, marginRight: 12 },
+    driverCardCarIcon: { width: 40, height: 40, marginRight: 12 },
+    carIcon: { width: 44, height: 44 },
     driverName: { fontSize: 16, fontWeight: '700', marginBottom: 2 },
     driverDetail: { fontSize: 13, marginTop: 2 },
+
+    // Map markers
+    markerPickup: { backgroundColor: '#43A047', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },
+    markerDest: { backgroundColor: '#E53935', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },
+    markerText: { color: '#fff', fontWeight: '800', fontSize: 13 },
   });
 }

@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, ActivityIndicator } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
@@ -27,7 +28,9 @@ function AuthStack() {
 }
 
 function MainTabs() {
-  const { colors } = useTheme();
+  const { colors, lang } = useTheme();
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -35,7 +38,9 @@ function MainTabs() {
         tabBarStyle: {
           backgroundColor: colors.background,
           borderTopColor: colors.border,
-          height: 60, paddingBottom: 8,
+          height: 60 + insets.bottom,
+          paddingTop: 8,
+          paddingBottom: Math.max(insets.bottom, 8),
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
@@ -45,7 +50,7 @@ function MainTabs() {
         name="Home"
         component={HomeScreen}
         options={{
-          tabBarLabel: 'Карта',
+          tabBarLabel: lang === 'uz' ? 'Xarita' : 'Карта',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>🗺️</Text>,
         }}
       />
@@ -53,7 +58,7 @@ function MainTabs() {
         name="Profile"
         component={ProfileScreen}
         options={{
-          tabBarLabel: 'Профиль',
+          tabBarLabel: lang === 'uz' ? 'Profil' : 'Профиль',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>👤</Text>,
         }}
       />
@@ -86,11 +91,13 @@ function RootNavigator() {
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
-        <AuthProvider>
-          <RootNavigator />
-        </AuthProvider>
-      </ThemeProvider>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <RootNavigator />
+          </AuthProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

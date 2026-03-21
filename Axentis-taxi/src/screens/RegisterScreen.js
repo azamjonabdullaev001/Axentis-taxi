@@ -3,13 +3,12 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { t } from '../i18n';
-
-const UZ_REGIONS = [
-  '01','10','20','25','30','40','50','55','60','65','70','75','80','85','90','95'
-];
+import { getAPIErrorMessage } from '../services/api';
 
 export default function RegisterScreen({ navigation }) {
   const { colors } = useTheme();
@@ -21,6 +20,9 @@ export default function RegisterScreen({ navigation }) {
     password: '', confirm_password: '',
   });
   const [loading, setLoading] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
+  const insets = useSafeAreaInsets();
 
   function setField(key, val) {
     setForm((prev) => ({ ...prev, [key]: val }));
@@ -42,7 +44,7 @@ export default function RegisterScreen({ navigation }) {
     try {
       await register({ ...form, phone });
     } catch (e) {
-      Alert.alert(t(lang,'error'), e.response?.data?.error || 'Ошибка регистрации');
+      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Ошибка регистрации'));
     } finally {
       setLoading(false);
     }
@@ -51,8 +53,13 @@ export default function RegisterScreen({ navigation }) {
   const s = makeStyles(colors);
 
   return (
-    <KeyboardAvoidingView style={s.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={s.container} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={s.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+      >
+        <ScrollView contentContainerStyle={[s.scroll, { paddingTop: Math.max(insets.top, 12), paddingBottom: 72 + insets.bottom }]} keyboardShouldPersistTaps="handled">
         <View style={s.header}>
           <Text style={s.logo}>🚕</Text>
           <Text style={s.title}>Axentis Taxi</Text>
@@ -81,12 +88,23 @@ export default function RegisterScreen({ navigation }) {
             />
           </View>
 
-          <Input label={t(lang,'password')} value={form.password}
+          <PasswordInput
+            label={t(lang,'password')}
+            value={form.password}
             onChangeText={(v) => setField('password', v)}
-            secureTextEntry colors={colors} placeholder="Минимум 8 символов" />
-          <Input label={t(lang,'confirmPassword')} value={form.confirm_password}
+            visible={passwordVisible}
+            onToggleVisibility={() => setPasswordVisible((value) => !value)}
+            colors={colors}
+            placeholder="Минимум 8 символов"
+          />
+          <PasswordInput
+            label={t(lang,'confirmPassword')}
+            value={form.confirm_password}
             onChangeText={(v) => setField('confirm_password', v)}
-            secureTextEntry colors={colors} />
+            visible={confirmPasswordVisible}
+            onToggleVisibility={() => setConfirmPasswordVisible((value) => !value)}
+            colors={colors}
+          />
 
           <TouchableOpacity style={[s.btn, loading && s.btnDisabled]}
             onPress={handleRegister} disabled={loading}>
@@ -99,8 +117,9 @@ export default function RegisterScreen({ navigation }) {
             <Text style={s.link}>{t(lang,'haveAccount')} <Text style={s.linkBold}>{t(lang,'login')}</Text></Text>
           </TouchableOpacity>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -120,10 +139,45 @@ function Input({ label, colors, ...props }) {
   );
 }
 
+function PasswordInput({ label, colors, visible, onToggleVisibility, ...props }) {
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 6 }}>{label}</Text>
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 12,
+        backgroundColor: colors.card,
+      }}>
+        <TextInput
+          style={{
+            flex: 1,
+            padding: 14,
+            fontSize: 15,
+            color: colors.text,
+          }}
+          placeholderTextColor={colors.textSecondary}
+          secureTextEntry={!visible}
+          {...props}
+        />
+        <TouchableOpacity style={{ paddingHorizontal: 14, paddingVertical: 12 }} onPress={onToggleVisibility}>
+          <Ionicons
+            name={visible ? 'eye-outline' : 'eye-off-outline'}
+            size={20}
+            color={colors.textSecondary}
+          />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 function makeStyles(colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: 24, paddingBottom: 40 },
+    scroll: { flexGrow: 1, paddingHorizontal: 24 },
     header: { alignItems: 'center', marginTop: 40, marginBottom: 32 },
     logo: { fontSize: 56 },
     title: { fontSize: 26, fontWeight: '800', color: colors.primary, marginTop: 8 },

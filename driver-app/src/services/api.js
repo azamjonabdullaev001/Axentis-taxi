@@ -18,15 +18,23 @@ api.interceptors.response.use(
   }
 );
 
+export function getAPIErrorMessage(error, fallback = 'Ошибка запроса') {
+  if (error.response?.data?.error) return error.response.data.error;
+  if (error.code === 'ECONNABORTED') return 'Сервер не ответил вовремя';
+  if (error.request) return `Нет соединения с сервером: ${API_BASE}`;
+  return error.message || fallback;
+}
+
 export const authAPI = {
   registerDriver: (data) => api.post('/auth/register/driver', data),
   login: (data) => api.post('/auth/login', data),
   getProfile: () => api.get('/profile'),
   updateProfile: (data) => api.put('/profile', data),
+  savePushToken: (push_token) => api.put('/push-token', { push_token }),
 };
 
 export const driverAPI = {
-  updateLocation: (lat, lng) => api.put('/driver/location', { lat, lng }),
+  updateLocation: (lat, lng, heading = null) => api.put('/driver/location', { lat, lng, heading }),
   updateAvailability: (available) => api.put('/driver/availability', { available }),
   acceptOrder: (id) => api.post(`/orders/${id}/accept`),
   declineOrder: (id) => api.post(`/orders/${id}/decline`),

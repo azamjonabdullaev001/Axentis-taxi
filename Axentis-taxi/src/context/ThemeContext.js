@@ -34,10 +34,14 @@ export const COLORS = {
 
 export function ThemeProvider({ children }) {
   const [isDark, setIsDark] = useState(false);
+  const [lang, setLangState] = useState('ru');
 
   useEffect(() => {
     AsyncStorage.getItem('dark_mode').then((val) => {
       if (val === 'true') setIsDark(true);
+    });
+    AsyncStorage.getItem('language').then((l) => {
+      if (l) setLangState(l);
     });
   }, []);
 
@@ -47,10 +51,15 @@ export function ThemeProvider({ children }) {
     AsyncStorage.setItem('dark_mode', String(next));
   }
 
+  function setLang(code) {
+    setLangState(code);
+    AsyncStorage.setItem('language', code);
+  }
+
   const colors = isDark ? COLORS.dark : COLORS.light;
 
   return (
-    <ThemeContext.Provider value={{ isDark, toggleTheme, colors }}>
+    <ThemeContext.Provider value={{ isDark, toggleTheme, colors, lang, setLang }}>
       {children}
     </ThemeContext.Provider>
   );

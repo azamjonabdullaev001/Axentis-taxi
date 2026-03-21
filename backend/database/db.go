@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url VARCHAR(500),
     dark_mode BOOLEAN DEFAULT false,
     language VARCHAR(10) DEFAULT 'ru',
+    share_live_location BOOLEAN DEFAULT true,
+    push_token VARCHAR(500),
+    current_lat DOUBLE PRECISION,
+    current_lng DOUBLE PRECISION,
+    current_heading DOUBLE PRECISION,
+    last_location_at TIMESTAMPTZ,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -48,9 +54,19 @@ CREATE TABLE IF NOT EXISTS drivers (
     is_available BOOLEAN DEFAULT false,
     current_lat DOUBLE PRECISION,
     current_lng DOUBLE PRECISION,
+    current_heading DOUBLE PRECISION,
     last_seen TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS share_live_location BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token VARCHAR(500);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS current_lat DOUBLE PRECISION;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS current_lng DOUBLE PRECISION;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ;
+
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS current_heading DOUBLE PRECISION;
 
 CREATE TABLE IF NOT EXISTS admins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -107,6 +123,21 @@ CREATE TABLE IF NOT EXISTS surge_schedules (
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Peak periods: single entry defines a complete surge cycle (rise → peak → fall)
+CREATE TABLE IF NOT EXISTS peak_periods (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    peak_multiplier DECIMAL(5,2) NOT NULL CHECK (peak_multiplier > 1.0 AND peak_multiplier <= 5.0),
+    rise_minutes  INTEGER NOT NULL CHECK (rise_minutes  >= 1),
+    fall_minutes  INTEGER NOT NULL CHECK (fall_minutes  >= 1),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- base_surge_multiplier: the live multiplier restores to this value outside peak periods
+ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS base_surge_multiplier DECIMAL(5,2) DEFAULT 1.0;
 
 INSERT INTO price_settings (price_per_km, price_per_minute_wait, free_wait_minutes, service_fee, surge_multiplier)
 SELECT 2000, 500, 2, 2000, 1.0

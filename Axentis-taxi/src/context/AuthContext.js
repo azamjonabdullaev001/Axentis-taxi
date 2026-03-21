@@ -33,8 +33,12 @@ export function AuthProvider({ children }) {
     const { data } = await authAPI.login({ phone, password });
     await AsyncStorage.setItem('auth_token', data.token);
     await AsyncStorage.setItem('user_id', data.user_id);
-    const profile = await authAPI.getProfile();
-    setUser(profile.data.user);
+    try {
+      const profile = await authAPI.getProfile();
+      setUser(profile.data.user);
+    } catch {
+      setUser({ id: data.user_id, role: data.role });
+    }
     socket.connect(data.user_id);
     return data;
   }
@@ -43,8 +47,12 @@ export function AuthProvider({ children }) {
     const { data } = await authAPI.registerPassenger(userData);
     await AsyncStorage.setItem('auth_token', data.token);
     await AsyncStorage.setItem('user_id', data.user_id);
-    const profile = await authAPI.getProfile();
-    setUser(profile.data.user);
+    try {
+      const profile = await authAPI.getProfile();
+      setUser(profile.data.user);
+    } catch {
+      setUser({ id: data.user_id, role: data.role });
+    }
     socket.connect(data.user_id);
     return data;
   }

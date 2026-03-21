@@ -34,9 +34,14 @@ export function AuthProvider({ children }) {
     if (data.role !== 'driver') throw new Error('Только для водителей');
     await AsyncStorage.setItem('auth_token', data.token);
     await AsyncStorage.setItem('user_id', data.user_id);
-    const profile = await authAPI.getProfile();
-    setUser(profile.data.user);
-    setDriver(profile.data.driver || null);
+    try {
+      const profile = await authAPI.getProfile();
+      setUser(profile.data.user);
+      setDriver(profile.data.driver || null);
+    } catch {
+      setUser({ id: data.user_id, role: data.role });
+      setDriver(null);
+    }
     socket.connect(data.user_id);
     return data;
   }
@@ -45,9 +50,14 @@ export function AuthProvider({ children }) {
     const { data } = await authAPI.registerDriver(userData);
     await AsyncStorage.setItem('auth_token', data.token);
     await AsyncStorage.setItem('user_id', data.user_id);
-    const profile = await authAPI.getProfile();
-    setUser(profile.data.user);
-    setDriver(profile.data.driver || null);
+    try {
+      const profile = await authAPI.getProfile();
+      setUser(profile.data.user);
+      setDriver(profile.data.driver || null);
+    } catch {
+      setUser({ id: data.user_id, role: data.role });
+      setDriver(null);
+    }
     socket.connect(data.user_id);
     return data;
   }

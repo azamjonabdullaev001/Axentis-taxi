@@ -1,4 +1,3 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://10.0.2.2:8080/api/v1';
-const WS_BASE = process.env.EXPO_PUBLIC_WS_URL || 'ws://10.0.2.2:8080/ws';
-
-export { API_BASE, WS_BASE };
+// Адрес сервера берётся из единого файла /shared/config.js
+// Чтобы сменить бэкенд — меняй ТОЛЬКО BACKEND_HOST там.
+export { API_BASE, WS_BASE } from '../../../shared/config';

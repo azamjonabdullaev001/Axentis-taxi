@@ -38,6 +38,8 @@ func main() {
 	pricingService := services.NewPricingService(db)
 	go pricingService.StartSurgeScheduler()
 
+	pushService := services.NewPushService(db)
+
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
@@ -49,7 +51,7 @@ func main() {
 	}))
 
 	authHandler := handlers.NewAuthHandler(db, cfg)
-	orderHandler := handlers.NewOrderHandler(db, hub, pricingService)
+	orderHandler := handlers.NewOrderHandler(db, hub, pricingService, pushService)
 	adminHandler := handlers.NewAdminHandler(db, cfg)
 	wsHandler := handlers.NewWSHandler(hub, db)
 
@@ -67,6 +69,8 @@ func main() {
 		{
 			protected.GET("/profile", authHandler.GetProfile)
 			protected.PUT("/profile", authHandler.UpdateProfile)
+			protected.PUT("/push-token", authHandler.SavePushToken)
+			protected.GET("/drivers/locations", orderHandler.GetAvailableDrivers)
 
 			protected.POST("/orders", orderHandler.CreateOrder)
 			protected.GET("/orders/:id", orderHandler.GetOrder)
@@ -80,6 +84,8 @@ func main() {
 
 			protected.PUT("/driver/location", orderHandler.UpdateDriverLocation)
 			protected.PUT("/driver/availability", orderHandler.UpdateDriverAvailability)
+			protected.PUT("/passenger/location", orderHandler.UpdatePassengerLocation)
+			protected.PUT("/passenger/location-sharing", orderHandler.UpdatePassengerLocationSharing)
 		}
 
 		adminAPI := api.Group("/admin")
@@ -95,6 +101,9 @@ func main() {
 			adminAPI.GET("/surge-schedules", adminHandler.GetSurgeSchedules)
 			adminAPI.POST("/surge-schedules", adminHandler.CreateSurgeSchedule)
 			adminAPI.DELETE("/surge-schedules/:id", adminHandler.DeleteSurgeSchedule)
+			adminAPI.GET("/peak-periods", adminHandler.GetPeakPeriods)
+			adminAPI.POST("/peak-periods", adminHandler.CreatePeakPeriod)
+			adminAPI.DELETE("/peak-periods/:id", adminHandler.DeletePeakPeriod)
 		}
 
 		api.POST("/admin/login", adminHandler.Login)

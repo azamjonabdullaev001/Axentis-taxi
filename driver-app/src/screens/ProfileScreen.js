@@ -3,6 +3,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
   Image, Switch, Alert, ActivityIndicator, Modal,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -13,15 +14,11 @@ import { t } from '../i18n';
 const SUPPORT_PHONE = '+998712001122';
 
 export default function ProfileScreen() {
-  const { colors, isDark, toggleTheme } = useTheme();
+  const { colors, isDark, toggleTheme, lang, setLang } = useTheme();
   const { user, driver, logout, setUser } = useAuth();
-  const [lang, setLang] = useState('ru');
   const [langModal, setLangModal] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    AsyncStorage.getItem('language').then((l) => { if (l) setLang(l); });
-  }, []);
+  const insets = useSafeAreaInsets();
 
   async function handlePickImage() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -42,15 +39,16 @@ export default function ProfileScreen() {
   }
 
   async function handleLogout() {
-    Alert.alert('Выход', 'Вы уверены?', [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Выйти', style: 'destructive', onPress: logout },
+    Alert.alert(t(lang,'logoutTitle'), t(lang,'logoutConfirm'), [
+      { text: t(lang,'cancel'), style: 'cancel' },
+      { text: t(lang,'logout'), style: 'destructive', onPress: logout },
     ]);
   }
 
   const s = makeStyles(colors);
   return (
-    <ScrollView style={s.container} contentContainerStyle={s.content}>
+    <SafeAreaView style={s.container} edges={['top']}>
+      <ScrollView style={s.container} contentContainerStyle={[s.content, { paddingTop: Math.max(insets.top, 12), paddingBottom: 40 + insets.bottom }]}>
       <View style={s.avatarSection}>
         <TouchableOpacity onPress={handlePickImage} style={s.avatarWrap}>
           {user?.avatar_url
@@ -97,12 +95,11 @@ export default function ProfileScreen() {
       <Modal visible={langModal} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <View style={[s.modalSheet, { backgroundColor: colors.background }]}>
-            <Text style={[s.modalTitle, { color: colors.text }]}>Выберите язык</Text>
-            {[{ code:'ru', label:'🇷🇺 Русский' }, { code:'uz', label:"🇺🇿 O'zbek" }].map((item) => (
+            <Text style={[s.modalTitle, { color: colors.text }]}>{t(lang,'selectLanguage')}</Text>
+            {[{ code:'ru', label:'🇺🇳 Русский' }, { code:'uz', label:"\ud83c\uddfa\ud83c\uddff O'zbek" }].map((item) => (
               <TouchableOpacity key={item.code} style={s.langOption}
-                onPress={async () => {
+                onPress={() => {
                   setLang(item.code);
-                  await AsyncStorage.setItem('language', item.code);
                   setLangModal(false);
                 }}>
                 <Text style={[s.langLabel, { color: colors.text }]}>{item.label}</Text>
@@ -110,12 +107,13 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             ))}
             <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={() => setLangModal(false)}>
-              <Text style={{ color: colors.textSecondary }}>Закрыть</Text>
+              <Text style={{ color: colors.textSecondary }}>{t(lang,'close')}</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 

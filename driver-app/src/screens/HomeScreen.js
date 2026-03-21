@@ -1,15 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Switch,
-  Alert, Animated, Modal,
+  Alert, Animated, Modal, Image,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { driverAPI } from '../services/api';
+import { authAPI, driverAPI } from '../services/api';
 import socket from '../services/socket';
 import { t } from '../i18n';
+import {
+  initializeNotifications,
+  getExpoPushToken,
+  showIncomingOrderNotification,
+} from '../services/notifications';
+
+const CAR_ICON = require('../../assets/car-photo.png');
 
 const DRIVER_STATUS = {
   OFFLINE: 'offline',
@@ -20,18 +29,33 @@ const DRIVER_STATUS = {
   IN_PROGRESS: 'in_progress', // Passenger aboard (green route)
 };
 
+// Location accuracy & interval per driver state
+const LOCATION_CFG = {
+  idle:   { accuracy: Location.Accuracy.Balanced, timeInterval: 5000,  distanceInterval: 10 },
+  active: { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 100, distanceInterval: 1 },
+};
+
 const ROUTE_COLORS = {
-  accepted: '#2196F3',   // Blue: going to pickup
-  arrived: '#FF9800',    // Orange: waiting at pickup
-  in_progress: '#4CAF50', // Green: trip underway
+  accepted:    '#2196F3',   // Blue: going to pickup
+  arrived:     '#FF9800',   // Orange: waiting at pickup
+  in_progress: '#4CAF50',   // Green: trip underway
 };
 
 export default function HomeScreen() {
-  const { colors } = useTheme();
+  const { colors, lang } = useTheme();
   const { user } = useAuth();
-  const [lang] = useState('ru');
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
 
   const mapRef = useRef(null);
+  const locationSubscriptionRef = useRef(null);
+  const compassSubscriptionRef = useRef(null);
+  const locationBroadcastTimerRef = useRef(null);
+  const displayTimerRef = useRef(null);           // 50ms display refresh, decoupled from sensors
+  const lastBroadcastDataRef = useRef({ lat: null, lng: null, heading: 0 });
+  const locationRef = useRef(null);               // raw GPS coords — updated at sensor speed (no re-render)
+  const headingRef = useRef(0);                   // raw heading — updated at sensor speed (no re-render)
+  const driverStatusRef = useRef(DRIVER_STATUS.OFFLINE);
   const [driverStatus, setDriverStatus] = useState(DRIVER_STATUS.OFFLINE);
   const [location, setLocation] = useState(null);
   const [region, setRegion] = useState({
@@ -41,7 +65,11 @@ export default function HomeScreen() {
 
   // Active order state
   const [activeOrder, setActiveOrder] = useState(null);
-  const [passengerLocation, setPassengerLocation] = useState(null);
+  // heading: compass/GPS direction in degrees (0 = north, clockwise)
+  const [heading, setHeading] = useState(0);
+  // passengerLiveLocation: real-time GPS received from socket (null = sharing off / pre-accept)
+  // Falls back to order.pickup_lat/lng for routing when null
+  const [passengerLiveLocation, setPassengerLiveLocation] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
 
   // Wait timer (free 2 min, then 500 sum/min)
@@ -56,24 +84,223 @@ export default function HomeScreen() {
   const countdownRef = useRef(null);
 
   useEffect(() => {
-    setupLocation();
+    driverStatusRef.current = driverStatus;
+  }, [driverStatus]);
+
+  // ── Mount: permissions, initial GPS, push token — then AUTO GO ONLINE ───────
+  useEffect(() => {
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const c = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+        locationRef.current = c;
+        setLocation(c);
+        setRegion((r) => ({ ...r, ...c }));
+      }
+      // Automatically go online as soon as the screen loads
+      try {
+        await driverAPI.updateAvailability(true);
+        setDriverStatus(DRIVER_STATUS.AVAILABLE);
+      } catch {}
+    })();
+
+    (async () => {
+      try {
+        const granted = await initializeNotifications();
+        if (granted) {
+          const token = await getExpoPushToken();
+          if (token) authAPI.savePushToken(token).catch(() => {});
+        }
+      } catch {}
+    })();
+
+    return () => {
+      locationSubscriptionRef.current?.remove?.();
+      compassSubscriptionRef.current?.remove?.();
+      clearInterval(locationBroadcastTimerRef.current);
+      clearInterval(displayTimerRef.current);
+      clearInterval(waitIntervalRef.current);
+      clearInterval(countdownRef.current);
+    };
   }, []);
+
+  // ── Adaptive location + compass strategy ────────────────────────────────────
+  //
+  //  KEY DESIGN: sensors write only to REFS (no re-renders).
+  //  A 50ms display timer reads refs → calls setState → React renders at ~20fps.
+  //  This decouples 100x/sec sensor callbacks from the render cycle, eliminating
+  //  the jitter / lag that occurred when setState was called on every callback.
+  //
+  //  OFFLINE     → no tracking
+  //  AVAILABLE   → Balanced GPS, 5s/10m  (idle idle presence)
+  //  ACCEPTED / ARRIVED / IN_PROGRESS
+  //              → BestForNavigation GPS, 100ms/1m
+  //              + independent compass IIFE (not nested, starts immediately)
+  //              + 10ms WS broadcast interval (reads refs, zero re-renders)
+  useEffect(() => {
+    // ── Synchronous cleanup ───────────────────────────────────────────────────
+    locationSubscriptionRef.current?.remove?.();
+    locationSubscriptionRef.current = null;
+    compassSubscriptionRef.current?.remove?.();
+    compassSubscriptionRef.current = null;
+    clearInterval(locationBroadcastTimerRef.current);
+    clearInterval(displayTimerRef.current);
+    locationBroadcastTimerRef.current = null;
+    displayTimerRef.current = null;
+
+    if (driverStatus === DRIVER_STATUS.OFFLINE) return;
+
+    const isActiveOrder = [
+      DRIVER_STATUS.ACCEPTED, DRIVER_STATUS.ARRIVED, DRIVER_STATUS.IN_PROGRESS,
+    ].includes(driverStatus);
+    const cfg = isActiveOrder ? LOCATION_CFG.active : LOCATION_CFG.idle;
+    let dead = false; // shared flag for all async branches
+
+    // ── 1. 10ms WS broadcast — reads refs, zero React re-renders ─────────────
+    if (isActiveOrder) {
+      locationBroadcastTimerRef.current = setInterval(() => {
+        const { lat, lng, heading: h } = lastBroadcastDataRef.current;
+        if (lat !== null && driverStatusRef.current !== DRIVER_STATUS.OFFLINE) {
+          socket.send({ type: 'location_update', lat, lng, heading: h });
+        }
+      }, 10);
+    }
+
+    // ── 2. 10ms display timer — syncs refs → React state with position lerp ──
+    displayTimerRef.current = setInterval(() => {
+      const loc = locationRef.current;
+      if (loc) setLocation((prev) => {
+        if (!prev) return { ...loc };
+        // Exponential smoothing (alpha=0.18) — car slides smoothly to GPS target
+        // At 10ms tick rate: ~95% there in ~150ms, visually seamless
+        const ALPHA = 0.18;
+        const lat = prev.latitude  + (loc.latitude  - prev.latitude)  * ALPHA;
+        const lng = prev.longitude + (loc.longitude - prev.longitude) * ALPHA;
+        // Skip re-render if negligible change
+        if (Math.abs(lat - prev.latitude) < 1e-10 && Math.abs(lng - prev.longitude) < 1e-10) return prev;
+        return { latitude: lat, longitude: lng };
+      });
+      setHeading(headingRef.current);
+    }, 10);
+
+    // ── 3. GPS subscription (async IIFE, independent) ─────────────────────────
+    (async () => {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted' || dead) return;
+
+      const gpsSub = await Location.watchPositionAsync(cfg, (loc) => {
+        const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+        // Write to ref — display timer picks it up, no re-render here
+        locationRef.current = coords;
+        lastBroadcastDataRef.current.lat = coords.latitude;
+        lastBroadcastDataRef.current.lng = coords.longitude;
+
+        // Map camera follows the driver (direct animated call, no setState)
+        mapRef.current?.animateCamera({ center: coords }, { duration: 300 });
+
+        // GPS heading valid only while moving (speed > 0.5 m/s)
+        const gpsH = loc.coords.heading;
+        if (typeof gpsH === 'number' && gpsH >= 0 && (loc.coords.speed ?? 0) > 0.5) {
+          headingRef.current = gpsH;
+          lastBroadcastDataRef.current.heading = gpsH;
+        }
+
+        if (driverStatusRef.current !== DRIVER_STATUS.OFFLINE) {
+          driverAPI.updateLocation(
+            coords.latitude,
+            coords.longitude,
+            lastBroadcastDataRef.current.heading,
+          ).catch(() => {});
+        }
+      });
+
+      if (dead) gpsSub.remove();
+      else locationSubscriptionRef.current = gpsSub;
+    })();
+
+    // ── 4. Compass — active for ALL online states, not just active orders ───────────
+    (async () => {
+      try {
+        const compassSub = await Location.watchHeadingAsync((data) => {
+          const raw = data.trueHeading >= 0 ? data.trueHeading : data.magHeading;
+          if (raw < 0) return;
+          // Low-pass filter alpha=0.4: fast response, kills sensor jitter
+          const prev = headingRef.current;
+          let diff = raw - prev;
+          if (diff > 180) diff -= 360;
+          if (diff < -180) diff += 360;
+          const h = (prev + diff * 0.4 + 360) % 360;
+          headingRef.current = h;
+          lastBroadcastDataRef.current.heading = h;
+        });
+        if (dead) compassSub.remove();
+        else compassSubscriptionRef.current = compassSub;
+      } catch {
+        // Magnetometer unavailable — GPS heading used instead
+      }
+    })();
+
+    return () => {
+      dead = true;
+      clearInterval(locationBroadcastTimerRef.current);
+      clearInterval(displayTimerRef.current);
+      locationBroadcastTimerRef.current = null;
+      displayTimerRef.current = null;
+      locationSubscriptionRef.current?.remove?.();
+      locationSubscriptionRef.current = null;
+      compassSubscriptionRef.current?.remove?.();
+      compassSubscriptionRef.current = null;
+    };
+  }, [driverStatus]);
 
   useEffect(() => {
     socket.on('new_order', (data) => {
       setIncomingOrder(data.order);
       setDriverStatus(DRIVER_STATUS.INCOMING);
       startCountdown(data.order);
+      showIncomingOrderNotification(data.order).catch(() => {});
     });
     socket.on('order_cancelled', () => {
-      Alert.alert('Заказ отменён', 'Пассажир отменил заказ');
+      Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByPassenger'));
       resetToAvailable();
     });
+    socket.on('passenger_location', (data) => {
+      setPassengerLiveLocation({ latitude: data.lat, longitude: data.lng });
+    });
+    socket.on('passenger_location_hidden', () => {
+      // Driver fallback: clear live pin; route will snap back to static pickup coords
+      setPassengerLiveLocation(null);
+    });
+
     return () => {
       socket.off('new_order');
       socket.off('order_cancelled');
+      socket.off('passenger_location');
+      socket.off('passenger_location_hidden');
     };
-  }, []);
+  }, [activeOrder, lang]);
+
+  useEffect(() => {
+    if (!location || !activeOrder) return;
+
+    if (driverStatus === DRIVER_STATUS.IN_PROGRESS) {
+      setRouteCoords([
+        location,
+        { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng },
+      ]);
+      return;
+    }
+
+    if (driverStatus === DRIVER_STATUS.ACCEPTED || driverStatus === DRIVER_STATUS.ARRIVED) {
+      // Use live passenger position if available, otherwise fall back to static pickup pin
+      const target = passengerLiveLocation || {
+        latitude: activeOrder.pickup_lat,
+        longitude: activeOrder.pickup_lng,
+      };
+      setRouteCoords([location, target]);
+    }
+  }, [activeOrder, driverStatus, location, passengerLiveLocation]);
 
   function startCountdown(order) {
     setAcceptCountdown(10);
@@ -91,32 +318,16 @@ export default function HomeScreen() {
     }, 1000);
   }
 
-  async function setupLocation() {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
-
-    Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.High, distanceInterval: 10 },
-      (loc) => {
-        const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-        setLocation(coords);
-        setRegion((r) => ({ ...r, ...coords }));
-        if (driverStatus !== DRIVER_STATUS.OFFLINE) {
-          driverAPI.updateLocation(coords.latitude, coords.longitude).catch(() => {});
-        }
-        if (activeOrder) {
-          const target = driverStatus === DRIVER_STATUS.IN_PROGRESS
-            ? { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng }
-            : { latitude: activeOrder.pickup_lat, longitude: activeOrder.pickup_lng };
-          setRouteCoords([coords, target]);
-        }
-      }
-    );
-  }
-
   async function toggleOnline(val) {
     await driverAPI.updateAvailability(val);
     setDriverStatus(val ? DRIVER_STATUS.AVAILABLE : DRIVER_STATUS.OFFLINE);
+  }
+
+  function goToMyLocation() {
+    const loc = locationRef.current;
+    if (loc) {
+      mapRef.current?.animateCamera({ center: loc, zoom: 17 }, { duration: 500 });
+    }
   }
 
   async function handleAcceptOrder() {
@@ -126,17 +337,8 @@ export default function HomeScreen() {
       await driverAPI.acceptOrder(incomingOrder.id);
       setActiveOrder(incomingOrder);
       setIncomingOrder(null);
+      setPassengerLiveLocation(null); // Will be populated by socket if passenger is sharing live location
       setDriverStatus(DRIVER_STATUS.ACCEPTED);
-      setPassengerLocation({
-        latitude: incomingOrder.pickup_lat,
-        longitude: incomingOrder.pickup_lng,
-      });
-      if (location) {
-        setRouteCoords([
-          location,
-          { latitude: incomingOrder.pickup_lat, longitude: incomingOrder.pickup_lng },
-        ]);
-      }
       mapRef.current?.animateToRegion({
         latitude: incomingOrder.pickup_lat,
         longitude: incomingOrder.pickup_lng,
@@ -144,7 +346,7 @@ export default function HomeScreen() {
         longitudeDelta: 0.02,
       });
     } catch (e) {
-      Alert.alert(t(lang,'error'), 'Заказ уже занят');
+      Alert.alert(t(lang,'error'), t(lang,'orderBusy'));
       setIncomingOrder(null);
       resetToAvailable();
     }
@@ -210,7 +412,7 @@ export default function HomeScreen() {
 
   function resetToAvailable() {
     setActiveOrder(null);
-    setPassengerLocation(null);
+    setPassengerLiveLocation(null);
     setRouteCoords([]);
     setDriverStatus(DRIVER_STATUS.AVAILABLE);
     stopWaitTimer();
@@ -236,12 +438,41 @@ export default function HomeScreen() {
         style={s.map}
         provider={PROVIDER_GOOGLE}
         region={region}
-        showsUserLocation
+        showsUserLocation={false}
         showsMyLocationButton={false}
       >
-        {passengerLocation && driverStatus === DRIVER_STATUS.ACCEPTED && (
-          <Marker coordinate={passengerLocation} title="Пассажир">
-            <Text style={{ fontSize: 28 }}>🧍</Text>
+        {/* Driver's own car icon — rotation matches compass/GPS heading directly */}
+        {location && (
+          <Marker
+            coordinate={location}
+            anchor={{ x: 0.5, y: 0.5 }}
+            flat
+            rotation={heading % 360}
+          >
+            <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
+          </Marker>
+        )}
+        {activeOrder && driverStatus !== DRIVER_STATUS.IN_PROGRESS && (
+          <Marker
+            coordinate={{ latitude: activeOrder.pickup_lat, longitude: activeOrder.pickup_lng }}
+            title="Точка подачи"
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={s.pickupMarker}><Text style={s.markerText}>A</Text></View>
+          </Marker>
+        )}
+        {/* Live passenger marker — only when passenger is actively sharing GPS */}
+        {passengerLiveLocation && driverStatus !== DRIVER_STATUS.IN_PROGRESS && (
+          <Marker
+            coordinate={passengerLiveLocation}
+            title="Пассажир (live)"
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={s.livePassengerOuter}>
+              <View style={s.livePassengerInner}>
+                <Text style={{ fontSize: 20 }}>🧍</Text>
+              </View>
+            </View>
           </Marker>
         )}
         {activeOrder && (
@@ -261,38 +492,38 @@ export default function HomeScreen() {
         )}
       </MapView>
 
-      {/* Top status bar */}
-      <View style={[s.statusBar, { backgroundColor: colors.background }]}>
-        <View style={[s.statusDot, { backgroundColor: isOnline ? colors.success : colors.textSecondary }]} />
-        <Text style={[s.statusText, { color: colors.text }]}>
-          {isOnline ? t(lang,'online') : t(lang,'offline')}
-        </Text>
-        <Switch
-          style={{ marginLeft: 'auto' }}
-          value={isOnline}
-          onValueChange={toggleOnline}
-          trackColor={{ true: colors.primary, false: colors.border }}
-          disabled={!!activeOrder}
-        />
-      </View>
+      {/* Find Me button — floats just above the bottom panel, right side */}
+      {isOnline && (
+        <TouchableOpacity
+          style={[s.findMeBtn, { backgroundColor: colors.background }]}
+          onPress={goToMyLocation}
+          activeOpacity={0.8}
+        >
+          <Text style={{ fontSize: 20 }}>📍</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Bottom action panel */}
-      <View style={[s.bottomPanel, { backgroundColor: colors.background }]}>
+      <View style={[s.bottomPanel, {
+        backgroundColor: colors.background,
+        bottom: 0,
+        paddingBottom: 16,
+      }]}>
         {driverStatus === DRIVER_STATUS.OFFLINE && (
           <Text style={[s.offlineMsg, { color: colors.textSecondary }]}>
-            Включите режим онлайн, чтобы принимать заказы
+            {t(lang,'enableOnline')}
           </Text>
         )}
 
         {driverStatus === DRIVER_STATUS.AVAILABLE && (
           <Text style={[s.readyMsg, { color: colors.success }]}>
-            ✅ Ожидание заказов...
+            {t(lang,'waitingForOrders')}
           </Text>
         )}
 
         {driverStatus === DRIVER_STATUS.ACCEPTED && activeOrder && (
           <View>
-            <Text style={[s.actionTitle, { color: colors.text }]}>Едем за пассажиром</Text>
+            <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'goingToPassenger')}</Text>
             <Text style={[s.addressText, { color: colors.textSecondary }]}>
               📍 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
             </Text>
@@ -300,7 +531,7 @@ export default function HomeScreen() {
               🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
             </Text>
             <Text style={[s.priceText, { color: colors.primary }]}>
-              ~{activeOrder.estimated_price?.toLocaleString() || '—'} сум
+              ~{activeOrder.estimated_price?.toLocaleString() || '—'} {t(lang,'sum')}
             </Text>
             <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.primary }]} onPress={handleArrived}>
               <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
@@ -310,14 +541,16 @@ export default function HomeScreen() {
 
         {driverStatus === DRIVER_STATUS.ARRIVED && (
           <View>
-            <Text style={[s.actionTitle, { color: colors.text }]}>Ожидание пассажира</Text>
+            <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'waitingForPassenger')}</Text>
             <View style={s.timerRow}>
               <Text style={{ fontSize: 36, fontWeight: '800', color: waitSeconds < freeSeconds ? colors.success : colors.error }}>
                 {String(waitMin).padStart(2,'0')}:{String(waitSec).padStart(2,'0')}
               </Text>
               <View>
                 <Text style={[s.timerLabel, { color: colors.textSecondary }]}>
-                  {waitSeconds < freeSeconds ? `Бесплатно (${freeSeconds - waitSeconds}с)` : `+${waitFee.toLocaleString()} сум`}
+                  {waitSeconds < freeSeconds
+                    ? `${t(lang,'freeWaitLabel')} (${freeSeconds - waitSeconds}${t(lang,'sec')})`
+                    : `+${waitFee.toLocaleString()} ${t(lang,'sum')}`}
                 </Text>
               </View>
             </View>
@@ -329,7 +562,7 @@ export default function HomeScreen() {
 
         {driverStatus === DRIVER_STATUS.IN_PROGRESS && activeOrder && (
           <View>
-            <Text style={[s.actionTitle, { color: colors.text }]}>Поездка в процессе</Text>
+            <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'passengerOnboard')}</Text>
             <Text style={[s.addressText, { color: colors.textSecondary }]}>
               🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
             </Text>
@@ -351,10 +584,10 @@ export default function HomeScreen() {
             {incomingOrder && (
               <>
                 <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                  📍 {incomingOrder.pickup_address || 'Откуда'}
+                  📍 {incomingOrder.pickup_address || t(lang,'from')}
                 </Text>
                 <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                  🎯 {incomingOrder.destination_address || 'Куда'}
+                  🎯 {incomingOrder.destination_address || t(lang,'to')}
                 </Text>
                 <Text style={[s.orderPrice, { color: colors.primary }]}>
                   {incomingOrder.estimated_price?.toLocaleString() || '—'} сум
@@ -383,9 +616,26 @@ function makeStyles(colors) {
   return StyleSheet.create({
     container: { flex: 1 },
     map: { flex: 1 },
+    carIcon: { width: 24, height: 38 },
+    findMeBtn: {
+      position: 'absolute',
+      right: 16,
+      bottom: 100,   // sits just above bottom panel
+      width: 44, height: 44, borderRadius: 22,
+      justifyContent: 'center', alignItems: 'center',
+      elevation: 6, shadowOpacity: 0.2, shadowRadius: 6,
+    },
+    findMeBtnInner: {
+      position: 'absolute', top: 14, right: 16,
+      width: 40, height: 40, borderRadius: 20,
+      justifyContent: 'center', alignItems: 'center',
+      elevation: 3, shadowOpacity: 0.12, shadowRadius: 4,
+    },
     statusBar: {
       position: 'absolute', top: 0, left: 0, right: 0,
       flexDirection: 'row', alignItems: 'center', padding: 16,
+      borderRadius: 18,
+      marginHorizontal: 12,
       elevation: 4, shadowOpacity: 0.15, shadowRadius: 4,
     },
     statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
@@ -407,6 +657,20 @@ function makeStyles(colors) {
     timerLabel: { fontSize: 13, textAlign: 'center' },
     destMarker: { backgroundColor: '#E53935', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },
     destMarkerText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+    pickupMarker: { backgroundColor: '#2196F3', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },
+    markerText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+    // Live passenger marker: pulsing green ring around person emoji
+    livePassengerOuter: {
+      width: 52, height: 52, borderRadius: 26,
+      backgroundColor: 'rgba(76, 175, 80, 0.18)',
+      borderWidth: 2, borderColor: '#4CAF50',
+      justifyContent: 'center', alignItems: 'center',
+    },
+    livePassengerInner: {
+      width: 38, height: 38, borderRadius: 19,
+      backgroundColor: 'rgba(76, 175, 80, 0.35)',
+      justifyContent: 'center', alignItems: 'center',
+    },
     // Modal
     modalOverlay: { flex: 1, justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 20 },
     orderModal: { borderRadius: 24, padding: 24, alignItems: 'center' },

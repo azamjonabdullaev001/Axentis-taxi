@@ -25,11 +25,25 @@ api.interceptors.response.use(
   }
 );
 
+export function getAPIErrorMessage(error, fallback = 'Ошибка запроса') {
+  if (error.response?.data?.error) {
+    return error.response.data.error;
+  }
+  if (error.code === 'ECONNABORTED') {
+    return 'Сервер не ответил вовремя';
+  }
+  if (error.request) {
+    return `Нет соединения с сервером: ${API_BASE}`;
+  }
+  return error.message || fallback;
+}
+
 export const authAPI = {
   registerPassenger: (data) => api.post('/auth/register/passenger', data),
   login: (data) => api.post('/auth/login', data),
   getProfile: () => api.get('/profile'),
   updateProfile: (data) => api.put('/profile', data),
+  savePushToken: (push_token) => api.put('/push-token', { push_token }),
 };
 
 export const orderAPI = {
@@ -37,6 +51,9 @@ export const orderAPI = {
   getOrder: (id) => api.get(`/orders/${id}`),
   getHistory: () => api.get('/orders/history'),
   cancelOrder: (id) => api.post(`/orders/${id}/cancel`),
+  getAvailableDrivers: () => api.get('/drivers/locations'),
+  updatePassengerLocation: (lat, lng, heading = null) => api.put('/passenger/location', { lat, lng, heading }),
+  updatePassengerLocationSharing: (share_live_location) => api.put('/passenger/location-sharing', { share_live_location }),
 };
 
 export default api;

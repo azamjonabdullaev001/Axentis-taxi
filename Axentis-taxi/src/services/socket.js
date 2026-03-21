@@ -39,6 +39,12 @@ class SocketService {
     };
   }
 
+  send(data) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(data));
+    }
+  }
+
   on(type, handler) {
     this.listeners[type] = handler;
   }

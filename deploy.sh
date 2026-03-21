@@ -61,7 +61,6 @@ if command -v ufw &> /dev/null; then
     ufw allow 22/tcp    # SSH
     ufw allow 80/tcp    # HTTP
     ufw allow 8181/tcp  # Axentis Backend API
-    ufw allow 3001/tcp  # Axentis Admin Panel
     ufw --force enable
 fi
 
@@ -77,7 +76,7 @@ echo "  Деплой завершён успешно!   "
 echo "=============================="
 echo ""
 echo "  Backend API:   http://109.123.253.238:8181"
-echo "  Admin Panel:   http://109.123.253.238:3001"
+echo "  Admin Panel:   http://109.123.253.238"
 echo ""
 echo "Статус контейнеров Axentis Taxi:"
 $COMPOSE_CMD ps

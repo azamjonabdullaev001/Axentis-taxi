@@ -14,18 +14,20 @@ import (
 )
 
 type OrderHandler struct {
-	db             *pgxpool.Pool
-	hub            *services.Hub
-	pricingService *services.PricingService
+	db              *pgxpool.Pool
+	hub             *services.Hub
+	pricingService  *services.PricingService
 	matchingService *services.MatchingService
+	push            *services.PushService
 }
 
-func NewOrderHandler(db *pgxpool.Pool, hub *services.Hub, ps *services.PricingService) *OrderHandler {
+func NewOrderHandler(db *pgxpool.Pool, hub *services.Hub, ps *services.PricingService, push *services.PushService) *OrderHandler {
 	return &OrderHandler{
 		db:              db,
 		hub:             hub,
 		pricingService:  ps,
-		matchingService: services.NewMatchingService(db, hub),
+		matchingService: services.NewMatchingService(db, hub, push),
+		push:            push,
 	}
 }
 
@@ -37,6 +39,12 @@ type CreateOrderRequest struct {
 	DestinationLng     float64 `json:"destination_lng" binding:"required"`
 	DestinationAddress string  `json:"destination_address"`
 	DistanceKm         float64 `json:"distance_km"`
+}
+
+type locationUpdateRequest struct {
+	Lat     float64  `json:"lat" binding:"required"`
+	Lng     float64  `json:"lng" binding:"required"`
+	Heading *float64 `json:"heading"`
 }
 
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
@@ -120,7 +128,8 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 	if role == "passenger" {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
-			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at
+			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
+			 o.destination_lat, o.destination_lng
 			 FROM orders o WHERE o.passenger_id = $1
 			 ORDER BY o.created_at DESC LIMIT 50`,
 			userID)
@@ -130,13 +139,14 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			pgRows := r
 			for pgRows.Next() {
 				var id, status, pickup, dest string
-				var dist, total float64
+				var dist, total, destLat, destLng float64
 				var created time.Time
-				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created)
+				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng)
 				orders = append(orders, map[string]interface{}{
 					"id": id, "status": status, "pickup_address": pickup,
 					"destination_address": dest, "distance_km": dist,
 					"total_price": total, "created_at": created,
+					"destination_lat": destLat, "destination_lng": destLng,
 				})
 			}
 			_ = rows
@@ -145,7 +155,8 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 	} else {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
-			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at
+			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
+			 o.destination_lat, o.destination_lng
 			 FROM orders o
 			 JOIN drivers d ON o.driver_id = d.id
 			 WHERE d.user_id = $1
@@ -157,13 +168,14 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			pgRows := r
 			for pgRows.Next() {
 				var id, status, pickup, dest string
-				var dist, total float64
+				var dist, total, destLat, destLng float64
 				var created time.Time
-				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created)
+				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng)
 				orders = append(orders, map[string]interface{}{
 					"id": id, "status": status, "pickup_address": pickup,
 					"destination_address": dest, "distance_km": dist,
 					"total_price": total, "created_at": created,
+					"destination_lat": destLat, "destination_lng": destLng,
 				})
 			}
 			_ = rows
@@ -229,6 +241,12 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 		},
 	})
 	h.hub.SendToUser(passengerID, msg)
+	// Push notification so passenger is notified even if the app is in background/killed
+	go h.push.SendOrderAcceptedPush(
+		passengerID,
+		driverFirstName+" "+driverLastName,
+		driverCarNumber,
+	)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Order accepted", "order_id": orderID})
 }
@@ -404,10 +422,7 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
 		return
 	}
-	var req struct {
-		Lat float64 `json:"lat" binding:"required"`
-		Lng float64 `json:"lng" binding:"required"`
-	}
+	var req locationUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -415,9 +430,9 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 
 	userID := c.GetString("user_id")
 	h.db.Exec(context.Background(),
-		`UPDATE drivers SET current_lat = $1, current_lng = $2, last_seen = NOW()
-		 WHERE user_id = $3`,
-		req.Lat, req.Lng, userID,
+		`UPDATE drivers SET current_lat = $1, current_lng = $2, current_heading = $3, last_seen = NOW()
+		 WHERE user_id = $4`,
+		req.Lat, req.Lng, req.Heading, userID,
 	)
 
 	// Broadcast location to passenger of active order
@@ -435,11 +450,181 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 			"order_id": orderID,
 			"lat":      req.Lat,
 			"lng":      req.Lng,
+			"heading":  req.Heading,
 		})
 		h.hub.SendToUser(passengerID, msg)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Location updated"})
+}
+
+func (h *OrderHandler) UpdatePassengerLocation(c *gin.Context) {
+	if c.GetString("user_role") != "passenger" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Passenger only"})
+		return
+	}
+
+	var req locationUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID := c.GetString("user_id")
+
+	var shareLiveLocation bool
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT share_live_location FROM users WHERE id = $1`, userID,
+	).Scan(&shareLiveLocation); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	_, err := h.db.Exec(context.Background(),
+		`UPDATE users SET current_lat = $1, current_lng = $2, current_heading = $3, last_location_at = NOW(), updated_at = NOW()
+		 WHERE id = $4`,
+		req.Lat, req.Lng, req.Heading, userID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update passenger location"})
+		return
+	}
+
+	if shareLiveLocation {
+		h.notifyPassengerLocationToDriver(userID, req.Lat, req.Lng, req.Heading)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Passenger location updated", "shared": shareLiveLocation})
+}
+
+func (h *OrderHandler) UpdatePassengerLocationSharing(c *gin.Context) {
+	if c.GetString("user_role") != "passenger" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Passenger only"})
+		return
+	}
+
+	var req struct {
+		ShareLiveLocation bool `json:"share_live_location"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID := c.GetString("user_id")
+	_, err := h.db.Exec(context.Background(),
+		`UPDATE users SET share_live_location = $1, updated_at = NOW() WHERE id = $2`,
+		req.ShareLiveLocation, userID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update live location preference"})
+		return
+	}
+
+	if req.ShareLiveLocation {
+		var lat, lng float64
+		var heading *float64
+		if err := h.db.QueryRow(context.Background(),
+			`SELECT current_lat, current_lng, current_heading FROM users WHERE id = $1 AND current_lat IS NOT NULL AND current_lng IS NOT NULL`,
+			userID,
+		).Scan(&lat, &lng, &heading); err == nil {
+			h.notifyPassengerLocationToDriver(userID, lat, lng, heading)
+		}
+	} else {
+		h.notifyPassengerLocationHiddenToDriver(userID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"share_live_location": req.ShareLiveLocation})
+}
+
+func (h *OrderHandler) GetAvailableDrivers(c *gin.Context) {
+	if c.GetString("user_role") != "passenger" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Passenger only"})
+		return
+	}
+
+	rows, err := h.db.Query(context.Background(),
+		`SELECT user_id, current_lat, current_lng, current_heading
+		 FROM drivers
+		 WHERE is_available = true
+		   AND current_lat IS NOT NULL
+		   AND current_lng IS NOT NULL
+		   AND last_seen > NOW() - INTERVAL '30 seconds'
+		 ORDER BY last_seen DESC
+		 LIMIT 200`,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load drivers"})
+		return
+	}
+	defer rows.Close()
+
+	type driverLocation struct {
+		UserID  string   `json:"user_id"`
+		Lat     float64  `json:"lat"`
+		Lng     float64  `json:"lng"`
+		Heading *float64 `json:"heading,omitempty"`
+	}
+
+	drivers := make([]driverLocation, 0)
+	for rows.Next() {
+		var item driverLocation
+		if err := rows.Scan(&item.UserID, &item.Lat, &item.Lng, &item.Heading); err != nil {
+			continue
+		}
+		drivers = append(drivers, item)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"drivers": drivers})
+}
+
+func (h *OrderHandler) notifyPassengerLocationToDriver(passengerID string, lat, lng float64, heading *float64) {
+	var driverUserID string
+	err := h.db.QueryRow(context.Background(),
+		`SELECT d.user_id
+		 FROM orders o
+		 JOIN drivers d ON d.id = o.driver_id
+		 WHERE o.passenger_id = $1 AND o.status IN ('accepted', 'arrived', 'in_progress')
+		 ORDER BY o.created_at DESC LIMIT 1`,
+		passengerID,
+	).Scan(&driverUserID)
+	if err != nil {
+		return
+	}
+
+	payload := map[string]interface{}{
+		"type":         "passenger_location",
+		"passenger_id": passengerID,
+		"lat":          lat,
+		"lng":          lng,
+	}
+	if heading != nil {
+		payload["heading"] = *heading
+	}
+
+	msg, _ := json.Marshal(payload)
+	h.hub.SendToUser(driverUserID, msg)
+}
+
+func (h *OrderHandler) notifyPassengerLocationHiddenToDriver(passengerID string) {
+	var driverUserID string
+	err := h.db.QueryRow(context.Background(),
+		`SELECT d.user_id
+		 FROM orders o
+		 JOIN drivers d ON d.id = o.driver_id
+		 WHERE o.passenger_id = $1 AND o.status IN ('accepted', 'arrived', 'in_progress')
+		 ORDER BY o.created_at DESC LIMIT 1`,
+		passengerID,
+	).Scan(&driverUserID)
+	if err != nil {
+		return
+	}
+
+	msg, _ := json.Marshal(map[string]interface{}{
+		"type":         "passenger_location_hidden",
+		"passenger_id": passengerID,
+	})
+	h.hub.SendToUser(driverUserID, msg)
 }
 
 func (h *OrderHandler) UpdateDriverAvailability(c *gin.Context) {

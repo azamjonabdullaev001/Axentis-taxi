@@ -4,9 +4,20 @@ import {
   ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView,
   Platform, Modal, FlatList,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { t, UZ_REGIONS } from '../i18n';
+import { getAPIErrorMessage } from '../services/api';
+
+function normalizeCarSuffix(value) {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+}
+
+function isValidCarSuffix(value) {
+  return value.length >= 4 && /[A-Z]/.test(value) && /\d/.test(value);
+}
 
 export default function RegisterScreen({ navigation }) {
   const { colors } = useTheme();
@@ -16,15 +27,18 @@ export default function RegisterScreen({ navigation }) {
   const [form, setForm] = useState({
     first_name: '', last_name: '', phone: '',
     password: '', confirm_password: '',
-    car_region: '01', car_letters: '', car_digits: '',
+    car_region: '01', car_number_suffix: '',
   });
   const [loading, setLoading] = useState(false);
   const [regionModal, setRegionModal] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
+  const insets = useSafeAreaInsets();
 
   function setField(k, v) { setForm((p) => ({ ...p, [k]: v })); }
 
   function buildCarNumber() {
-    return `${form.car_region}${form.car_letters.toUpperCase()}${form.car_digits}`;
+    return `${form.car_region}${normalizeCarSuffix(form.car_number_suffix)}`;
   }
 
   async function handleRegister() {
@@ -35,8 +49,8 @@ export default function RegisterScreen({ navigation }) {
     if (form.password !== form.confirm_password) {
       Alert.alert(t(lang,'error'), t(lang,'passwordMismatch')); return;
     }
-    if (!form.car_letters || !form.car_digits) {
-      Alert.alert(t(lang,'error'), 'Введите номер автомобиля'); return;
+    if (!isValidCarSuffix(form.car_number_suffix)) {
+      Alert.alert(t(lang,'error'), 'Введите номер автомобиля в едином формате: 4-6 символов, буквы и цифры вместе'); return;
     }
 
     const phone = form.phone.startsWith('+998') ? form.phone : `+998${form.phone}`;
@@ -51,7 +65,7 @@ export default function RegisterScreen({ navigation }) {
         car_number: buildCarNumber(),
       });
     } catch (e) {
-      Alert.alert(t(lang,'error'), e.response?.data?.error || 'Ошибка регистрации');
+      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Ошибка регистрации'));
     } finally {
       setLoading(false);
     }
@@ -60,8 +74,13 @@ export default function RegisterScreen({ navigation }) {
   const s = makeStyles(colors);
 
   return (
-    <KeyboardAvoidingView style={s.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={s.container} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={s.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+      >
+        <ScrollView contentContainerStyle={[s.scroll, { paddingTop: Math.max(insets.top, 12), paddingBottom: 72 + insets.bottom }]} keyboardShouldPersistTaps="handled">
         <View style={s.header}>
           <Text style={s.logo}>🚖</Text>
           <Text style={s.title}>Axentis Driver</Text>
@@ -94,15 +113,32 @@ export default function RegisterScreen({ navigation }) {
         {[
           { key:'password', label: t(lang,'password') },
           { key:'confirm_password', label: t(lang,'confirmPassword') },
-        ].map(({ key, label }) => (
+        ].map(({ key, label }) => {
+          const isVisible = key === 'password' ? passwordVisible : confirmPasswordVisible;
+          const toggleVisibility = key === 'password' ? setPasswordVisible : setConfirmPasswordVisible;
+
+          return (
           <View key={key} style={{ marginBottom: 14 }}>
             <Text style={s.label}>{label}</Text>
-            <TextInput style={[s.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
-              value={form[key]} onChangeText={(v) => setField(key, v)}
-              secureTextEntry placeholderTextColor={colors.textSecondary}
-              placeholder="Минимум 8 символов" />
+            <View style={[s.passwordWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <TextInput
+                style={[s.passwordInput, { color: colors.text }]}
+                value={form[key]}
+                onChangeText={(v) => setField(key, v)}
+                secureTextEntry={!isVisible}
+                placeholderTextColor={colors.textSecondary}
+                placeholder="Минимум 8 символов"
+              />
+              <TouchableOpacity style={s.eyeBtn} onPress={() => toggleVisibility((value) => !value)}>
+                <Ionicons
+                  name={isVisible ? 'eye-outline' : 'eye-off-outline'}
+                  size={20}
+                  color={colors.textSecondary}
+                />
+              </TouchableOpacity>
+            </View>
           </View>
-        ))}
+        )})}
 
         {/* Car number */}
         <Text style={s.label}>{t(lang,'carNumber')}</Text>
@@ -112,23 +148,19 @@ export default function RegisterScreen({ navigation }) {
             <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 16 }}>{form.car_region}</Text>
           </TouchableOpacity>
           <TextInput
-            style={[s.carLetters, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
-            value={form.car_letters}
-            onChangeText={(v) => setField('car_letters', v.replace(/[^a-zA-Z]/g,'').toUpperCase())}
-            placeholder="ABC" maxLength={3} autoCapitalize="characters"
-            placeholderTextColor={colors.textSecondary}
-          />
-          <TextInput
-            style={[s.carDigits, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
-            value={form.car_digits}
-            onChangeText={(v) => setField('car_digits', v.replace(/\D/g,''))}
-            placeholder="123" maxLength={3} keyboardType="numeric"
+            style={[s.carNumberInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
+            value={form.car_number_suffix}
+            onChangeText={(v) => setField('car_number_suffix', normalizeCarSuffix(v))}
+            placeholder="A123BC"
+            maxLength={6}
+            autoCapitalize="characters"
             placeholderTextColor={colors.textSecondary}
           />
         </View>
         <Text style={[s.carPreview, { color: colors.textSecondary }]}>
           Номер: {buildCarNumber() || '—'}
         </Text>
+        <Text style={[s.carHint, { color: colors.textSecondary }]}>После кода региона вводите номер слитно: например A123BC, AB123C или ABC123</Text>
 
         <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={handleRegister} disabled={loading}>
           {loading ? <ActivityIndicator color="#000" /> : <Text style={s.btnText}>{t(lang,'register')}</Text>}
@@ -160,30 +192,34 @@ export default function RegisterScreen({ navigation }) {
             </View>
           </View>
         </Modal>
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 function makeStyles(colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: 24, paddingBottom: 48 },
+    scroll: { flexGrow: 1, paddingHorizontal: 24 },
     header: { alignItems: 'center', marginTop: 32, marginBottom: 28 },
     logo: { fontSize: 56 },
     title: { fontSize: 26, fontWeight: '800', color: colors.primary, marginTop: 8 },
     subtitle: { fontSize: 15, color: colors.textSecondary },
     label: { color: colors.textSecondary, fontSize: 13, marginBottom: 6 },
     input: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15, marginBottom: 0 },
+    passwordWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12 },
+    passwordInput: { flex: 1, padding: 14, fontSize: 15 },
+    eyeBtn: { paddingHorizontal: 14, paddingVertical: 12 },
     phoneRow: { flexDirection: 'row', marginBottom: 14 },
     prefix: { backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 14, justifyContent: 'center', marginRight: 8 },
     prefixText: { fontWeight: '700', fontSize: 15, color: '#000' },
     phoneInput: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15 },
     carRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
     regionBtn: { borderWidth: 1, borderRadius: 12, padding: 14, minWidth: 52, alignItems: 'center' },
-    carLetters: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, textAlign: 'center', fontSize: 16, letterSpacing: 2 },
-    carDigits: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, textAlign: 'center', fontSize: 16, letterSpacing: 2 },
+    carNumberInput: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, textAlign: 'center', fontSize: 16, letterSpacing: 1.5 },
     carPreview: { fontSize: 13, marginBottom: 16 },
+    carHint: { fontSize: 12, lineHeight: 18, marginTop: -8, marginBottom: 16 },
     btn: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 4 },
     btnDisabled: { opacity: 0.6 },
     btnText: { fontWeight: '800', fontSize: 16, color: '#000' },

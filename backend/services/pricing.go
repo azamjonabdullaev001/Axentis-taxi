@@ -6,8 +6,6 @@ import (
 	"math"
 	"time"
 
-	"axentis-taxi/models"
-
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
 )
@@ -36,14 +34,19 @@ func (s *PricingService) GetSettings() (*models.PriceSettings, error) {
 }
 
 func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPrice float64, surge float64) {
+	surge = 1.0
 	ps, err := s.GetSettings()
-	if err != nil {
-		// Fallback defaults
-		return distanceKm * 2000, distanceKm*2000 + 2000, 1.0
+	if err == nil && ps.SurgeMultiplier > 0 {
+		surge = ps.SurgeMultiplier
 	}
-	surge = ps.SurgeMultiplier
-	basePrice = distanceKm * ps.PricePerKm * surge
-	totalPrice = basePrice + ps.ServiceFee
+	// 2000 сум за заказ + 200 сум за каждые 100 м (округление вверх)
+	// 1–100 м → 2000+200=2200, 1км → 2000+2000=4000, 2км → 2000+4000=6000
+	blocks := math.Ceil(distanceKm * 10)
+	if blocks < 1 {
+		blocks = 1
+	}
+	basePrice = (2000 + blocks*200) * surge
+	totalPrice = basePrice
 	return
 }
 
@@ -59,76 +62,99 @@ func (s *PricingService) CalculateWaitFee(waitStartedAt *time.Time, freeMinutes 
 	return math.Round(billable * 500)
 }
 
-// StartSurgeScheduler sets up automatic surge pricing based on time schedules
+// StartSurgeScheduler sets up automatic surge pricing based on peak period schedules
 func (s *PricingService) StartSurgeScheduler() {
-	// Every minute check for active schedules
+	// Every minute: apply active peak period or restore base multiplier
 	s.cron.AddFunc("* * * * *", func() {
-		s.processSurgeSchedules()
+		s.processPeakPeriods()
 	})
 	s.cron.Start()
-	log.Println("Surge scheduler started")
+	log.Println("Peak period scheduler started")
 }
 
-func (s *PricingService) processSurgeSchedules() {
+func (s *PricingService) processPeakPeriods() {
 	now := time.Now()
-	currentTime := now.Format("15:04:05")
+	nowMins := float64(now.Hour()*60 + now.Minute())
 
+	// Collect all active peak periods
+	type pp struct {
+		startStr string
+		endStr   string
+		peak     float64
+		riseMin  int
+		fallMin  int
+	}
 	rows, err := s.db.Query(context.Background(),
-		`SELECT id, target_multiplier, start_time, duration_minutes, direction
-		 FROM surge_schedules
-		 WHERE is_active = true
-		   AND start_time <= $1::time
-		   AND (start_time + (duration_minutes || ' minutes')::interval) >= $1::time`,
-		currentTime,
-	)
+		`SELECT start_time::text, end_time::text, peak_multiplier, rise_minutes, fall_minutes
+		 FROM peak_periods WHERE is_active = true ORDER BY start_time`)
 	if err != nil {
 		return
 	}
-	defer rows.Close()
+	var periods []pp
+	for rows.Next() {
+		var p pp
+		rows.Scan(&p.startStr, &p.endStr, &p.peak, &p.riseMin, &p.fallMin)
+		periods = append(periods, p)
+	}
+	rows.Close()
 
-	var schedule models.SurgeSchedule
-	if rows.Next() {
-		rows.Scan(&schedule.ID, &schedule.TargetMultiplier, &schedule.StartTime,
-			&schedule.DurationMinutes, &schedule.Direction)
+	for _, p := range periods {
+		startT, e1 := time.Parse("15:04:05", p.startStr)
+		endT, e2 := time.Parse("15:04:05", p.endStr)
+		if e1 != nil || e2 != nil {
+			continue
+		}
+		startMins := float64(startT.Hour()*60 + startT.Minute())
+		endMins := float64(endT.Hour()*60 + endT.Minute())
 
-		ps, err := s.GetSettings()
-		if err != nil {
-			return
+		if nowMins < startMins || nowMins >= endMins {
+			continue // not in this period's window
 		}
 
-		// Parse start time to calculate how far into the schedule we are
-		startT, err := time.Parse("15:04:05", schedule.StartTime)
-		if err != nil {
-			return
+		riseEndMins := startMins + float64(p.riseMin)
+		fallStartMins := endMins - float64(p.fallMin)
+
+		var multiplier float64
+		switch {
+		case nowMins <= riseEndMins:
+			// Rising phase: 1.0 → peak over rise_minutes
+			progress := (nowMins - startMins) / float64(p.riseMin)
+			if progress > 1 {
+				progress = 1
+			}
+			multiplier = 1.0 + (p.peak-1.0)*progress
+
+		case nowMins >= fallStartMins:
+			// Falling phase: peak → 1.0 over fall_minutes
+			remaining := endMins - nowMins
+			progress := remaining / float64(p.fallMin)
+			if progress < 0 {
+				progress = 0
+			}
+			multiplier = 1.0 + (p.peak-1.0)*progress
+
+		default:
+			// Peak phase: hold at maximum
+			multiplier = p.peak
 		}
 
-		todayStart := time.Date(now.Year(), now.Month(), now.Day(),
-			startT.Hour(), startT.Minute(), startT.Second(), 0, now.Location())
-		elapsed := now.Sub(todayStart).Minutes()
-		progress := elapsed / float64(schedule.DurationMinutes)
-		if progress > 1.0 {
-			progress = 1.0
+		// Clamp to safe range
+		if multiplier < 0.5 {
+			multiplier = 0.5
 		}
-
-		var newMultiplier float64
-
-		if schedule.Direction == "up" {
-			newMultiplier = ps.SurgeMultiplier + (schedule.TargetMultiplier-ps.SurgeMultiplier)*progress
-		} else {
-			newMultiplier = ps.SurgeMultiplier - (ps.SurgeMultiplier-schedule.TargetMultiplier)*progress
-		}
-
-		// Clamp to safe range: 0.25 to 3.5
-		if newMultiplier < 0.25 {
-			newMultiplier = 0.25
-		}
-		if newMultiplier > 3.5 {
-			newMultiplier = 3.5
+		if multiplier > 5.0 {
+			multiplier = 5.0
 		}
 
 		s.db.Exec(context.Background(),
-			`UPDATE price_settings SET surge_multiplier = $1, updated_at = NOW()`,
-			newMultiplier,
-		)
+			`UPDATE price_settings SET surge_multiplier = $1, updated_at = NOW()`, multiplier)
+		log.Printf("Peak period active: %.2f× (phase at %.0f min)", multiplier, nowMins)
+		return
 	}
+
+	// No peak period active — restore live multiplier to the admin-set base value
+	s.db.Exec(context.Background(),
+		`UPDATE price_settings
+		 SET surge_multiplier = COALESCE(base_surge_multiplier, 1.0), updated_at = NOW()
+		 WHERE surge_multiplier != COALESCE(base_surge_multiplier, 1.0)`)
 }

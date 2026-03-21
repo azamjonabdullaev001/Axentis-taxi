@@ -3,6 +3,7 @@ import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { orderAPI } from '../services/api';
 import { t } from '../i18n';
@@ -47,6 +48,7 @@ function formatDate(dateStr, lang) {
 
 export default function HistoryScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [lang, setLang] = useState('ru');
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -123,15 +125,15 @@ export default function HistoryScreen() {
 
   if (loading) {
     return (
-      <View style={[s.center, { backgroundColor: colors.background }]}>
+      <SafeAreaView style={[s.center, { backgroundColor: colors.background }]} edges={['top']}>
         <ActivityIndicator size="large" color={colors.primary} />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={[s.container, { backgroundColor: colors.background }]}>
-      <View style={[s.headerBar, { borderBottomColor: colors.border }]}>
+    <SafeAreaView style={[s.container, { backgroundColor: colors.background }]} edges={['top']}>
+      <View style={[s.headerBar, { borderBottomColor: colors.border, paddingTop: Math.max(insets.top, 12) }]}>
         <Text style={[s.headerTitle, { color: colors.text }]}>{t(lang,'history')}</Text>
       </View>
 
@@ -158,7 +160,7 @@ export default function HistoryScreen() {
           data={orders}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          contentContainerStyle={s.list}
+          contentContainerStyle={[s.list, { paddingBottom: 32 + insets.bottom }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -169,7 +171,7 @@ export default function HistoryScreen() {
           }
         />
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

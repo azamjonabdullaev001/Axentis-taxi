@@ -12,6 +12,12 @@ type User struct {
 	AvatarURL    *string   `json:"avatar_url"`
 	DarkMode     bool      `json:"dark_mode"`
 	Language     string    `json:"language"`
+	ShareLiveLocation bool    `json:"share_live_location"`
+	PushToken         *string `json:"-"`
+	CurrentLat        *float64 `json:"current_lat,omitempty"`
+	CurrentLng    *float64 `json:"current_lng,omitempty"`
+	CurrentHeading *float64 `json:"current_heading,omitempty"`
+	LastLocationAt *time.Time `json:"last_location_at,omitempty"`
 	IsActive     bool      `json:"is_active"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -24,6 +30,7 @@ type Driver struct {
 	IsAvailable bool       `json:"is_available"`
 	CurrentLat  *float64   `json:"current_lat"`
 	CurrentLng  *float64   `json:"current_lng"`
+	CurrentHeading *float64 `json:"current_heading,omitempty"`
 	LastSeen    time.Time  `json:"last_seen"`
 	CreatedAt   time.Time  `json:"created_at"`
 	User        *User      `json:"user,omitempty"`
@@ -74,6 +81,7 @@ type PriceSettings struct {
 	FreeWaitMinutes    int       `json:"free_wait_minutes"`
 	ServiceFee         float64   `json:"service_fee"`
 	SurgeMultiplier    float64   `json:"surge_multiplier"`
+	BaseSurgeMultiplier float64  `json:"base_surge_multiplier"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
@@ -85,4 +93,15 @@ type SurgeSchedule struct {
 	Direction        string    `json:"direction"`
 	IsActive         bool      `json:"is_active"`
 	CreatedAt        time.Time `json:"created_at"`
+}
+
+type PeakPeriod struct {
+	ID             string    `json:"id"`
+	StartTime      string    `json:"start_time"`
+	EndTime        string    `json:"end_time"`
+	PeakMultiplier float64   `json:"peak_multiplier"`
+	RiseMinutes    int       `json:"rise_minutes"`
+	FallMinutes    int       `json:"fall_minutes"`
+	IsActive       bool      `json:"is_active"`
+	CreatedAt      time.Time `json:"created_at"`
 }

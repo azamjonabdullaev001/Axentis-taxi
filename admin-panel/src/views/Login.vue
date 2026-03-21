@@ -29,15 +29,16 @@
           />
         </div>
 
-        <div class="field">
+        <!-- Token field hidden for the superadmin account -->
+        <div class="field" v-if="!isSuperadmin">
           <label>Токен доступа (20 символов)</label>
           <input
             v-model="form.access_token"
             type="text"
             placeholder="20-значный токен"
             maxlength="20"
-            minlength="20"
-            required
+            :minlength="isSuperadmin ? 0 : 20"
+            :required="!isSuperadmin"
             autocomplete="off"
           />
           <small class="hint">{{ form.access_token.length }}/20</small>
@@ -55,20 +56,31 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { adminAPI } from '../services/api'
+
+const SUPERADMIN_PHONE = '+998914751330'
 
 const router = useRouter()
 const form = ref({ phone: '', password: '', access_token: '' })
 const loading = ref(false)
 const error = ref('')
 
+const isSuperadmin = computed(() =>
+  form.value.phone.replace(/\s/g, '') === SUPERADMIN_PHONE
+)
+
 async function handleLogin() {
   error.value = ''
   loading.value = true
   try {
-    const { data } = await adminAPI.login(form.value)
+    const payload = {
+      phone: form.value.phone,
+      password: form.value.password,
+      access_token: isSuperadmin.value ? '' : form.value.access_token,
+    }
+    const { data } = await adminAPI.login(payload)
     localStorage.setItem('admin_token', data.token)
     router.push('/dashboard')
   } catch (e) {
