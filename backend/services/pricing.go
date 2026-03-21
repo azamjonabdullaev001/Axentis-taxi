@@ -28,26 +28,31 @@ func (s *PricingService) GetSettings() (*models.PriceSettings, error) {
 	var ps models.PriceSettings
 	err := s.db.QueryRow(context.Background(),
 		`SELECT id, price_per_km, price_per_minute_wait, free_wait_minutes,
-		 service_fee, surge_multiplier, updated_at
+		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0), updated_at
 		 FROM price_settings ORDER BY id LIMIT 1`,
 	).Scan(&ps.ID, &ps.PricePerKm, &ps.PricePerMinuteWait, &ps.FreeWaitMinutes,
-		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.UpdatedAt)
+		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier, &ps.UpdatedAt)
 	return &ps, err
 }
 
 func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPrice float64, surge float64) {
 	surge = 1.0
 	ps, err := s.GetSettings()
-	if err == nil && ps.SurgeMultiplier > 0 {
-		surge = ps.SurgeMultiplier
+	if err == nil {
+		if ps.SurgeMultiplier > 0 {
+			surge = ps.SurgeMultiplier
+		}
+		// Формула: service_fee (базовый сбор) + distance_km * price_per_km
+		basePrice = math.Round(ps.ServiceFee + distanceKm*ps.PricePerKm)
+		totalPrice = math.Round(basePrice * surge)
+		return
 	}
-	// 2000 сум за заказ + 200 сум за каждые 100 м (округление вверх)
-	// 1–100 м → 2000+200=2200, 1км → 2000+2000=4000, 2км → 2000+4000=6000
+	// Fallback при ошибке БД: 2000 сум базовый + 200 за каждые 100 м
 	blocks := math.Ceil(distanceKm * 10)
 	if blocks < 1 {
 		blocks = 1
 	}
-	basePrice = (2000 + blocks*200) * surge
+	basePrice = math.Round((2000 + blocks*200) * surge)
 	totalPrice = basePrice
 	return
 }

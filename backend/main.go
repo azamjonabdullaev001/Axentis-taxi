@@ -107,6 +107,8 @@ func main() {
 		}
 
 		api.POST("/admin/login", adminHandler.Login)
+		// Публичный маршрут — тарифы нужны пассажирскому приложению без авторизации
+		api.GET("/pricing/settings", adminHandler.GetPricingSettings)
 	}
 
 	r.GET("/ws", wsHandler.Handle)
