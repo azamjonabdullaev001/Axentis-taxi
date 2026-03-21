@@ -139,6 +139,12 @@ CREATE TABLE IF NOT EXISTS peak_periods (
 -- base_surge_multiplier: the live multiplier restores to this value outside peak periods
 ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS base_surge_multiplier DECIMAL(5,2) DEFAULT 1.0;
 
+-- trip_type: 'standard' (pickup+dest) or 'free' (meter, no dest required)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS trip_type VARCHAR(20) DEFAULT 'standard';
+-- Allow free-tariff orders without a destination
+ALTER TABLE orders ALTER COLUMN destination_lat DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN destination_lng DROP NOT NULL;
+
 INSERT INTO price_settings (price_per_km, price_per_minute_wait, free_wait_minutes, service_fee, surge_multiplier)
 SELECT 2000, 500, 2, 2000, 1.0
 WHERE NOT EXISTS (SELECT 1 FROM price_settings);

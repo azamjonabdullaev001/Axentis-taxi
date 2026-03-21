@@ -22,30 +22,40 @@ const USER_ICON   = require('../../assets/user-location.png');
 
 // Обратное геокодирование: улица + номер дома + город (без районов)
 async function reverseGeocode(coords) {
-  // 1. Nominatim zoom=18
+  // 1. Nominatim zoom=18 (с таймаутом 6 сек)
   try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 6000);
     const url =
       `https://nominatim.openstreetmap.org/reverse?lat=${coords.latitude}&lon=${coords.longitude}` +
       `&format=json&addressdetails=1&zoom=18&accept-language=ru`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'AxentisTaxi/1.0' } });
-    const json = await res.json();
-    if (json.address) {
-      const a = json.address;
-      const road = a.road || a.pedestrian || a.footway || a.path || a.residential || a.neighbourhood;
-      const number = a.house_number;
-      // Только город/посёлок — без county/district/state
-      const city = a.city || a.town || a.village;
-      if (road) return [road, number, city].filter(Boolean).join(', ');
-      if (city) return city;
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'AxentisTaxiApp/1.0' },
+    });
+    clearTimeout(tid);
+    if (res.ok) {
+      const json = await res.json();
+      if (json?.address) {
+        const a = json.address;
+        const road = a.road || a.pedestrian || a.footway || a.path || a.residential || a.neighbourhood;
+        const number = a.house_number;
+        const city = a.city || a.town || a.village || a.hamlet;
+        if (road) return [road, number, city].filter(Boolean).join(', ');
+        if (city) return city;
+        if (json.display_name) {
+          return json.display_name.split(',').slice(0, 2).map(s => s.trim()).join(', ');
+        }
+      }
     }
   } catch {}
-  // 2. Fallback: expo-location (Google данные на Android)
+  // 2. Fallback: expo-location
   try {
     const results = await Location.reverseGeocodeAsync(coords);
     if (results?.length > 0) {
       const r = results[0];
-      const city = r.city || r.subregion;
       const street = r.street || r.name;
+      const city = r.city || r.district || r.subregion;
       if (street) return [street, r.streetNumber, city].filter(Boolean).join(', ');
       if (city) return city;
     }
@@ -87,6 +97,29 @@ async function fetchRoadRoute(pickup, dest) {
   return [pickup, dest];
 }
 
+// Маркер с PNG иконкой: tracksViewChanges=true до загрузки изображения, затем false
+// Это предотвращает и мигание (false), и пустые маркеры (true пока не загрузится)
+function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, zIndex, flat, rotation }) {
+  const [trackChanges, setTrackChanges] = React.useState(true);
+  return (
+    <Marker
+      coordinate={coordinate}
+      anchor={anchor}
+      zIndex={zIndex}
+      flat={flat}
+      rotation={rotation}
+      tracksViewChanges={trackChanges}
+    >
+      <Image
+        source={source}
+        style={{ width: size, height: size }}
+        resizeMode="contain"
+        onLoad={() => setTrackChanges(false)}
+        fadeDuration={0}
+      />
+    </Marker>
+  );
+}
 
 const ORDER_STATUS = {
   IDLE: 'idle',
@@ -148,12 +181,6 @@ export default function HomeScreen() {
   const [driverDisplayLocation, setDriverDisplayLocation] = useState(null);
   const [driverInfo, setDriverInfo] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
-  // tracksViewChanges=true пока иконки не загрузились, затем false — без мигания
-  const [iconsReady, setIconsReady] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setIconsReady(true), 800);
-    return () => clearTimeout(t);
-  }, []);
   const [routePreviewCoords, setRoutePreviewCoords] = useState([]);
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
@@ -161,6 +188,11 @@ export default function HomeScreen() {
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [dashPhase, setDashPhase] = useState(0);
   const [pricingSettings, setPricingSettings] = useState({ service_fee: 2000, price_per_km: 2000, surge_multiplier: 1.0 });
+  const [tariffType, setTariffType] = useState('standard'); // 'standard' | 'free'
+  const [freeRideKm, setFreeRideKm] = useState(0);
+  const freeRideKmRef = useRef(0);
+  const prevFreeDriverPosRef = useRef(null);
+  const tariffTypeRef = useRef('standard');
 
   // Анимация пунктира "последней мили
   useEffect(() => {
@@ -342,6 +374,7 @@ export default function HomeScreen() {
 
   useEffect(() => { orderStatusRef.current = orderStatus; }, [orderStatus]);
   useEffect(() => { orderIDRef.current = orderID; }, [orderID]);
+  useEffect(() => { tariffTypeRef.current = tariffType; }, [tariffType]);
 
   // Available drivers polling
   useEffect(() => {
@@ -379,9 +412,25 @@ export default function HomeScreen() {
       const pos = { latitude: data.lat, longitude: data.lng, heading: data.heading ?? 0 };
       driverTargetRef.current = pos;
       setDriverLocation(pos);
+      // Для свободного тарифа накапливаем пройденные км во время поездки
+      if (orderStatusRef.current === ORDER_STATUS.IN_PROGRESS && tariffTypeRef.current === 'free') {
+        if (prevFreeDriverPosRef.current) {
+          const R = 6371;
+          const dLat = ((pos.latitude - prevFreeDriverPosRef.current.latitude) * Math.PI) / 180;
+          const dLon = ((pos.longitude - prevFreeDriverPosRef.current.longitude) * Math.PI) / 180;
+          const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(prevFreeDriverPosRef.current.latitude * Math.PI / 180) *
+            Math.cos(pos.latitude * Math.PI / 180) *
+            Math.sin(dLon / 2) ** 2;
+          freeRideKmRef.current += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          setFreeRideKm(freeRideKmRef.current);
+        }
+        prevFreeDriverPosRef.current = pos;
+      }
       setRouteCoords([
         { latitude: data.lat, longitude: data.lng },
-        orderStatusRef.current === ORDER_STATUS.IN_PROGRESS ? destCoords : pickupCoords,
+        orderStatusRef.current === ORDER_STATUS.IN_PROGRESS && tariffTypeRef.current === 'standard'
+          ? destCoords : pickupCoords,
       ].filter(Boolean));
     });
     socket.on('no_drivers', () => {
@@ -468,6 +517,9 @@ export default function HomeScreen() {
     setDestText('');
     setDestInputText('');
     setMapMode(null);
+    freeRideKmRef.current = 0;
+    setFreeRideKm(0);
+    prevFreeDriverPosRef.current = null;
   }
 
   function calcDistanceKm(a, b) {
@@ -483,22 +535,33 @@ export default function HomeScreen() {
   }
 
   async function handleOrder() {
-    if (!pickupCoords || !destCoords) {
+    if (!pickupCoords) {
+      Alert.alert(t(lang, 'error'), t(lang, 'selectDestHint'));
+      return;
+    }
+    if (tariffType === 'standard' && !destCoords) {
       Alert.alert(t(lang, 'error'), t(lang, 'selectDestHint'));
       return;
     }
     setOrderStatus(ORDER_STATUS.SEARCHING);
-    const distKm = calcDistanceKm(pickupCoords, destCoords);
+    freeRideKmRef.current = 0;
+    setFreeRideKm(0);
+    prevFreeDriverPosRef.current = null;
+    const distKm = tariffType === 'standard' ? calcDistanceKm(pickupCoords, destCoords) : 0;
     try {
-      const { data } = await orderAPI.createOrder({
+      const payload = {
         pickup_lat: pickupCoords.latitude,
         pickup_lng: pickupCoords.longitude,
         pickup_address: pickupText,
-        destination_lat: destCoords.latitude,
-        destination_lng: destCoords.longitude,
-        destination_address: destText,
         distance_km: distKm,
-      });
+        trip_type: tariffType,
+      };
+      if (tariffType === 'standard' && destCoords) {
+        payload.destination_lat = destCoords.latitude;
+        payload.destination_lng = destCoords.longitude;
+        payload.destination_address = destText;
+      }
+      const { data } = await orderAPI.createOrder(payload);
       setOrderID(data.order_id);
       setEstimatedPrice(data.total_price);
     } catch (e) {
@@ -527,54 +590,43 @@ export default function HomeScreen() {
         showsUserLocation={false}
         showsMyLocationButton={false}
       >
-        {/* Позиция пользователя — острый конец значка указывает на точку */}
+        {/* Позиция пользователя */}
         {userLocation && (
-          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} tracksViewChanges={!iconsReady}>
-            <Image source={USER_ICON} style={{ width: 36, height: 36 }} resizeMode="contain" />
-          </Marker>
+          <PinMarker coordinate={userLocation} source={USER_ICON} size={36} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} />
         )}
 
-        {/* Available drivers while idle — car icon rotated by heading (+180° because front of PNG faces down) */}
+        {/* Доступные водители в режиме IDLE */}
         {orderStatus === ORDER_STATUS.IDLE && availableDrivers.map((driver) => (
-          <Marker
+          <PinMarker
             key={driver.user_id}
             coordinate={{ latitude: driver.lat, longitude: driver.lng }}
+            source={CAR_ICON}
+            size={44}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            tracksViewChanges={!iconsReady}
             rotation={((driver.heading ?? 0) + 180) % 360}
-          >
-            <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
-          </Marker>
+          />
         ))}
 
         {/* Пин отправления */}
         {pickupCoords && !mapMode && (
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={!iconsReady}>
-            <Image source={PICKUP_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
-          </Marker>
+          <PinMarker coordinate={pickupCoords} source={PICKUP_ICON} size={40} anchor={{ x: 0.5, y: 1 }} />
         )}
         {/* Пин назначения */}
         {destCoords && !mapMode && (
-          <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={!iconsReady}>
-            <Image source={DEST_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
-          </Marker>
+          <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.5, y: 1 }} />
         )}
 
-        {/* Active driver car - smoothly interpolated from 10ms WS updates (+180° because front of PNG faces down) */}
+        {/* Машина активного водителя — плавно интерполируется из WS обновлений */}
         {driverDisplayLocation && (
-          <Marker
-            coordinate={{
-              latitude: driverDisplayLocation.latitude,
-              longitude: driverDisplayLocation.longitude,
-            }}
+          <PinMarker
+            coordinate={{ latitude: driverDisplayLocation.latitude, longitude: driverDisplayLocation.longitude }}
+            source={CAR_ICON}
+            size={44}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            tracksViewChanges={!iconsReady}
             rotation={((driverDisplayLocation.heading ?? 0) + 180) % 360}
-          >
-            <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
-          </Marker>
+          />
         )}
         {/* Маршрут по дорогам — сплошная жёлтая линия */}
         {routePreviewCoords.length >= 2 && !mapMode && (
@@ -653,19 +705,46 @@ export default function HomeScreen() {
             />
           </TouchableOpacity>
 
-          {/* Кнопка «Моё местоположение» — над полями ввода, внутри панели */}
-          <TouchableOpacity
-            style={s.gpsLocateRow}
-            onPress={handleLocateMe}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="locate" size={16} color={colors.primary} />
-            <Text style={[s.gpsLocateText, { color: colors.primary }]}>Моё местоположение</Text>
-          </TouchableOpacity>
+          {/* GPS кнопка + цена справа */}
+          <View style={s.gpsLocatePriceRow}>
+            <TouchableOpacity style={s.gpsLocateBtn} onPress={handleLocateMe} activeOpacity={0.8}>
+              <Ionicons name="locate" size={16} color={colors.primary} />
+              <Text style={[s.gpsLocateText, { color: colors.primary }]}>Моё местоположение</Text>
+            </TouchableOpacity>
+            {tariffType === 'standard' && destCoords && pickupCoords ? (
+              <Text style={[s.priceInline, { color: colors.primary }]}>
+                ~{calcPrice(calcDistanceKm(pickupCoords, destCoords)).toLocaleString()} {t(lang, 'sum')}
+              </Text>
+            ) : tariffType === 'free' ? (
+              <Text style={[s.priceInline, { color: colors.textSecondary }]}>
+                {(pricingSettings.price_per_km || 2000).toLocaleString()} {t(lang, 'sum')}/км
+              </Text>
+            ) : null}
+          </View>
+
+          {/* Выбор тарифа */}
+          <View style={s.tariffRow}>
+            <TouchableOpacity
+              style={[s.tariffBtn, { borderColor: colors.border, backgroundColor: tariffType === 'standard' ? colors.primary : colors.card }]}
+              onPress={() => setTariffType('standard')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="car-outline" size={15} color={tariffType === 'standard' ? '#000' : colors.textSecondary} />
+              <Text style={[s.tariffBtnText, { color: tariffType === 'standard' ? '#000' : colors.text }]}>Стандарт</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.tariffBtn, { borderColor: colors.border, backgroundColor: tariffType === 'free' ? colors.primary : colors.card }]}
+              onPress={() => setTariffType('free')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="timer-outline" size={15} color={tariffType === 'free' ? '#000' : colors.textSecondary} />
+              <Text style={[s.tariffBtnText, { color: tariffType === 'free' ? '#000' : colors.text }]}>Свободный</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* Route input card */}
           <View style={[s.inputCard, { borderColor: colors.border, backgroundColor: colors.card }]}>
-            {/* Pickup row — тап входит в режим выбора на карте */}
+            {/* Pickup row */}
             <TouchableOpacity style={s.inputRow} onPress={() => enterMapMode('pickup')} activeOpacity={0.8}>
               <View style={s.dotGreen} />
               <Text
@@ -679,35 +758,37 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </TouchableOpacity>
 
-            <View style={[s.inputConnector, { backgroundColor: colors.border }]} />
-
-            {/* Destination row */}
-            <View style={s.inputRow}>
-              <View style={s.dotRed} />
-              <TextInput
-                style={[s.inputText, { color: colors.text, flex: 1 }]}
-                placeholder={t(lang, 'to')}
-                placeholderTextColor={colors.textSecondary}
-                value={destText}
-                onChangeText={(text) => {
-                  setDestText(text);
-                  if (!text) setDestCoords(null);
-                }}
-              />
-              <TouchableOpacity style={s.inputIconBtn} onPress={() => enterMapMode('dest')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Ionicons name="map-outline" size={20} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+            {/* Destination row — только для стандартного тарифа */}
+            {tariffType === 'standard' && (
+              <>
+                <View style={[s.inputConnector, { backgroundColor: colors.border }]} />
+                <View style={s.inputRow}>
+                  <View style={s.dotRed} />
+                  <TextInput
+                    style={[s.inputText, { color: colors.text, flex: 1 }]}
+                    placeholder={t(lang, 'to')}
+                    placeholderTextColor={colors.textSecondary}
+                    value={destText}
+                    onChangeText={(text) => {
+                      setDestText(text);
+                      if (!text) setDestCoords(null);
+                    }}
+                  />
+                  <TouchableOpacity style={s.inputIconBtn} onPress={() => enterMapMode('dest')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="map-outline" size={20} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
 
-          {/* Price + order button */}
-          {destCoords && (
+          {/* Кнопка заказа */}
+          {((tariffType === 'standard' && destCoords) || (tariffType === 'free' && pickupCoords)) && (
             <View style={s.orderSection}>
-              <Text style={[s.priceHint, { color: colors.textSecondary }]}>
-                ~{calcPrice(calcDistanceKm(pickupCoords, destCoords)).toLocaleString()} {t(lang, 'sum')}
-              </Text>
               <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
-                <Text style={s.orderBtnText}>{t(lang, 'orderTaxi')}</Text>
+                <Text style={s.orderBtnText}>
+                  {tariffType === 'free' ? 'Вызвать (свободный)' : t(lang, 'orderTaxi')}
+                </Text>
               </TouchableOpacity>
             </View>
           )}
@@ -847,7 +928,18 @@ export default function HomeScreen() {
           <View style={s.progressBar}>
             <View style={[s.progressFill, { backgroundColor: colors.primary }]} />
           </View>
-          <Text style={[s.priceText, { color: colors.primary }]}>{estimatedPrice?.toLocaleString()} {t(lang, 'sum')}</Text>
+          {tariffType === 'free' ? (
+            <>
+              <Text style={[s.priceHint, { color: colors.textSecondary }]}>
+                {freeRideKm.toFixed(2)} км × {(pricingSettings.price_per_km || 2000).toLocaleString()} сум/км
+              </Text>
+              <Text style={[s.priceText, { color: colors.primary }]}>
+                ~{(Math.ceil((freeRideKm * (pricingSettings.price_per_km || 2000)) / 200) * 200).toLocaleString()} {t(lang, 'sum')}
+              </Text>
+            </>
+          ) : (
+            <Text style={[s.priceText, { color: colors.primary }]}>{estimatedPrice?.toLocaleString()} {t(lang, 'sum')}</Text>
+          )}
         </View>
       )}
     </View>
@@ -897,12 +989,22 @@ function makeStyles(colors) {
     inputText: { flex: 1, fontSize: 15 },
     inputIconBtn: { paddingLeft: 10, padding: 4 },
 
-    // GPS locate button inside panel
-    gpsLocateRow: {
-      flexDirection: 'row', alignItems: 'center',
-      paddingVertical: 8, marginBottom: 6, gap: 8,
+    // GPS кнопка + цена в одной строке
+    gpsLocatePriceRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingVertical: 6, marginBottom: 6,
     },
+    gpsLocateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     gpsLocateText: { fontSize: 14, fontWeight: '600' },
+    priceInline: { fontSize: 14, fontWeight: '700' },
+
+    // Выбор тарифа
+    tariffRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+    tariffBtn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 5, paddingVertical: 9, borderRadius: 12, borderWidth: 1,
+    },
+    tariffBtnText: { fontSize: 13, fontWeight: '700' },
 
     // Order section
     orderSection: { marginBottom: 6 },

@@ -32,13 +32,14 @@ func NewOrderHandler(db *pgxpool.Pool, hub *services.Hub, ps *services.PricingSe
 }
 
 type CreateOrderRequest struct {
-	PickupLat          float64 `json:"pickup_lat" binding:"required"`
-	PickupLng          float64 `json:"pickup_lng" binding:"required"`
-	PickupAddress      string  `json:"pickup_address"`
-	DestinationLat     float64 `json:"destination_lat" binding:"required"`
-	DestinationLng     float64 `json:"destination_lng" binding:"required"`
-	DestinationAddress string  `json:"destination_address"`
-	DistanceKm         float64 `json:"distance_km"`
+	PickupLat          float64  `json:"pickup_lat" binding:"required"`
+	PickupLng          float64  `json:"pickup_lng" binding:"required"`
+	PickupAddress      string   `json:"pickup_address"`
+	DestinationLat     *float64 `json:"destination_lat"`
+	DestinationLng     *float64 `json:"destination_lng"`
+	DestinationAddress string   `json:"destination_address"`
+	DistanceKm         float64  `json:"distance_km"`
+	TripType           string   `json:"trip_type"` // "standard" | "free"
 }
 
 type locationUpdateRequest struct {
@@ -62,16 +63,21 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	passengerID := c.GetString("user_id")
 	basePrice, totalPrice, surge := h.pricingService.CalculatePrice(req.DistanceKm)
 
+	tripType := req.TripType
+	if tripType != "free" {
+		tripType = "standard"
+	}
+
 	var orderID string
 	err := h.db.QueryRow(context.Background(),
 		`INSERT INTO orders (passenger_id, pickup_lat, pickup_lng, pickup_address,
 		 destination_lat, destination_lng, destination_address, distance_km,
-		 base_price, total_price, surge_multiplier, service_fee, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 2000, 'searching')
+		 base_price, total_price, surge_multiplier, service_fee, status, trip_type)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 2000, 'searching', $12)
 		 RETURNING id`,
 		passengerID, req.PickupLat, req.PickupLng, req.PickupAddress,
 		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
-		req.DistanceKm, basePrice, totalPrice, surge,
+		req.DistanceKm, basePrice, totalPrice, surge, tripType,
 	).Scan(&orderID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order"})
