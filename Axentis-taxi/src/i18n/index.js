@@ -66,6 +66,15 @@ const translations = {
     noGallery: 'Нет доступа к галерее',
     updateError: 'Не удалось изменить настройку',
     selectDestHint: 'Укажите точку назначения (кнопка 🗺️ в поле «Куда»)',
+    myLocation: 'Моё местоположение',
+    callFree: 'Вызвать (свободный)',
+    recentTrips: 'Недавние поездки',
+    fromLabel: 'Из',
+    perKm: 'сум/км',
+    kmUnit: 'км',
+    standard: 'Стандарт',
+    free: 'Свободный',
+    tripHistory: 'История поездок',
   },
   uz: {
     // Auth
@@ -134,6 +143,15 @@ const translations = {
     noGallery: "Galereya ruxsati yo'q",
     updateError: "Sozlamani o'zgartirib bo'lmadi",
     selectDestHint: "Manzilni belgilang (\ud83d\uddfa\ufe0f tugmasi 'Qayerga' maydonida)",
+    myLocation: 'Mening joylashuvim',
+    callFree: "Chaqirish (erkin)",
+    recentTrips: "So'nggi safarlar",
+    fromLabel: 'Dan',
+    perKm: "so'm/km",
+    kmUnit: 'km',
+    standard: 'Standart',
+    free: 'Erkin',
+    tripHistory: 'Safarlar tarixi',
   },
 };
 

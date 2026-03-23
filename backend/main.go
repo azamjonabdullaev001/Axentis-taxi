@@ -42,6 +42,9 @@ func main() {
 
 	r := gin.Default()
 
+	// Serve uploaded avatars publicly
+	r.Static("/uploads", "./uploads")
+
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -69,6 +72,7 @@ func main() {
 		{
 			protected.GET("/profile", authHandler.GetProfile)
 			protected.PUT("/profile", authHandler.UpdateProfile)
+			protected.POST("/upload/avatar", authHandler.UploadAvatar)
 			protected.PUT("/push-token", authHandler.SavePushToken)
 			protected.GET("/drivers/locations", orderHandler.GetAvailableDrivers)
 

@@ -1,6 +1,13 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE } from '../config';
+import { API_BASE, BACKEND_HOST } from '../config';
+
+/** Build a full URL for a server-stored avatar path like /uploads/avatars/abc.jpg */
+export function buildAvatarUrl(path) {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `http://${BACKEND_HOST}${path}`;
+}
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -43,6 +50,7 @@ export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   getProfile: () => api.get('/profile'),
   updateProfile: (data) => api.put('/profile', data),
+  uploadAvatar: (formData) => api.post('/upload/avatar', formData),
   savePushToken: (push_token) => api.put('/push-token', { push_token }),
 };
 

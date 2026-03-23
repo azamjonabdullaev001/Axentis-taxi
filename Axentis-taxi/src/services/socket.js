@@ -5,7 +5,9 @@ class SocketService {
     this.ws = null;
     this.listeners = {};
     this.reconnectTimer = null;
+    this.pingTimer = null;
     this.isConnected = false;
+    this.onReconnect = null;
   }
 
   connect(userID) {
@@ -16,12 +18,20 @@ class SocketService {
     this.ws.onopen = () => {
       this.isConnected = true;
       clearTimeout(this.reconnectTimer);
+      // Send a keepalive ping every 20s so the server never closes the connection
+      // (server read-deadline is 60s; ping resets it on each message)
+      clearInterval(this.pingTimer);
+      this.pingTimer = setInterval(() => {
+        this.send({ type: 'ping' });
+      }, 20000);
+      if (this.onReconnect) this.onReconnect();
       console.log('WebSocket connected');
     };
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'pong') return; // ignore server pong replies
         const handler = this.listeners[data.type];
         if (handler) handler(data);
       } catch (e) {}
@@ -29,6 +39,8 @@ class SocketService {
 
     this.ws.onclose = () => {
       this.isConnected = false;
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
       this.reconnectTimer = setTimeout(() => {
         if (this.userID) this.connect(this.userID);
       }, 3000);
@@ -55,6 +67,8 @@ class SocketService {
 
   disconnect() {
     clearTimeout(this.reconnectTimer);
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
     this.userID = null;
     if (this.ws) {
       this.ws.close();

@@ -137,6 +137,9 @@ export const translations = {
     orderBusy: "Buyurtma band",
     orderCancelled: "Buyurtma bekor qilindi",
     orderCancelledByPassenger: "Yo'lovchi buyurtmani bekor qildi",
+    noGallery: "Galereya ruxsati yo'q",
+    uploadPhoto: 'Rasm yuklash',
+    selectLanguage: "Tilni tanlang",
   },
 };
 

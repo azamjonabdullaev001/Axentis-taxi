@@ -8,7 +8,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { authAPI } from '../services/api';
+import { buildAvatarUrl } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE } from '../config';
 import { t } from '../i18n';
 
 const SUPPORT_PHONE = '+998712001122';
@@ -30,8 +32,22 @@ export default function ProfileScreen() {
     if (!result.canceled && result.assets?.[0]) {
       setLoading(true);
       try {
-        await authAPI.updateProfile({ avatar_url: result.assets[0].uri });
-        setUser({ ...user, avatar_url: result.assets[0].uri });
+        const asset = result.assets[0];
+        const token = await AsyncStorage.getItem('auth_token');
+        const formData = new FormData();
+        formData.append('file', {
+          uri: asset.uri,
+          type: asset.mimeType || 'image/jpeg',
+          name: 'avatar.jpg',
+        });
+        const res = await fetch(`${API_BASE}/upload/avatar`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        setUser({ ...user, avatar_url: data.url });
       } finally {
         setLoading(false);
       }
@@ -52,7 +68,7 @@ export default function ProfileScreen() {
       <View style={s.avatarSection}>
         <TouchableOpacity onPress={handlePickImage} style={s.avatarWrap}>
           {user?.avatar_url
-            ? <Image source={{ uri: user.avatar_url }} style={s.avatar} />
+            ? <Image source={{ uri: buildAvatarUrl(user.avatar_url) }} style={s.avatar} />
             : <View style={[s.avatar, s.avatarPlaceholder]}>
                 <Text style={s.avatarInitial}>{(user?.first_name?.[0] || '?').toUpperCase()}</Text>
               </View>}

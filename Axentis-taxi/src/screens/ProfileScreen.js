@@ -8,6 +8,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { authAPI, orderAPI } from '../services/api';
+import { buildAvatarUrl } from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE } from '../config';
 import { t } from '../i18n';
 
 const SUPPORT_PHONE = '+998712001122';
@@ -38,6 +41,7 @@ export default function ProfileScreen() {
   const { colors, isDark, toggleTheme, lang, setLang } = useTheme();
   const { user, logout, updateUser } = useAuth();
   const [langModalVisible, setLangModalVisible] = useState(false);
+  const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const insets = useSafeAreaInsets();
   const [sharingLocation, setSharingLocation] = useState(user?.share_live_location !== false);
@@ -85,8 +89,24 @@ export default function ProfileScreen() {
     if (!result.canceled && result.assets?.[0]) {
       setLoading(true);
       try {
-        await authAPI.updateProfile({ avatar_url: result.assets[0].uri });
-        await updateUser({ ...user, avatar_url: result.assets[0].uri });
+        const asset = result.assets[0];
+        const token = await AsyncStorage.getItem('auth_token');
+        const formData = new FormData();
+        formData.append('file', {
+          uri: asset.uri,
+          type: asset.mimeType || 'image/jpeg',
+          name: 'avatar.jpg',
+        });
+        const res = await fetch(`${API_BASE}/upload/avatar`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        await updateUser({ ...user, avatar_url: data.url });
+      } catch {
+        Alert.alert(t(lang, 'error'), t(lang, 'updateError'));
       } finally {
         setLoading(false);
       }
@@ -109,7 +129,7 @@ export default function ProfileScreen() {
       <View style={s.avatarSection}>
         <TouchableOpacity onPress={handlePickImage} style={s.avatarWrap}>
           {user?.avatar_url
-            ? <Image source={{ uri: user.avatar_url }} style={s.avatar} />
+            ? <Image source={{ uri: buildAvatarUrl(user.avatar_url) }} style={s.avatar} />
             : <View style={[s.avatar, s.avatarPlaceholder]}>
                 <Text style={s.avatarInitial}>
                   {(user?.first_name?.[0] || '?').toUpperCase()}
@@ -157,41 +177,75 @@ export default function ProfileScreen() {
         </Row>
       </View>
 
-      {/* Trip history */}
+      {/* Trip history — opens in full-screen modal */}
       <View style={[s.section, { backgroundColor: colors.card, marginBottom: 20 }]}>
-        <Text style={[s.sectionHeader, { color: colors.text }]}>{lang === 'uz' ? "Sayohat tarixi" : "История поездок"}</Text>
-        {loadingHistory && <ActivityIndicator color={colors.primary} style={{ margin: 16 }} />}
-        {!loadingHistory && orders.length === 0 && (
-          <Text style={[s.emptyText, { color: colors.textSecondary }]}>{lang === 'uz' ? "Sayohatlar yo'q" : "Нет поездок"}</Text>
-        )}
-        {orders.map((order) => (
-          <View key={order.id} style={[s.orderCard, { borderTopColor: colors.border }]}>
-            <View style={s.orderCardHeader}>
-              <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[order.status] || '#9E9E9E' }]}>
-                <Text style={s.statusBadgeText}>{STATUS_LABELS[order.status] || order.status}</Text>
-              </View>
-              <Text style={[s.orderDate, { color: colors.textSecondary }]}>{formatDate(order.created_at)}</Text>
-            </View>
-            <View style={s.orderRoute}>
-              <Text style={{ fontSize: 10, color: '#43A047', marginRight: 6 }}>●</Text>
-              <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.pickup_address || '—'}</Text>
-            </View>
-            <View style={s.orderRoute}>
-              <Text style={{ fontSize: 10, color: '#E53935', marginRight: 6 }}>■</Text>
-              <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.destination_address || '—'}</Text>
-            </View>
-            {order.total_price != null && (
-              <Text style={[s.orderPrice, { color: colors.primary }]}>
-                {parseFloat(order.total_price).toLocaleString()} {t(lang,'sum')}
-              </Text>
-            )}
+        <TouchableOpacity style={s.row} onPress={() => setHistoryModalVisible(true)}>
+          <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'tripHistory')}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {loadingHistory
+              ? <ActivityIndicator size="small" color={colors.textSecondary} />
+              : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
+            <Text style={{ color: colors.textSecondary, fontSize: 18 }}>›</Text>
           </View>
-        ))}
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>
         <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
       </TouchableOpacity>
+
+      {/* History modal — full screen */}
+      <Modal visible={historyModalVisible} animationType="slide" onRequestClose={() => setHistoryModalVisible(false)}>
+        <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            <TouchableOpacity onPress={() => setHistoryModalVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={{ color: colors.primary, fontSize: 16 }}>← {t(lang, 'back')}</Text>
+            </TouchableOpacity>
+            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1, textAlign: 'center', marginRight: 40 }}>
+              {t(lang, 'tripHistory')}
+            </Text>
+          </View>
+          {loadingHistory
+            ? <ActivityIndicator color={colors.primary} style={{ flex: 1 }} />
+            : <FlatList
+                data={orders}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+                ListEmptyComponent={
+                  <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>
+                    {t(lang, 'uz') === 'uz' ? "Sayohatlar yo'q" : lang === 'uz' ? "Sayohatlar yo'q" : 'Нет поездок'}
+                  </Text>
+                }
+                renderItem={({ item: order }) => (
+                  <View style={[s.historyCard, { backgroundColor: colors.card }]}>
+                    <View style={s.orderCardHeader}>
+                      <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[order.status] || '#9E9E9E' }]}>
+                        <Text style={s.statusBadgeText}>{STATUS_LABELS[order.status] || order.status}</Text>
+                      </View>
+                      <Text style={[s.orderDate, { color: colors.textSecondary }]}>{formatDate(order.created_at)}</Text>
+                    </View>
+                    <View style={s.orderRoute}>
+                      <Text style={{ fontSize: 10, color: '#43A047', marginRight: 6 }}>●</Text>
+                      <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.pickup_address || '—'}</Text>
+                    </View>
+                    <View style={s.orderRoute}>
+                      <Text style={{ fontSize: 10, color: '#E53935', marginRight: 6 }}>■</Text>
+                      <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.destination_address || '—'}</Text>
+                    </View>
+                    {order.car_number ? (
+                      <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 4 }}>🚗 {order.car_number}</Text>
+                    ) : null}
+                    {order.total_price != null && (
+                      <Text style={[s.orderPrice, { color: colors.primary }]}>
+                        {parseFloat(order.total_price).toLocaleString()} {t(lang, 'sum')}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              />
+          }
+        </SafeAreaView>
+      </Modal>
 
       {/* Language modal */}
       <Modal visible={langModalVisible} transparent animationType="slide">
@@ -254,6 +308,7 @@ function makeStyles(colors) {
     sectionHeader: { fontSize: 15, fontWeight: '700', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
     emptyText: { textAlign: 'center', padding: 16, fontSize: 14 },
     orderCard: { borderTopWidth: 1, paddingHorizontal: 16, paddingVertical: 12 },
+    historyCard: { borderRadius: 14, padding: 14, marginBottom: 12 },
     orderCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
     statusBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
     statusBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },

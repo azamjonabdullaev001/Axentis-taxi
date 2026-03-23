@@ -31,8 +31,8 @@ const DRIVER_STATUS = {
 
 // Location accuracy & interval per driver state
 const LOCATION_CFG = {
-  idle:   { accuracy: Location.Accuracy.Balanced, timeInterval: 5000,  distanceInterval: 10 },
-  active: { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 100, distanceInterval: 1 },
+  idle:   { accuracy: Location.Accuracy.Balanced, timeInterval: 5000,  distanceInterval: 0 },
+  active: { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 33,  distanceInterval: 0.5 },
 };
 
 const ROUTE_COLORS = {
@@ -56,12 +56,18 @@ export default function HomeScreen() {
   const locationRef = useRef(null);               // raw GPS coords — updated at sensor speed (no re-render)
   const headingRef = useRef(0);                   // raw heading — updated at sensor speed (no re-render)
   const driverStatusRef = useRef(DRIVER_STATUS.OFFLINE);
+  const navModeRef = useRef(false);               // nav mode on/off, used inside GPS callback (no stale closure)
   const [driverStatus, setDriverStatus] = useState(DRIVER_STATUS.OFFLINE);
   const [location, setLocation] = useState(null);
   const [region, setRegion] = useState({
     latitude: 41.2995, longitude: 69.2401,
     latitudeDelta: 0.03, longitudeDelta: 0.03,
   });
+
+  // Navigation mode: map rotates, car icon stays fixed pointing up on screen
+  const [navMode, setNavMode] = useState(false);
+  // Bottom panel height tracked for proper Find Me button positioning
+  const [driverPanelHeight, setDriverPanelHeight] = useState(130);
 
   // Active order state
   const [activeOrder, setActiveOrder] = useState(null);
@@ -86,6 +92,10 @@ export default function HomeScreen() {
   useEffect(() => {
     driverStatusRef.current = driverStatus;
   }, [driverStatus]);
+
+  useEffect(() => {
+    navModeRef.current = navMode;
+  }, [navMode]);
 
   // ── Mount: permissions, initial GPS, push token — then AUTO GO ONLINE ───────
   useEffect(() => {
@@ -174,7 +184,7 @@ export default function HomeScreen() {
         if (!prev) return { ...loc };
         // Exponential smoothing (alpha=0.18) — car slides smoothly to GPS target
         // At 10ms tick rate: ~95% there in ~150ms, visually seamless
-        const ALPHA = 0.18;
+        const ALPHA = 0.35;
         const lat = prev.latitude  + (loc.latitude  - prev.latitude)  * ALPHA;
         const lng = prev.longitude + (loc.longitude - prev.longitude) * ALPHA;
         // Skip re-render if negligible change
@@ -197,7 +207,16 @@ export default function HomeScreen() {
         lastBroadcastDataRef.current.lng = coords.longitude;
 
         // Map camera follows the driver (direct animated call, no setState)
-        mapRef.current?.animateCamera({ center: coords }, { duration: 300 });
+        if (navModeRef.current) {
+          // Navigation mode: map rotates, car icon stays fixed pointing up on screen
+          mapRef.current?.animateCamera(
+            { center: coords, heading: headingRef.current, pitch: 0 },
+            { duration: 300 },
+          );
+        } else {
+          // Free mode: map stays north-up (heading=0), car icon rotates
+          mapRef.current?.animateCamera({ center: coords, heading: 0, pitch: 0 }, { duration: 300 });
+        }
 
         // GPS heading valid only while moving (speed > 0.5 m/s)
         const gpsH = loc.coords.heading;
@@ -233,6 +252,13 @@ export default function HomeScreen() {
           const h = (prev + diff * 0.4 + 360) % 360;
           headingRef.current = h;
           lastBroadcastDataRef.current.heading = h;
+          // Nav mode: rotate the MAP to match heading so icon appears pointing up on screen
+          if (navModeRef.current && locationRef.current) {
+            mapRef.current?.animateCamera(
+              { center: locationRef.current, heading: h, pitch: 0 },
+              { duration: 80 },
+            );
+          }
         });
         if (dead) compassSub.remove();
         else compassSubscriptionRef.current = compassSub;
@@ -401,8 +427,9 @@ export default function HomeScreen() {
   async function handleCompleteTrip() {
     try {
       const { data } = await driverAPI.completeTrip(activeOrder.id);
-      Alert.alert('Поездка завершена!',
-        `Итого: ${data.total_price?.toLocaleString()} сум\nОжидание: ${data.waiting_fee?.toLocaleString()} сум`,
+      const rounded = Math.ceil((data.total_price || 0) / 200) * 200;
+      Alert.alert(t(lang,'tripCompleted'),
+        `${t(lang,'total')}: ${rounded.toLocaleString()} ${t(lang,'sum')}`,
         [{ text: 'OK', onPress: resetToAvailable }]
       );
     } catch (e) {
@@ -441,12 +468,16 @@ export default function HomeScreen() {
         showsUserLocation={false}
         showsMyLocationButton={false}
       >
-        {/* Driver's own car icon — rotation matches compass/GPS heading directly */}
+        {/* Driver's own car icon:
+             Nav mode ON  → flat=true, rotation=heading: map rotates (animateCamera heading)
+                            so heading direction is at top of screen → icon appears pointing UP
+             Nav mode OFF → flat=true, rotation=heading: map stays north-up, icon rotates
+                            on map surface to show direction of travel */}
         {location && (
           <Marker
             coordinate={location}
             anchor={{ x: 0.5, y: 0.5 }}
-            flat
+            flat={true}
             rotation={heading % 360}
           >
             <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
@@ -492,14 +523,35 @@ export default function HomeScreen() {
         )}
       </MapView>
 
-      {/* Find Me button — floats just above the bottom panel, right side */}
+      {/* Find Me button — floats above bottom panel, right side */}
       {isOnline && (
         <TouchableOpacity
-          style={[s.findMeBtn, { backgroundColor: colors.background }]}
+          style={[s.findMeBtn, { backgroundColor: colors.background, bottom: driverPanelHeight + 12 }]}
           onPress={goToMyLocation}
           activeOpacity={0.8}
         >
           <Text style={{ fontSize: 20 }}>📍</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Navigation mode toggle — above Find Me button */}
+      {isOnline && (
+        <TouchableOpacity
+          style={[s.navModeBtn, {
+            backgroundColor: navMode ? colors.primary : colors.background,
+            bottom: driverPanelHeight + 64,
+          }]}
+          onPress={() => {
+            const next = !navMode;
+            setNavMode(next);
+            if (!next && location) {
+              // Switching back to free mode: reset map bearing to north
+              mapRef.current?.animateCamera({ center: location, heading: 0, pitch: 0 }, { duration: 400 });
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={{ fontSize: 20 }}>🧭</Text>
         </TouchableOpacity>
       )}
 
@@ -508,7 +560,9 @@ export default function HomeScreen() {
         backgroundColor: colors.background,
         bottom: 0,
         paddingBottom: 16,
-      }]}>
+      }]}
+        onLayout={(e) => setDriverPanelHeight(e.nativeEvent.layout.height)}
+      >
         {driverStatus === DRIVER_STATUS.OFFLINE && (
           <Text style={[s.offlineMsg, { color: colors.textSecondary }]}>
             {t(lang,'enableOnline')}
@@ -524,6 +578,11 @@ export default function HomeScreen() {
         {driverStatus === DRIVER_STATUS.ACCEPTED && activeOrder && (
           <View>
             <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'goingToPassenger')}</Text>
+            {activeOrder.passenger_phone ? (
+              <Text style={[s.addressText, { color: colors.primary, fontWeight: '600' }]}>
+                👤 {activeOrder.passenger_name || ''} &nbsp; 📱 {activeOrder.passenger_phone}
+              </Text>
+            ) : null}
             <Text style={[s.addressText, { color: colors.textSecondary }]}>
               📍 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
             </Text>
@@ -590,7 +649,7 @@ export default function HomeScreen() {
                   🎯 {incomingOrder.destination_address || t(lang,'to')}
                 </Text>
                 <Text style={[s.orderPrice, { color: colors.primary }]}>
-                  {incomingOrder.estimated_price?.toLocaleString() || '—'} сум
+                  {incomingOrder.estimated_price?.toLocaleString() || '—'} {t(lang,'sum')}
                 </Text>
                 <Text style={[s.orderDist, { color: colors.textSecondary }]}>
                   {incomingOrder.distance_km?.toFixed(1)} {t(lang,'km')}
@@ -620,7 +679,13 @@ function makeStyles(colors) {
     findMeBtn: {
       position: 'absolute',
       right: 16,
-      bottom: 100,   // sits just above bottom panel
+      width: 44, height: 44, borderRadius: 22,
+      justifyContent: 'center', alignItems: 'center',
+      elevation: 6, shadowOpacity: 0.2, shadowRadius: 6,
+    },
+    navModeBtn: {
+      position: 'absolute',
+      right: 16,
       width: 44, height: 44, borderRadius: 22,
       justifyContent: 'center', alignItems: 'center',
       elevation: 6, shadowOpacity: 0.2, shadowRadius: 6,

@@ -2,7 +2,12 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -262,6 +267,69 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Profile updated"})
+}
+
+func (h *AuthHandler) UploadAvatar(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded"})
+		return
+	}
+	defer file.Close()
+
+	// Validate extension
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == ".jpeg" {
+		ext = ".jpg"
+	}
+	allowed := map[string]bool{".jpg": true, ".png": true, ".webp": true}
+	if !allowed[ext] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only jpg, png, webp images are allowed"})
+		return
+	}
+
+	// Limit to 5 MB
+	if header.Size > 5*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 5 MB)"})
+		return
+	}
+
+	// Unique filename
+	b := make([]byte, 16)
+	rand.Read(b)
+	filename := hex.EncodeToString(b) + ext
+
+	dir := "./uploads/avatars"
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create upload directory"})
+		return
+	}
+
+	dst, err := os.Create(filepath.Join(dir, filename))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write file"})
+		return
+	}
+
+	avatarPath := "/uploads/avatars/" + filename
+	_, err = h.db.Exec(context.Background(),
+		`UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`,
+		avatarPath, userID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update avatar"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"url": avatarPath})
 }
 
 func (h *AuthHandler) SavePushToken(c *gin.Context) {

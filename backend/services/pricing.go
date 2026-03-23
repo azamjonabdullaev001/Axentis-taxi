@@ -37,24 +37,28 @@ func (s *PricingService) GetSettings() (*models.PriceSettings, error) {
 
 func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPrice float64, surge float64) {
 	surge = 1.0
+	// Шаг 100 м: 1–99 м → 100 м, 100–199 м → 200 м, 1070 м → 1100 м, и т.д.
+	// Каждые 100 м = 200 сум (при price_per_km = 2000)
+	distMeters := distanceKm * 1000
+	if distMeters < 1 {
+		distMeters = 100 // минимум 1 блок = 100 м
+	}
+	roundedMeters := math.Ceil(distMeters/100) * 100
+	roundedKm := roundedMeters / 1000
 	ps, err := s.GetSettings()
 	if err == nil {
 		if ps.SurgeMultiplier > 0 {
 			surge = ps.SurgeMultiplier
 		}
-		// Цена = сервисный сбор + (км × цена_за_км), затем ×коэффициент
-		// Округление ВВЕРХ до ближайших 200 сум (минимальная единица в Узбекистане)
-		rawBase := ps.ServiceFee + distanceKm*ps.PricePerKm
+		// Цена = сервисный сбор + (округлённые км × цена_за_км) × коэффициент
+		// Итог округляется ВВЕРХ до ближайших 200 сум
+		rawBase := ps.ServiceFee + roundedKm*ps.PricePerKm
 		basePrice = math.Ceil(rawBase/200) * 200
 		totalPrice = math.Ceil((basePrice*surge)/200) * 200
 		return
 	}
 	// Fallback при ошибке БД
-	blocks := math.Ceil(distanceKm * 10)
-	if blocks < 1 {
-		blocks = 1
-	}
-	rawBase := 2000 + blocks*200
+	rawBase := 2000.0 + roundedKm*2000
 	basePrice = math.Ceil(rawBase/200) * 200
 	totalPrice = basePrice
 	return

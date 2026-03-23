@@ -100,16 +100,21 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		DestinationAddress string  `json:"destination_address"`
 		DistanceKm         float64 `json:"distance_km"`
 		EstimatedPrice     float64 `json:"estimated_price"`
+		PassengerPhone     string  `json:"passenger_phone"`
+		PassengerName      string  `json:"passenger_name"`
 	}
 
 	err := s.db.QueryRow(context.Background(),
-		`SELECT id, pickup_lat, pickup_lng, COALESCE(pickup_address,''), 
-		 destination_lat, destination_lng, COALESCE(destination_address,''),
-		 COALESCE(distance_km,0), COALESCE(total_price,0)
-		 FROM orders WHERE id = $1`, orderID,
+		`SELECT o.id, o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''), 
+		 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(o.destination_address,''),
+		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0),
+		 u.phone, u.first_name || ' ' || u.last_name
+		 FROM orders o JOIN users u ON o.passenger_id = u.id
+		 WHERE o.id = $1`, orderID,
 	).Scan(&orderData.ID, &orderData.PickupLat, &orderData.PickupLng, &orderData.PickupAddress,
 		&orderData.DestinationLat, &orderData.DestinationLng, &orderData.DestinationAddress,
-		&orderData.DistanceKm, &orderData.EstimatedPrice)
+		&orderData.DistanceKm, &orderData.EstimatedPrice,
+		&orderData.PassengerPhone, &orderData.PassengerName)
 	if err != nil {
 		log.Printf("Failed to get order data: %v", err)
 		return

@@ -146,7 +146,53 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
 		return
 	}
-	c.JSON(http.StatusOK, o)
+
+	// Include driver info when order has a driver assigned (reconnect fallback)
+	resp := gin.H{
+		"id":                    o.ID,
+		"passenger_id":          o.PassengerID,
+		"driver_id":             o.DriverID,
+		"status":                o.Status,
+		"pickup_lat":            o.PickupLat,
+		"pickup_lng":            o.PickupLng,
+		"pickup_address":        o.PickupAddress,
+		"destination_lat":       o.DestinationLat,
+		"destination_lng":       o.DestinationLng,
+		"destination_address":   o.DestinationAddress,
+		"distance_km":           o.DistanceKm,
+		"base_price":            o.BasePrice,
+		"waiting_time_minutes":  o.WaitingTimeMinutes,
+		"waiting_fee":           o.WaitingFee,
+		"service_fee":           o.ServiceFee,
+		"total_price":           o.TotalPrice,
+		"surge_multiplier":      o.SurgeMultiplier,
+		"created_at":            o.CreatedAt,
+		"accepted_at":           o.AcceptedAt,
+		"arrived_at":            o.ArrivedAt,
+		"wait_started_at":       o.WaitStartedAt,
+		"started_at":            o.StartedAt,
+		"completed_at":          o.CompletedAt,
+		"cancelled_at":          o.CancelledAt,
+	}
+
+	if o.DriverID != nil && *o.DriverID != "" {
+		var firstName, lastName, phone, carNumber, avatarURL string
+		h.db.QueryRow(context.Background(),
+			`SELECT COALESCE(u.first_name,''), COALESCE(u.last_name,''), COALESCE(u.phone,''),
+			 COALESCE(d.car_number,''), COALESCE(u.avatar_url,'')
+			 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
+			*o.DriverID,
+		).Scan(&firstName, &lastName, &phone, &carNumber, &avatarURL)
+		resp["driver"] = gin.H{
+			"first_name": firstName,
+			"last_name":  lastName,
+			"phone":      phone,
+			"car_number": carNumber,
+			"avatar_url": avatarURL,
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
@@ -160,8 +206,10 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
 			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
-			 o.destination_lat, o.destination_lng
-			 FROM orders o WHERE o.passenger_id = $1
+			 o.destination_lat, o.destination_lng, COALESCE(d.car_number,'')
+			 FROM orders o
+			 LEFT JOIN drivers d ON o.driver_id = d.id
+			 WHERE o.passenger_id = $1
 			 ORDER BY o.created_at DESC LIMIT 50`,
 			userID)
 		rows, err = r, e
@@ -169,15 +217,16 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			var orders []map[string]interface{}
 			pgRows := r
 			for pgRows.Next() {
-				var id, status, pickup, dest string
+				var id, status, pickup, dest, carNum string
 				var dist, total, destLat, destLng float64
 				var created time.Time
-				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng)
+				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng, &carNum)
 				orders = append(orders, map[string]interface{}{
 					"id": id, "status": status, "pickup_address": pickup,
 					"destination_address": dest, "distance_km": dist,
 					"total_price": total, "created_at": created,
 					"destination_lat": destLat, "destination_lng": destLng,
+					"car_number": carNum,
 				})
 			}
 			_ = rows
@@ -254,11 +303,17 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 	).Scan(&passengerID)
 
 	var driverFirstName, driverLastName, driverPhone, driverCarNumber string
+	var driverAvatarURL *string
 	h.db.QueryRow(context.Background(),
-		`SELECT u.first_name, u.last_name, u.phone, d.car_number
+		`SELECT u.first_name, u.last_name, u.phone, d.car_number, u.avatar_url
 		 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
 		driverID,
-	).Scan(&driverFirstName, &driverLastName, &driverPhone, &driverCarNumber)
+	).Scan(&driverFirstName, &driverLastName, &driverPhone, &driverCarNumber, &driverAvatarURL)
+
+	avatarStr := ""
+	if driverAvatarURL != nil {
+		avatarStr = *driverAvatarURL
+	}
 
 	msg, _ := json.Marshal(map[string]interface{}{
 		"type":      "order_accepted",
@@ -269,6 +324,7 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 			"last_name":  driverLastName,
 			"phone":      driverPhone,
 			"car_number": driverCarNumber,
+			"avatar_url": avatarStr,
 		},
 	})
 	h.hub.SendToUser(passengerID, msg)
@@ -373,11 +429,17 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	waitFee = h.pricingService.CalculateWaitFee(waitStarted, 2)
 	var totalPrice float64
 	if tripType == "free" && lockedPerKm > 0 {
-		// Free tariff: price = service_fee + driven_km × locked_rate + wait_fee
-		raw := serviceFee + distKm*lockedPerKm + waitFee
+		// Free tariff: round driven_km to nearest 100m (1m→100m, 101m→200m, etc.)
+		distMeters := distKm * 1000
+		if distMeters < 1 {
+			distMeters = 100 // минимум 1 блок = 100 м
+		}
+		roundedKm := math.Ceil(distMeters/100) * 100 / 1000
+		raw := serviceFee + roundedKm*lockedPerKm + waitFee
 		totalPrice = math.Ceil(raw/200) * 200
 	} else {
-		totalPrice = math.Ceil((basePrice+waitFee+serviceFee)/200) * 200
+		// Standard tariff: basePrice already includes service_fee — do NOT add it again
+		totalPrice = math.Ceil((basePrice+waitFee)/200) * 200
 	}
 
 	var driverID string
@@ -589,7 +651,7 @@ func (h *OrderHandler) GetAvailableDrivers(c *gin.Context) {
 		 WHERE is_available = true
 		   AND current_lat IS NOT NULL
 		   AND current_lng IS NOT NULL
-		   AND last_seen > NOW() - INTERVAL '30 seconds'
+		 AND last_seen > NOW() - INTERVAL '60 seconds'
 		 ORDER BY last_seen DESC
 		 LIMIT 200`,
 	)
@@ -681,7 +743,7 @@ func (h *OrderHandler) UpdateDriverAvailability(c *gin.Context) {
 	}
 	userID := c.GetString("user_id")
 	h.db.Exec(context.Background(),
-		`UPDATE drivers SET is_available = $1 WHERE user_id = $2`,
+		`UPDATE drivers SET is_available = $1, last_seen = NOW() WHERE user_id = $2`,
 		req.Available, userID,
 	)
 	c.JSON(http.StatusOK, gin.H{"available": req.Available})

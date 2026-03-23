@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { authAPI, orderAPI } from '../services/api';
+import { buildAvatarUrl } from '../services/api';
 import socket from '../services/socket';
 import { t } from '../i18n';
 import { initializeNotifications, getExpoPushToken } from '../services/notifications';
@@ -138,7 +139,7 @@ const ROUTE_COLORS = {
 
 const LOCATION_CFG = {
   idle:   { accuracy: Location.Accuracy.Balanced, timeInterval: 10000, distanceInterval: 20 },
-  active: { accuracy: Location.Accuracy.High,     timeInterval: 200,   distanceInterval: 2  },
+  active: { accuracy: Location.Accuracy.High,     timeInterval: 67,    distanceInterval: 1  },
 };
 
 export default function HomeScreen() {
@@ -227,9 +228,10 @@ export default function HomeScreen() {
     const base = Number(pricingSettings.service_fee) || 2000;
     const perKm = Number(pricingSettings.price_per_km) || 2000;
     const surge = Number(pricingSettings.surge_multiplier) || 1;
-    // Сервисный сбор + км × цена_за_км × коэффициент
-    // Округление ВВЕРХ до ближайших 200 сум (минимальная денежная единица в Узбекистане)
-    const raw = (base + distanceKm * perKm) * surge;
+    // Round distance UP to nearest 100m: 1m-99m → 100m, 101m → 200m, 1070m → 1100m
+    const meters = distanceKm * 1000;
+    const roundedKm = (meters < 1 ? 100 : Math.ceil(meters / 100) * 100) / 1000;
+    const raw = (base + roundedKm * perKm) * surge;
     return Math.ceil(raw / 200) * 200;
   }
 
@@ -361,7 +363,7 @@ export default function HomeScreen() {
         setDriverDisplayLocation({ ...target });
         return;
       }
-      const lerp = (a, b) => a + (b - a) * 0.25;
+      const lerp = (a, b) => a + (b - a) * 0.5;
       const next = {
         latitude: lerp(display.latitude, target.latitude),
         longitude: lerp(display.longitude, target.longitude),
@@ -406,7 +408,10 @@ export default function HomeScreen() {
     return () => { disposed = true; clearInterval(timer); };
   }, []);
 
-  // Socket events
+  // ── Critical socket events: registered once per login session ───────────
+  // These MUST NOT be removed and re-added on every GPS update (pickupCoords change).
+  // Separating them guarantees order_accepted / driver_arrived / trip_started / etc.
+  // are never missed due to a brief cleanup gap in the wider useEffect below.
   useEffect(() => {
     if (!user?.id) return;
 
@@ -416,15 +421,58 @@ export default function HomeScreen() {
     });
     socket.on('driver_arrived', () => { setOrderStatus(ORDER_STATUS.ARRIVED); });
     socket.on('trip_started', () => { setOrderStatus(ORDER_STATUS.IN_PROGRESS); });
+    socket.on('no_drivers', () => {
+      setOrderStatus(ORDER_STATUS.IDLE);
+      Alert.alert(t(lang, 'noDriversTitle'), t(lang, 'noDriversFound'));
+    });
+    socket.on('order_cancelled', () => {
+      Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByDriver'));
+      resetOrder();
+    });
+
+    // When socket reconnects while waiting for a driver, check if the order was
+    // already accepted (network blip scenario)
+    socket.onReconnect = () => {
+      if (orderIDRef.current && orderStatusRef.current === ORDER_STATUS.SEARCHING) {
+        orderAPI.getOrder(orderIDRef.current).then(({ data: od }) => {
+          if (!od || orderStatusRef.current !== ORDER_STATUS.SEARCHING) return;
+          if (['accepted','arrived','in_progress'].includes(od.status)) {
+            setOrderStatus(
+              od.status === 'in_progress' ? ORDER_STATUS.IN_PROGRESS
+              : od.status === 'arrived'   ? ORDER_STATUS.ARRIVED
+              : ORDER_STATUS.ACCEPTED
+            );
+            if (od.driver) setDriverInfo(od.driver);
+          }
+        }).catch(() => {});
+      }
+    };
+
+    return () => {
+      socket.off('order_accepted');
+      socket.off('driver_arrived');
+      socket.off('trip_started');
+      socket.off('no_drivers');
+      socket.off('order_cancelled');
+      socket.onReconnect = null;
+    };
+  }, [user?.id]);
+
+  // Socket events that reference destCoords / pickupCoords closures
+  useEffect(() => {
+    if (!user?.id) return;
     socket.on('trip_completed', (data) => {
       // Для свободного тарифа отправляем финальные км и считаем цену по зафиксированному тарифу
       if (tariffTypeRef.current === 'free' && orderIDRef.current && freeRideKmRef.current > 0) {
         orderAPI.updateOrderDistance(orderIDRef.current, freeRideKmRef.current).catch(() => {});
       }
       const rate = lockedPricePerKmRef.current || pricingSettings.price_per_km || 2000;
+      const svc = pricingSettings.service_fee || 2000;
+      const freeMeters = freeRideKmRef.current * 1000;
+      const freeRoundedKm = freeMeters < 1 ? 100 / 1000 : (Math.ceil(freeMeters / 100) * 100) / 1000;
       const finalPrice = tariffTypeRef.current === 'free'
-        ? Math.ceil((freeRideKmRef.current * rate) / 200) * 200
-        : data.total_price;
+        ? Math.ceil((svc + freeRoundedKm * rate) / 200) * 200
+        : Math.ceil((data.total_price || 0) / 200) * 200;
       setOrderStatus(ORDER_STATUS.COMPLETED);
       Alert.alert(t(lang,'tripCompleted'), `${t(lang,'total')}: ${finalPrice?.toLocaleString()} ${t(lang,'sum')}`, [
         { text: 'OK', onPress: resetOrder },
@@ -459,16 +507,11 @@ export default function HomeScreen() {
       setOrderStatus(ORDER_STATUS.IDLE);
       Alert.alert(t(lang, 'noDriversTitle'), t(lang, 'noDriversFound'));
     });
-    socket.on('order_cancelled', () => {
-      Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByDriver'));
-      resetOrder();
-    });
-
     return () => {
-      ['order_accepted','driver_arrived','trip_started','trip_completed',
-       'driver_location','no_drivers','order_cancelled'].forEach(socket.off.bind(socket));
+      socket.off('trip_completed');
+      socket.off('driver_location');
     };
-  }, [user, pickupCoords, destCoords, lang]);
+  }, [user?.id, pickupCoords, destCoords, lang]);
 
   // ── Map selection helpers ─────────────────────────────────────────────────
   function enterMapMode(mode) {
@@ -587,7 +630,8 @@ export default function HomeScreen() {
       }
       const { data } = await orderAPI.createOrder(payload);
       setOrderID(data.order_id);
-      setEstimatedPrice(data.total_price);
+      // Always round UP to nearest 200 on client side regardless of backend version
+      setEstimatedPrice(Math.ceil((data.total_price || 0) / 200) * 200);
       const locked = data.locked_price_per_km || pricingSettings.price_per_km || 2000;
       setLockedPricePerKm(locked);
       lockedPricePerKmRef.current = locked;
@@ -619,7 +663,7 @@ export default function HomeScreen() {
       >
         {/* Позиция пользователя */}
         {userLocation && (
-          <PinMarker coordinate={userLocation} source={USER_ICON} size={36} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} />
+          <PinMarker coordinate={userLocation} source={USER_ICON} size={12} anchor={{ x: 0.5, y: 0.85 }} zIndex={10} />
         )}
 
         {/* Доступные водители в режиме IDLE */}
@@ -628,7 +672,7 @@ export default function HomeScreen() {
             key={driver.user_id}
             coordinate={{ latitude: driver.lat, longitude: driver.lng }}
             source={CAR_ICON}
-            size={44}
+            size={28}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={((driver.heading ?? 0) + 180) % 360}
@@ -649,7 +693,7 @@ export default function HomeScreen() {
           <PinMarker
             coordinate={{ latitude: driverDisplayLocation.latitude, longitude: driverDisplayLocation.longitude }}
             source={CAR_ICON}
-            size={44}
+            size={28}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={((driverDisplayLocation.heading ?? 0) + 180) % 360}
@@ -755,7 +799,7 @@ export default function HomeScreen() {
           <View style={s.gpsLocatePriceRow}>
             <TouchableOpacity style={s.gpsLocateBtn} onPress={handleLocateMe} activeOpacity={0.8}>
               <Ionicons name="locate" size={16} color={colors.primary} />
-              <Text style={[s.gpsLocateText, { color: colors.primary }]}>Моё местоположение</Text>
+              <Text style={[s.gpsLocateText, { color: colors.primary }]}>{t(lang, 'myLocation')}</Text>
             </TouchableOpacity>
             {tariffType === 'standard' && destCoords && pickupCoords ? (
               <Text style={[s.priceInline, { color: colors.primary }]}>
@@ -776,7 +820,7 @@ export default function HomeScreen() {
               activeOpacity={0.8}
             >
               <Ionicons name="car-outline" size={15} color={tariffType === 'standard' ? '#000' : colors.textSecondary} />
-              <Text style={[s.tariffBtnText, { color: tariffType === 'standard' ? '#000' : colors.text }]}>Стандарт</Text>
+              <Text style={[s.tariffBtnText, { color: tariffType === 'standard' ? '#000' : colors.text }]}>{t(lang, 'standard')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[s.tariffBtn, { borderColor: colors.border, backgroundColor: tariffType === 'free' ? colors.primary : colors.card }]}
@@ -784,7 +828,7 @@ export default function HomeScreen() {
               activeOpacity={0.8}
             >
               <Ionicons name="timer-outline" size={15} color={tariffType === 'free' ? '#000' : colors.textSecondary} />
-              <Text style={[s.tariffBtnText, { color: tariffType === 'free' ? '#000' : colors.text }]}>Свободный</Text>
+              <Text style={[s.tariffBtnText, { color: tariffType === 'free' ? '#000' : colors.text }]}>{t(lang, 'free')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -833,7 +877,7 @@ export default function HomeScreen() {
             <View style={s.orderSection}>
               <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
                 <Text style={s.orderBtnText}>
-                  {tariffType === 'free' ? 'Вызвать (свободный)' : t(lang, 'orderTaxi')}
+                  {tariffType === 'free' ? t(lang, 'callFree') : t(lang, 'orderTaxi')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -843,7 +887,7 @@ export default function HomeScreen() {
           {recentTrips.length > 0 && (
             <Animated.View style={{ maxHeight: historyPanelHeight, overflow: 'hidden' }}>
               <View style={[s.historySection, { borderTopColor: colors.border }]}>
-                <Text style={[s.historySectionTitle, { color: colors.textSecondary }]}>Недавние поездки</Text>
+                <Text style={[s.historySectionTitle, { color: colors.textSecondary }]}>{t(lang, 'recentTrips')}</Text>
                 <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
                   {recentTrips.map((trip) => (
                     <TouchableOpacity
@@ -870,7 +914,7 @@ export default function HomeScreen() {
                         </Text>
                         {trip.pickup_address ? (
                           <Text style={[s.historySubText, { color: colors.textSecondary }]} numberOfLines={1}>
-                            Из: {trip.pickup_address}
+                            {t(lang, 'fromLabel')}: {trip.pickup_address}
                           </Text>
                         ) : null}
                       </View>
@@ -890,7 +934,8 @@ export default function HomeScreen() {
 
       {/* ── Map selection confirm bar ── */}
       {orderStatus === ORDER_STATUS.IDLE && mapMode && (
-        <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+        <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
+          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
           {/* Заголовок текущего режима */}
           <Text style={[s.mapModeLabel, { color: colors.textSecondary }]}>
             {mapMode === 'pickup' ? t(lang,'selectPickupPoint') : t(lang,'selectDestination')}
@@ -919,7 +964,8 @@ export default function HomeScreen() {
 
       {/* ── SEARCHING panel ── */}
       {orderStatus === ORDER_STATUS.SEARCHING && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
+          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 8 }} />
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'searching')}</Text>
@@ -931,7 +977,8 @@ export default function HomeScreen() {
 
       {/* ── ACCEPTED / ARRIVED panel ── */}
       {(orderStatus === ORDER_STATUS.ACCEPTED || orderStatus === ORDER_STATUS.ARRIVED) && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
+          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>
             {orderStatus === ORDER_STATUS.ACCEPTED ? t(lang, 'driverFound') : t(lang, 'driverArrived')}
@@ -939,7 +986,11 @@ export default function HomeScreen() {
           {driverInfo && (
             <View style={[s.driverCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={s.driverCardRow}>
-                <Image source={CAR_ICON} style={s.driverCardCarIcon} resizeMode="contain" />
+                {driverInfo.avatar_url ? (
+                  <Image source={{ uri: buildAvatarUrl(driverInfo.avatar_url) }} style={s.driverAvatar} />
+                ) : (
+                  <Image source={CAR_ICON} style={s.driverCardCarIcon} resizeMode="contain" />
+                )}
                 <View style={{ flex: 1 }}>
                   <Text style={[s.driverName, { color: colors.text }]}>{driverInfo.first_name} {driverInfo.last_name}</Text>
                   <Text style={[s.driverDetail, { color: colors.textSecondary }]}>📱 {driverInfo.phone}</Text>
@@ -957,13 +1008,18 @@ export default function HomeScreen() {
 
       {/* ── IN_PROGRESS panel ── */}
       {orderStatus === ORDER_STATUS.IN_PROGRESS && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
+          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'tripInProgress')}</Text>
           {driverInfo && (
             <View style={[s.driverCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={s.driverCardRow}>
-                <Image source={CAR_ICON} style={s.driverCardCarIcon} resizeMode="contain" />
+                {driverInfo.avatar_url ? (
+                  <Image source={{ uri: buildAvatarUrl(driverInfo.avatar_url) }} style={s.driverAvatar} />
+                ) : (
+                  <Image source={CAR_ICON} style={s.driverCardCarIcon} resizeMode="contain" />
+                )}
                 <View style={{ flex: 1 }}>
                   <Text style={[s.driverName, { color: colors.text }]}>{driverInfo.first_name} {driverInfo.last_name}</Text>
                   <Text style={[s.driverDetail, { color: colors.primary, fontWeight: '700' }]}>🚗 {driverInfo.car_number}</Text>
@@ -977,10 +1033,16 @@ export default function HomeScreen() {
           {tariffType === 'free' ? (
             <>
               <Text style={[s.priceHint, { color: colors.textSecondary }]}>
-                {freeRideKm.toFixed(2)} км × {(lockedPricePerKm || pricingSettings.price_per_km || 2000).toLocaleString()} сум/км
+                {freeRideKm.toFixed(2)} {t(lang,'km')} × {(lockedPricePerKm || pricingSettings.price_per_km || 2000).toLocaleString()} {t(lang,'sum')}/{t(lang,'km')}
               </Text>
               <Text style={[s.priceText, { color: colors.primary }]}>
-                ~{(Math.ceil((freeRideKm * (lockedPricePerKm || pricingSettings.price_per_km || 2000)) / 200) * 200).toLocaleString()} {t(lang, 'sum')}
+                ~{(() => {
+                  const rate = lockedPricePerKm || pricingSettings.price_per_km || 2000;
+                  const svc = pricingSettings.service_fee || 2000;
+                  const m = freeRideKm * 1000;
+                  const rKm = m < 1 ? 0.1 : (Math.ceil(m / 100) * 100) / 1000;
+                  return Math.ceil((svc + rKm * rate) / 200) * 200;
+                })().toLocaleString()} {t(lang, 'sum')}
               </Text>
             </>
           ) : (
@@ -1103,6 +1165,7 @@ function makeStyles(colors) {
     driverCardRow: { flexDirection: 'row', alignItems: 'center' },
     driverCardIcon: { fontSize: 32, marginRight: 12 },
     driverCardCarIcon: { width: 40, height: 40, marginRight: 12 },
+    driverAvatar: { width: 48, height: 48, borderRadius: 24, marginRight: 12 },
     carIcon: { width: 44, height: 44 },
     driverName: { fontSize: 16, fontWeight: '700', marginBottom: 2 },
     driverDetail: { fontSize: 13, marginTop: 2 },
