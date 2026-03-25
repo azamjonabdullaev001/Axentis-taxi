@@ -752,10 +752,11 @@ export default function HomeScreen() {
               <>
                 <Text style={[s.priceText, { color: colors.primary, fontSize: 28 }]}>
                   {t(lang,'meterRunning')}: {(() => {
+                    const sf = activeOrder.service_fee || 2000;
                     const rate = meteredPricePerKm.current || 3000;
                     const m = meteredKm * 1000;
                     const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
-                    return Math.ceil(rKm * rate / 200) * 200;
+                    return Math.ceil((sf + rKm * rate) / 200) * 200;
                   })().toLocaleString()} {t(lang,'sum')}
                 </Text>
                 <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>

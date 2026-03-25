@@ -106,6 +106,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		PassengerPhoto     string  `json:"passenger_photo"`
 		OrderType          string  `json:"order_type"`
 		TripType           string  `json:"trip_type"`
+		ServiceFee         float64 `json:"service_fee"`
 	}
 
 	err := s.db.QueryRow(context.Background(),
@@ -113,14 +114,15 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(o.destination_address,''),
 		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), COALESCE(o.locked_price_per_km,0),
 		 u.phone, u.first_name || ' ' || u.last_name,
-		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app'), COALESCE(o.trip_type,'standard')
+		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app'), COALESCE(o.trip_type,'standard'),
+		 COALESCE(o.service_fee,2000)
 		 FROM orders o JOIN users u ON o.passenger_id = u.id
 		 WHERE o.id = $1`, orderID,
 	).Scan(&orderData.ID, &orderData.PickupLat, &orderData.PickupLng, &orderData.PickupAddress,
 		&orderData.DestinationLat, &orderData.DestinationLng, &orderData.DestinationAddress,
 		&orderData.DistanceKm, &orderData.EstimatedPrice, &orderData.LockedPricePerKm,
 		&orderData.PassengerPhone, &orderData.PassengerName,
-		&orderData.PassengerPhoto, &orderData.OrderType, &orderData.TripType)
+		&orderData.PassengerPhoto, &orderData.OrderType, &orderData.TripType, &orderData.ServiceFee)
 	if err != nil {
 		log.Printf("Failed to get order data: %v", err)
 		return
