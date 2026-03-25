@@ -20,6 +20,7 @@ import {
 } from '../services/notifications';
 
 const CAR_ICON = require('../../assets/car-photo.png');
+const FINISH_ICON = require('../../assets/icons8-finish-96.png');
 
 // Маршрут по реальным дорогам (OSRM, steps=true для точной геометрии)
 // Возвращает { coords, distanceKm }
@@ -627,8 +628,9 @@ export default function HomeScreen() {
         {activeOrder && activeOrder.trip_type !== 'free' && activeOrder.destination_lat && activeOrder.destination_lng && (
           <Marker
             coordinate={{ latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng }}
-            title="Цель">
-            <View style={s.destMarker}><Text style={s.destMarkerText}>B</Text></View>
+            title="Цель"
+            anchor={{ x: 0.5, y: 1 }}>
+            <Image source={FINISH_ICON} style={{ width: 40, height: 40 }} resizeMode="contain" />
           </Marker>
         )}
         {routeCoords.length >= 2 && (

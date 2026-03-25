@@ -18,7 +18,7 @@ import { initializeNotifications, getExpoPushToken } from '../services/notificat
 
 const CAR_ICON    = require('../../assets/car-photo.png');
 const PICKUP_ICON = require('../../assets/location-pin.png');
-const DEST_ICON   = require('../../assets/finish-flag.png');
+const DEST_ICON   = require('../../assets/icons8-finish-96.png');
 const USER_ICON   = require('../../assets/user-location.png');
 
 // Обратное геокодирование: улица + номер дома + город (без районов)
