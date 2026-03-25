@@ -455,7 +455,11 @@ export default function HomeScreen() {
     clearInterval(countdownRef.current);
     try {
       await driverAPI.acceptOrder(incomingOrder.id);
-      setActiveOrder(incomingOrder);
+      // For free-mode orders, wipe destination coords so no marker/route is ever drawn
+      const orderToStore = incomingOrder.trip_type === 'free'
+        ? { ...incomingOrder, destination_lat: null, destination_lng: null, destination_address: '' }
+        : incomingOrder;
+      setActiveOrder(orderToStore);
       setIncomingOrder(null);
       setPassengerLiveLocation(null); // Will be populated by socket if passenger is sharing live location
       setDriverStatus(DRIVER_STATUS.ACCEPTED);

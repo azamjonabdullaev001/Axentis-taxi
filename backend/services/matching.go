@@ -91,27 +91,27 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 
 func (s *MatchingService) notifyDriver(userID, orderID string) {
 	var orderData struct {
-		ID                 string  `json:"id"`
-		PickupLat          float64 `json:"pickup_lat"`
-		PickupLng          float64 `json:"pickup_lng"`
-		PickupAddress      string  `json:"pickup_address"`
-		DestinationLat     float64 `json:"destination_lat"`
-		DestinationLng     float64 `json:"destination_lng"`
-		DestinationAddress string  `json:"destination_address"`
-		DistanceKm         float64 `json:"distance_km"`
-		EstimatedPrice     float64 `json:"estimated_price"`
-		LockedPricePerKm   float64 `json:"locked_price_per_km"`
-		PassengerPhone     string  `json:"passenger_phone"`
-		PassengerName      string  `json:"passenger_name"`
-		PassengerPhoto     string  `json:"passenger_photo"`
-		OrderType          string  `json:"order_type"`
-		TripType           string  `json:"trip_type"`
-		ServiceFee         float64 `json:"service_fee"`
+		ID                 string   `json:"id"`
+		PickupLat          float64  `json:"pickup_lat"`
+		PickupLng          float64  `json:"pickup_lng"`
+		PickupAddress      string   `json:"pickup_address"`
+		DestinationLat     *float64 `json:"destination_lat"`
+		DestinationLng     *float64 `json:"destination_lng"`
+		DestinationAddress string   `json:"destination_address"`
+		DistanceKm         float64  `json:"distance_km"`
+		EstimatedPrice     float64  `json:"estimated_price"`
+		LockedPricePerKm   float64  `json:"locked_price_per_km"`
+		PassengerPhone     string   `json:"passenger_phone"`
+		PassengerName      string   `json:"passenger_name"`
+		PassengerPhoto     string   `json:"passenger_photo"`
+		OrderType          string   `json:"order_type"`
+		TripType           string   `json:"trip_type"`
+		ServiceFee         float64  `json:"service_fee"`
 	}
 
 	err := s.db.QueryRow(context.Background(),
 		`SELECT o.id, o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''), 
-		 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(o.destination_address,''),
+		 o.destination_lat, o.destination_lng, COALESCE(o.destination_address,''),
 		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), COALESCE(o.locked_price_per_km,0),
 		 u.phone, u.first_name || ' ' || u.last_name,
 		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app'), COALESCE(o.trip_type,'standard'),

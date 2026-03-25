@@ -70,6 +70,19 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		tripType = "standard"
 	}
 
+	// For free-mode orders the passenger never sends a destination — store NULL
+	var destLat, destLng interface{}
+	var destAddr interface{}
+	if tripType == "free" {
+		destLat = nil
+		destLng = nil
+		destAddr = nil
+	} else {
+		destLat = req.DestinationLat
+		destLng = req.DestinationLng
+		destAddr = req.DestinationAddress
+	}
+
 	var orderID string
 	err := h.db.QueryRow(context.Background(),
 		`INSERT INTO orders (passenger_id, pickup_lat, pickup_lng, pickup_address,
@@ -78,7 +91,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'searching', $13, $14)
 		 RETURNING id`,
 		passengerID, req.PickupLat, req.PickupLng, req.PickupAddress,
-		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
+		destLat, destLng, destAddr,
 		req.DistanceKm, basePrice, totalPrice, surge, serviceFee, tripType, lockedPerKm,
 	).Scan(&orderID)
 	if err != nil {
