@@ -111,6 +111,7 @@ func main() {
 			adminAPI.GET("/peak-periods", adminHandler.GetPeakPeriods)
 			adminAPI.POST("/peak-periods", adminHandler.CreatePeakPeriod)
 			adminAPI.DELETE("/peak-periods/:id", adminHandler.DeletePeakPeriod)
+			adminAPI.POST("/call-orders", adminHandler.CreateCallOrder)
 
 		}
 

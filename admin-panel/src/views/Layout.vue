@@ -9,6 +9,9 @@
         <router-link to="/orders" class="nav-item">
           <span class="icon">📋</span> История заказов
         </router-link>
+        <router-link to="/dispatcher" class="nav-item">
+          <span class="icon">📞</span> Диспетчер
+        </router-link>
         <router-link to="/revenue" class="nav-item">
           <span class="icon">💰</span> Выручка
         </router-link>

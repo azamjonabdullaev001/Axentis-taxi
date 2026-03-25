@@ -921,14 +921,14 @@ export default function HomeScreen() {
             )}
           </View>
 
-          {/* Price estimate for standard tariff */}
-          {tariffType === 'standard' && destCoords && roadDistanceKm != null && (
-            <View style={{ alignItems: 'center', marginBottom: 8 }}>
-              <Text style={{ color: colors.primary, fontSize: 20, fontWeight: '800' }}>
-                {calcPrice(roadDistanceKm).toLocaleString()} {t(lang, 'sum')}
-              </Text>
+          {/* Rate info for free tariff */}
+          {tariffType === 'free' && (
+            <View style={{ alignItems: 'center', marginBottom: 8, backgroundColor: colors.card, borderRadius: 12, padding: 10 }}>
               <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                {roadDistanceKm.toFixed(1)} {t(lang, 'km')}
+                {t(lang, 'serviceFee')}: {(Number(pricingSettings.service_fee) || 2000).toLocaleString()} {t(lang, 'sum')}
+              </Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+                {t(lang, 'perKmRate')}: {(Number(pricingSettings.price_per_km) || 2000).toLocaleString()} {t(lang, 'sum')}/{t(lang, 'km')}
               </Text>
             </View>
           )}

@@ -7,6 +7,7 @@ import Revenue from '../views/Revenue.vue'
 import Pricing from '../views/Pricing.vue'
 import Admins from '../views/Admins.vue'
 import Users from '../views/Users.vue'
+import Dispatcher from '../views/Dispatcher.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
@@ -22,6 +23,7 @@ const routes = [
       { path: 'pricing', component: Pricing },
       { path: 'admins', component: Admins },
       { path: 'users', component: Users },
+      { path: 'dispatcher', component: Dispatcher },
 
     ]
   },
