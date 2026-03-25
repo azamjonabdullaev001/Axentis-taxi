@@ -327,7 +327,7 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 	h.db.Exec(context.Background(),
 		`UPDATE drivers SET is_available = false WHERE id = $1`, driverID)
 
-	var passengerID string
+	var passengerID *string
 	h.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
 	).Scan(&passengerID)
@@ -363,13 +363,14 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 			"rating_count":   driverRatingCount,
 		},
 	})
-	h.hub.SendToUser(passengerID, msg)
-	// Push notification so passenger is notified even if the app is in background/killed
-	go h.push.SendOrderAcceptedPush(
-		passengerID,
-		driverFirstName+" "+driverLastName,
-		driverCarNumber,
-	)
+	if passengerID != nil {
+		h.hub.SendToUser(*passengerID, msg)
+		go h.push.SendOrderAcceptedPush(
+			*passengerID,
+			driverFirstName+" "+driverLastName,
+			driverCarNumber,
+		)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Order accepted", "order_id": orderID})
 }
@@ -395,16 +396,18 @@ func (h *OrderHandler) DriverArrived(c *gin.Context) {
 		return
 	}
 
-	var passengerID string
+	var passengerID *string
 	h.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
 	).Scan(&passengerID)
 
-	msg, _ := json.Marshal(map[string]interface{}{
-		"type":     "driver_arrived",
-		"order_id": orderID,
-	})
-	h.hub.SendToUser(passengerID, msg)
+	if passengerID != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":     "driver_arrived",
+			"order_id": orderID,
+		})
+		h.hub.SendToUser(*passengerID, msg)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Arrival confirmed", "free_wait_minutes": 2})
 }
@@ -433,17 +436,19 @@ func (h *OrderHandler) StartTrip(c *gin.Context) {
 		return
 	}
 
-	var passengerID string
+	var passengerID *string
 	h.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
 	).Scan(&passengerID)
 
-	msg, _ := json.Marshal(map[string]interface{}{
-		"type":       "trip_started",
-		"order_id":   orderID,
-		"waiting_fee": waitFee,
-	})
-	h.hub.SendToUser(passengerID, msg)
+	if passengerID != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":       "trip_started",
+			"order_id":   orderID,
+			"waiting_fee": waitFee,
+		})
+		h.hub.SendToUser(*passengerID, msg)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Trip started", "waiting_fee": waitFee})
 }
@@ -500,17 +505,19 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	h.db.Exec(context.Background(),
 		`UPDATE drivers SET is_available = true WHERE id = $1`, driverID)
 
-	var passengerID string
+	var passengerID *string
 	h.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
 	).Scan(&passengerID)
 
-	msg, _ := json.Marshal(map[string]interface{}{
-		"type":        "trip_completed",
-		"order_id":    orderID,
-		"total_price": totalPrice,
-	})
-	h.hub.SendToUser(passengerID, msg)
+	if passengerID != nil {
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":        "trip_completed",
+			"order_id":    orderID,
+			"total_price": totalPrice,
+		})
+		h.hub.SendToUser(*passengerID, msg)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "Trip completed",
@@ -576,7 +583,8 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 	)
 
 	// Broadcast location to passenger of active order
-	var passengerID, orderID string
+	var passengerID *string
+	var orderID string
 	err := h.db.QueryRow(context.Background(),
 		`SELECT o.passenger_id, o.id FROM orders o
 		 JOIN drivers d ON o.driver_id = d.id
@@ -584,7 +592,7 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 		 ORDER BY o.created_at DESC LIMIT 1`,
 		userID,
 	).Scan(&passengerID, &orderID)
-	if err == nil {
+	if err == nil && passengerID != nil {
 		msg, _ := json.Marshal(map[string]interface{}{
 			"type":     "driver_location",
 			"order_id": orderID,
@@ -592,7 +600,7 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 			"lng":      req.Lng,
 			"heading":  req.Heading,
 		})
-		h.hub.SendToUser(passengerID, msg)
+		h.hub.SendToUser(*passengerID, msg)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Location updated"})

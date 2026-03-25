@@ -113,10 +113,10 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		`SELECT o.id, o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''), 
 		 o.destination_lat, o.destination_lng, COALESCE(o.destination_address,''),
 		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), COALESCE(o.locked_price_per_km,0),
-		 u.phone, u.first_name || ' ' || u.last_name,
+		 COALESCE(u.phone, o.passenger_phone, ''), COALESCE(u.first_name || ' ' || u.last_name, 'Клиент'),
 		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app'), COALESCE(o.trip_type,'standard'),
 		 COALESCE(o.service_fee,2000)
-		 FROM orders o JOIN users u ON o.passenger_id = u.id
+		 FROM orders o LEFT JOIN users u ON o.passenger_id = u.id
 		 WHERE o.id = $1`, orderID,
 	).Scan(&orderData.ID, &orderData.PickupLat, &orderData.PickupLng, &orderData.PickupAddress,
 		&orderData.DestinationLat, &orderData.DestinationLng, &orderData.DestinationAddress,
@@ -139,18 +139,18 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 }
 
 func (s *MatchingService) notifyPassengerNoDrivers(orderID string) {
-	var passengerID string
+	var passengerID *string
 	err := s.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
 	).Scan(&passengerID)
-	if err != nil {
+	if err != nil || passengerID == nil {
 		return
 	}
 	msg, _ := json.Marshal(map[string]interface{}{
 		"type":     "no_drivers",
 		"order_id": orderID,
 	})
-	s.hub.SendToUser(passengerID, msg)
+	s.hub.SendToUser(*passengerID, msg)
 }
 
 func (s *MatchingService) isOrderAccepted(orderID string) bool {

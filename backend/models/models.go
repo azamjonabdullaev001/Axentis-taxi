@@ -59,7 +59,7 @@ type Admin struct {
 
 type Order struct {
 	ID                  string     `json:"id"`
-	PassengerID         string     `json:"passenger_id"`
+	PassengerID         *string    `json:"passenger_id"`
 	DriverID            *string    `json:"driver_id"`
 	Status              string     `json:"status"`
 	PickupLat           float64    `json:"pickup_lat"`
@@ -79,6 +79,7 @@ type Order struct {
 	OrderType           string     `json:"order_type"`    // "app" | "call"
 	PricingType         string     `json:"pricing_type"`  // "yandex" | "royal"
 	DispatcherPhone     string     `json:"dispatcher_phone"`
+	PassengerPhone      string     `json:"passenger_phone"`
 	RoyalPricePerKm     float64    `json:"royal_price_per_km"`
 	LockedPricePerKm    float64    `json:"locked_price_per_km"`
 	CreatedAt           time.Time  `json:"created_at"`

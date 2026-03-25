@@ -102,7 +102,8 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 
 	rows, err := h.db.Query(context.Background(),
 		`SELECT o.id, o.status,
-		 u.first_name || ' ' || u.last_name as passenger_name, u.phone as passenger_phone,
+		 COALESCE(u.first_name || ' ' || u.last_name, '') as passenger_name,
+		 COALESCE(u.phone, o.passenger_phone, '') as passenger_phone,
 		 COALESCE(du.first_name || ' ' || du.last_name, '') as driver_name,
 		 COALESCE(du.phone, '') as driver_phone,
 		 COALESCE(d.car_number, '') as car_number,
@@ -114,7 +115,7 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 		 COALESCE(o.order_type, 'app'), COALESCE(o.pricing_type, 'yandex'),
 		 COALESCE(o.dispatcher_phone, '')
 		 FROM orders o
-		 JOIN users u ON o.passenger_id = u.id
+		 LEFT JOIN users u ON o.passenger_id = u.id
 		 LEFT JOIN drivers d ON o.driver_id = d.id
 		 LEFT JOIN users du ON d.user_id = du.id
 		 ORDER BY o.created_at DESC
@@ -560,29 +561,8 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		return
 	}
 
-	// Resolve or create a ghost passenger account for the phone number
+	// Store passenger phone directly on the order — no ghost user needed
 	phone := strings.TrimSpace(req.PassengerPhone)
-	var passengerID string
-	err := h.db.QueryRow(context.Background(),
-		`SELECT id FROM users WHERE phone = $1`, phone,
-	).Scan(&passengerID)
-	if err != nil {
-		// Insert ghost user; ignore conflict if another request beat us
-		ghostID := uuid.New().String()
-		h.db.Exec(context.Background(),
-			`INSERT INTO users (id, phone, first_name, last_name, role, is_active)
-			 VALUES ($1, $2, 'Клиент', '', 'passenger', true)
-			 ON CONFLICT (phone) DO NOTHING`,
-			ghostID, phone,
-		)
-		// Always re-fetch to get the real id (inserted or pre-existing)
-		if scanErr := h.db.QueryRow(context.Background(),
-			`SELECT id FROM users WHERE phone = $1`, phone,
-		).Scan(&passengerID); scanErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve passenger"})
-			return
-		}
-	}
 
 	// Lock royal price per km at time of order creation
 	var royalPricePerKm float64
@@ -597,9 +577,9 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		}
 	}
 
-	// Estimate price if distance provided — use same formula as Yandex (service_fee + km*rate + surge)
-	var baseP, totalP, surgeV, serviceFeeV float64
-	surgeV = 1.0
+	// Get service fee from pricing settings
+	var serviceFeeV float64
+	var surgeV float64 = 1.0
 	if h.pricingService != nil {
 		ps, _ := h.pricingService.GetSettings()
 		if ps != nil {
@@ -611,25 +591,23 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		} else {
 			serviceFeeV = 2000
 		}
-	}
-	if req.DistanceKm > 0 && h.pricingService != nil {
-		baseP, totalP, surgeV, serviceFeeV = h.pricingService.CalculatePriceWithRate(req.DistanceKm, royalPricePerKm)
+	} else {
+		serviceFeeV = 2000
 	}
 
 	orderID := uuid.New().String()
-	_, err = h.db.Exec(context.Background(),
+	_, err := h.db.Exec(context.Background(),
 		`INSERT INTO orders
-		 (id, passenger_id, status, pickup_lat, pickup_lng, pickup_address,
+		 (id, passenger_id, passenger_phone, status, pickup_lat, pickup_lng, pickup_address,
 		  destination_lat, destination_lng, destination_address, distance_km,
 		  base_price, total_price, service_fee, surge_multiplier,
-		  order_type, pricing_type, dispatcher_phone, royal_price_per_km, locked_price_per_km)
+		  order_type, pricing_type, trip_type, dispatcher_phone, royal_price_per_km, locked_price_per_km)
 		 VALUES
-		 ($1, $2, 'searching', $3, $4, $5, $6, $7, $8, $9,
-		  $10, $11, $12, $13, 'call', 'royal', $14, $15, $15)`,
-		orderID, passengerID,
+		 ($1, NULL, $2, 'searching', $3, $4, $5, NULL, NULL, NULL, 0,
+		  0, 0, $6, $7, 'call', 'royal', 'free', $8, $9, $9)`,
+		orderID, phone,
 		req.PickupLat, req.PickupLng, req.PickupAddress,
-		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
-		req.DistanceKm, baseP, totalP, serviceFeeV, surgeV,
+		serviceFeeV, surgeV,
 		req.DispatcherPhone, royalPricePerKm,
 	)
 	if err != nil {
@@ -644,9 +622,7 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"order_id":           orderID,
-		"passenger_id":       passengerID,
 		"royal_price_per_km": royalPricePerKm,
-		"estimated_price":    totalP,
 		"message":            "Call order created and driver search started",
 	})
 }
