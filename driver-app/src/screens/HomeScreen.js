@@ -259,6 +259,10 @@ export default function HomeScreen() {
       }
       setHeading(h);
     }, 20);
+
+    // ── 3. GPS subscription ─────────────────────────────────────────────────────
+    (async () => {
+      try {
       const gpsSub = await Location.watchPositionAsync(cfg, (loc) => {
         const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
         // Write to ref — display timer picks it up, no re-render here
@@ -286,6 +290,7 @@ export default function HomeScreen() {
 
       if (dead) gpsSub.remove();
       else locationSubscriptionRef.current = gpsSub;
+      } catch {}
     })();
 
     // ── 4. Compass — active for ALL online states, not just active orders ───────────
