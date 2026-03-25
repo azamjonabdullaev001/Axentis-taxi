@@ -45,25 +45,15 @@ async function fetchRoadRoute(pickup, dest) {
     return { coords, distanceKm };
   }
 
-  const c1 = new AbortController();
-  const t1 = setTimeout(() => c1.abort(), 8000);
-  try {
-    const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
-    const res = await fetch(url, { signal: c1.signal });
-    clearTimeout(t1);
-    const result = extractStepCoords(await res.json());
-    if (result) return result;
-  } catch { clearTimeout(t1); }
-
-  const c2 = new AbortController();
-  const t2 = setTimeout(() => c2.abort(), 8000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
   try {
     const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
-    const res = await fetch(url, { signal: c2.signal });
-    clearTimeout(t2);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
     const result = extractStepCoords(await res.json());
     if (result) return result;
-  } catch { clearTimeout(t2); }
+  } catch { clearTimeout(timer); }
 
   return { coords: [pickup, dest], distanceKm: 0 };
 }
@@ -80,7 +70,7 @@ const DRIVER_STATUS = {
 // Location accuracy & interval per driver state
 const LOCATION_CFG = {
   idle:   { accuracy: Location.Accuracy.Balanced, timeInterval: 5000,  distanceInterval: 0 },
-  active: { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 33,  distanceInterval: 0.5 },
+  active: { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 20,  distanceInterval: 0 },
 };
 
 const ROUTE_COLORS = {
@@ -227,7 +217,7 @@ export default function HomeScreen() {
       }, 10);
     }
 
-    // ── 2. 10ms display timer — syncs refs → React state + SINGLE camera update ──
+    // ── 2. 20ms display timer — syncs refs → React state + SINGLE camera update ──
     // All animateCamera calls go through here to prevent competing animations (flicker).
     displayTimerRef.current = setInterval(() => {
       const loc = locationRef.current;
@@ -267,13 +257,7 @@ export default function HomeScreen() {
         }
       }
       setHeading(h);
-    }, 10);
-
-    // ── 3. GPS subscription (async IIFE, independent) ─────────────────────────
-    (async () => {
-      const { status } = await Location.getForegroundPermissionsAsync();
-      if (status !== 'granted' || dead) return;
-
+    }, 20);
       const gpsSub = await Location.watchPositionAsync(cfg, (loc) => {
         const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
         // Write to ref — display timer picks it up, no re-render here

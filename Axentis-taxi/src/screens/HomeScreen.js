@@ -92,29 +92,17 @@ async function fetchRoadRoute(pickup, dest) {
     return { coords, distanceKm };
   }
 
-  // 1. routing.openstreetmap.de — актуальные данные OSM, лучшее покрытие
+  // 1. router.project-osrm.org — глобальное покрытие, быстрый ответ
   const c1 = new AbortController();
-  const t1 = setTimeout(() => c1.abort(), 10000);
+  const t1 = setTimeout(() => c1.abort(), 6000);
   try {
-    const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
     const res = await fetch(url, { signal: c1.signal });
     clearTimeout(t1);
     const json = await res.json();
     const result = extractStepCoords(json);
     if (result) return result;
   } catch { clearTimeout(t1); }
-
-  // 2. Fallback: router.project-osrm.org
-  const c2 = new AbortController();
-  const t2 = setTimeout(() => c2.abort(), 10000);
-  try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
-    const res = await fetch(url, { signal: c2.signal });
-    clearTimeout(t2);
-    const json = await res.json();
-    const result = extractStepCoords(json);
-    if (result) return result;
-  } catch { clearTimeout(t2); }
 
   // 3. Last resort: straight line
   const dLat = ((dest.latitude - pickup.latitude) * Math.PI) / 180;
@@ -423,7 +411,7 @@ export default function HomeScreen() {
       };
       driverDisplayRef.current = next;
       setDriverDisplayLocation({ ...next });
-    }, 16);
+    }, 20);
 
     return () => clearInterval(smoothTimerRef.current);
   }, [orderStatus]);
