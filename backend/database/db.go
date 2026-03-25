@@ -160,4 +160,26 @@ SELECT
     crypt('Supreme001', gen_salt('bf', 12)),
     'Ax3nt1sAdm2026T0k3n7'
 WHERE NOT EXISTS (SELECT 1 FROM admins WHERE phone = '+998914751330');
+
+-- Royal Taxi Mode: new columns and tables (additive only, never alters existing behaviour)
+
+-- order_type: 'app' (passenger-initiated) | 'call' (dispatcher-initiated)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_type VARCHAR(10) DEFAULT 'app';
+-- pricing_type: 'yandex' (service_fee + km) | 'royal' (pure per-100m meter)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pricing_type VARCHAR(10) DEFAULT 'yandex';
+-- dispatcher_phone: passenger phone entered by dispatcher for call orders
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS dispatcher_phone VARCHAR(30);
+-- royal_price_per_km: rate locked at order creation for royal orders
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS royal_price_per_km DECIMAL(12,2) DEFAULT 0;
+
+-- Global taxi mode setting (one row, always present)
+CREATE TABLE IF NOT EXISTS taxi_mode (
+    id SERIAL PRIMARY KEY,
+    mode VARCHAR(10) NOT NULL DEFAULT 'yandex' CHECK (mode IN ('yandex', 'royal')),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+INSERT INTO taxi_mode (mode) SELECT 'yandex' WHERE NOT EXISTS (SELECT 1 FROM taxi_mode);
+
+-- Royal pricing settings (separate from Yandex price_settings)
+ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS royal_price_per_km DECIMAL(12,2) DEFAULT 3000;
 `

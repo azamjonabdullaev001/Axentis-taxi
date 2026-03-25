@@ -37,6 +37,10 @@ export const adminAPI = {
   deletePeakPeriod: (id) => api.delete(`/admin/peak-periods/${id}`),
   getAdmins: () => api.get('/admin/admins'),
   createAdmin: (d) => api.post('/admin/admins', d),
+  // Royal Taxi Mode
+  getTaxiMode: () => api.get('/admin/taxi-mode'),
+  setTaxiMode: (mode) => api.put('/admin/taxi-mode', { mode }),
+  createCallOrder: (d) => api.post('/admin/call-orders', d),
 }
 
 export default api

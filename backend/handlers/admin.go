@@ -8,6 +8,7 @@ import (
 
 	"axentis-taxi/config"
 	"axentis-taxi/models"
+	"axentis-taxi/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -17,12 +18,27 @@ import (
 )
 
 type AdminHandler struct {
-	db  *pgxpool.Pool
-	cfg *config.Config
+	db             *pgxpool.Pool
+	cfg            *config.Config
+	pricingService *services.PricingService
+	hub            *services.Hub
+	push           *services.PushService
+	matchingService *services.MatchingService
 }
 
 func NewAdminHandler(db *pgxpool.Pool, cfg *config.Config) *AdminHandler {
 	return &AdminHandler{db: db, cfg: cfg}
+}
+
+func NewAdminHandlerFull(db *pgxpool.Pool, cfg *config.Config, ps *services.PricingService, hub *services.Hub, push *services.PushService) *AdminHandler {
+	return &AdminHandler{
+		db:              db,
+		cfg:             cfg,
+		pricingService:  ps,
+		hub:             hub,
+		push:            push,
+		matchingService: services.NewMatchingService(db, hub, push),
+	}
 }
 
 type AdminLoginRequest struct {
@@ -94,7 +110,9 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 		 COALESCE(o.destination_address, '') as destination_address,
 		 COALESCE(o.distance_km, 0), COALESCE(o.base_price, 0),
 		 o.waiting_fee, o.service_fee, COALESCE(o.total_price, 0),
-		 o.surge_multiplier, o.created_at, o.completed_at
+		 o.surge_multiplier, o.created_at, o.completed_at,
+		 COALESCE(o.order_type, 'app'), COALESCE(o.pricing_type, 'yandex'),
+		 COALESCE(o.dispatcher_phone, '')
 		 FROM orders o
 		 JOIN users u ON o.passenger_id = u.id
 		 LEFT JOIN drivers d ON o.driver_id = d.id
@@ -116,10 +134,11 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 		var distKm, basePrice, waitFee, serviceFee, totalPrice, surgeMultiplier float64
 		var createdAt time.Time
 		var completedAt *time.Time
+		var orderType, pricingType, dispatcherPhone string
 
 		rows.Scan(&id, &status, &passName, &passPhone, &driverName, &driverPhone, &carNum,
 			&pickupAddr, &destAddr, &distKm, &basePrice, &waitFee, &serviceFee, &totalPrice,
-			&surgeMultiplier, &createdAt, &completedAt)
+			&surgeMultiplier, &createdAt, &completedAt, &orderType, &pricingType, &dispatcherPhone)
 
 		orders = append(orders, map[string]interface{}{
 			"id": id, "status": status,
@@ -131,6 +150,8 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 			"service_fee": serviceFee, "total_price": totalPrice,
 			"surge_multiplier": surgeMultiplier,
 			"created_at": createdAt, "completed_at": completedAt,
+			"order_type": orderType, "pricing_type": pricingType,
+			"dispatcher_phone": dispatcherPhone,
 		})
 	}
 	if orders == nil {
@@ -281,10 +302,12 @@ func (h *AdminHandler) GetPricingSettings(c *gin.Context) {
 	var ps models.PriceSettings
 	err := h.db.QueryRow(context.Background(),
 		`SELECT id, price_per_km, price_per_minute_wait, free_wait_minutes,
-		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0), updated_at
+		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0),
+		 COALESCE(royal_price_per_km, 3000), updated_at
 		 FROM price_settings ORDER BY id LIMIT 1`,
 	).Scan(&ps.ID, &ps.PricePerKm, &ps.PricePerMinuteWait, &ps.FreeWaitMinutes,
-		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier, &ps.UpdatedAt)
+		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier,
+		&ps.RoyalPricePerKm, &ps.UpdatedAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch pricing"})
 		return
@@ -299,6 +322,7 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 		FreeWaitMinutes     *int     `json:"free_wait_minutes"`
 		ServiceFee          *float64 `json:"service_fee"`
 		BaseSurgeMultiplier *float64 `json:"base_surge_multiplier"`
+		RoyalPricePerKm     *float64 `json:"royal_price_per_km"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -312,6 +336,10 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.RoyalPricePerKm != nil && *req.RoyalPricePerKm < 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Royal price per km must be at least 100 sum"})
+		return
+	}
 
 	_, err := h.db.Exec(context.Background(),
 		`UPDATE price_settings SET
@@ -320,9 +348,10 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 		 free_wait_minutes = COALESCE($3, free_wait_minutes),
 		 service_fee = COALESCE($4, service_fee),
 		 base_surge_multiplier = COALESCE($5, base_surge_multiplier),
+		 royal_price_per_km = COALESCE($6, royal_price_per_km),
 		 updated_at = NOW()`,
 		req.PricePerKm, req.PricePerMinuteWait, req.FreeWaitMinutes,
-		req.ServiceFee, req.BaseSurgeMultiplier,
+		req.ServiceFee, req.BaseSurgeMultiplier, req.RoyalPricePerKm,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update pricing"})
@@ -472,4 +501,139 @@ func (h *AdminHandler) DeletePeakPeriod(c *gin.Context) {
 		`UPDATE peak_periods SET is_active = false WHERE id = $1`, id,
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Peak period removed"})
+}
+
+// ── Royal Taxi Mode ───────────────────────────────────────────────────────────
+
+func (h *AdminHandler) GetTaxiMode(c *gin.Context) {
+	var tm models.TaxiMode
+	err := h.db.QueryRow(context.Background(),
+		`SELECT mode, updated_at FROM taxi_mode ORDER BY id LIMIT 1`,
+	).Scan(&tm.Mode, &tm.UpdatedAt)
+	if err != nil {
+		// Return default if row missing
+		c.JSON(http.StatusOK, gin.H{"mode": "yandex"})
+		return
+	}
+	c.JSON(http.StatusOK, tm)
+}
+
+func (h *AdminHandler) SetTaxiMode(c *gin.Context) {
+	var req struct {
+		Mode string `json:"mode" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Mode != "yandex" && req.Mode != "royal" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be 'yandex' or 'royal'"})
+		return
+	}
+	_, err := h.db.Exec(context.Background(),
+		`UPDATE taxi_mode SET mode = $1, updated_at = NOW()`, req.Mode,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update mode"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"mode": req.Mode})
+}
+
+type CreateCallOrderRequest struct {
+	PassengerPhone     string  `json:"passenger_phone" binding:"required"`
+	DispatcherPhone    string  `json:"dispatcher_phone"`
+	PickupLat          float64 `json:"pickup_lat" binding:"required"`
+	PickupLng          float64 `json:"pickup_lng" binding:"required"`
+	PickupAddress      string  `json:"pickup_address"`
+	DestinationLat     float64 `json:"destination_lat"`
+	DestinationLng     float64 `json:"destination_lng"`
+	DestinationAddress string  `json:"destination_address"`
+	DistanceKm         float64 `json:"distance_km"`
+	Comment            string  `json:"comment"`
+}
+
+func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
+	var req CreateCallOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Resolve or create a ghost passenger account for the phone number
+	phone := strings.TrimSpace(req.PassengerPhone)
+	var passengerID string
+	err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM users WHERE phone = $1`, phone,
+	).Scan(&passengerID)
+	if err != nil {
+		// Insert ghost user; ignore conflict if another request beat us
+		ghostID := uuid.New().String()
+		h.db.Exec(context.Background(),
+			`INSERT INTO users (id, phone, first_name, last_name, role, is_active)
+			 VALUES ($1, $2, 'Клиент', '', 'passenger', true)
+			 ON CONFLICT (phone) DO NOTHING`,
+			ghostID, phone,
+		)
+		// Always re-fetch to get the real id (inserted or pre-existing)
+		if scanErr := h.db.QueryRow(context.Background(),
+			`SELECT id FROM users WHERE phone = $1`, phone,
+		).Scan(&passengerID); scanErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve passenger"})
+			return
+		}
+	}
+
+	// Lock royal price per km at time of order creation
+	var royalPricePerKm float64
+	if h.pricingService != nil {
+		royalPricePerKm = h.pricingService.GetRoyalPricePerKm()
+	} else {
+		h.db.QueryRow(context.Background(),
+			`SELECT COALESCE(royal_price_per_km, 3000) FROM price_settings ORDER BY id LIMIT 1`,
+		).Scan(&royalPricePerKm)
+		if royalPricePerKm <= 0 {
+			royalPricePerKm = 3000
+		}
+	}
+
+	// Estimate price if distance provided
+	var estimatedPrice float64
+	if req.DistanceKm > 0 && h.pricingService != nil {
+		estimatedPrice = h.pricingService.CalculateRoyalPrice(req.DistanceKm, royalPricePerKm)
+	}
+
+	orderID := uuid.New().String()
+	_, err = h.db.Exec(context.Background(),
+		`INSERT INTO orders
+		 (id, passenger_id, status, pickup_lat, pickup_lng, pickup_address,
+		  destination_lat, destination_lng, destination_address, distance_km,
+		  base_price, total_price, service_fee, surge_multiplier,
+		  order_type, pricing_type, dispatcher_phone, royal_price_per_km)
+		 VALUES
+		 ($1, $2, 'searching', $3, $4, $5, $6, $7, $8, $9,
+		  $10, $10, 0, 1.0, 'call', 'royal', $11, $12)`,
+		orderID, passengerID,
+		req.PickupLat, req.PickupLng, req.PickupAddress,
+		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
+		req.DistanceKm, estimatedPrice,
+		req.DispatcherPhone, royalPricePerKm,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create call order"})
+		return
+	}
+
+	// Trigger driver matching in background
+	if h.matchingService != nil {
+		go h.matchingService.FindAndNotifyDrivers(orderID, req.PickupLat, req.PickupLng)
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"order_id":          orderID,
+		"passenger_id":      passengerID,
+		"royal_price_per_km": royalPricePerKm,
+		"estimated_price":   estimatedPrice,
+		"message":           "Call order created and driver search started",
+	})
 }

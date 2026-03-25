@@ -62,7 +62,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	}
 
 	passengerID := c.GetString("user_id")
-	basePrice, totalPrice, surge := h.pricingService.CalculatePrice(req.DistanceKm)
+	basePrice, totalPrice, surge, serviceFee := h.pricingService.CalculatePrice(req.DistanceKm)
 	lockedPerKm := h.pricingService.GetEffectivePricePerKm()
 
 	tripType := req.TripType
@@ -75,11 +75,11 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		`INSERT INTO orders (passenger_id, pickup_lat, pickup_lng, pickup_address,
 		 destination_lat, destination_lng, destination_address, distance_km,
 		 base_price, total_price, surge_multiplier, service_fee, status, trip_type, locked_price_per_km)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 2000, 'searching', $12, $13)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'searching', $13, $14)
 		 RETURNING id`,
 		passengerID, req.PickupLat, req.PickupLng, req.PickupAddress,
 		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
-		req.DistanceKm, basePrice, totalPrice, surge, tripType, lockedPerKm,
+		req.DistanceKm, basePrice, totalPrice, surge, serviceFee, tripType, lockedPerKm,
 	).Scan(&orderID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order"})
@@ -417,14 +417,15 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	userID := c.GetString("user_id")
 	now := time.Now()
 
-	var waitFee, basePrice, serviceFee, lockedPerKm, distKm float64
+	var waitFee, storedTotalPrice, serviceFee, lockedPerKm, distKm float64
 	var waitStarted *time.Time
 	var tripType string
 	h.db.QueryRow(context.Background(),
-		`SELECT wait_started_at, COALESCE(base_price,0), service_fee,
-		 COALESCE(locked_price_per_km,0), COALESCE(distance_km,0), COALESCE(trip_type,'standard')
+		`SELECT wait_started_at, service_fee,
+		 COALESCE(locked_price_per_km,0), COALESCE(distance_km,0), COALESCE(trip_type,'standard'),
+		 COALESCE(total_price,0)
 		 FROM orders WHERE id = $1`, orderID,
-	).Scan(&waitStarted, &basePrice, &serviceFee, &lockedPerKm, &distKm, &tripType)
+	).Scan(&waitStarted, &serviceFee, &lockedPerKm, &distKm, &tripType, &storedTotalPrice)
 
 	waitFee = h.pricingService.CalculateWaitFee(waitStarted, 2)
 	var totalPrice float64
@@ -438,8 +439,9 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 		raw := serviceFee + roundedKm*lockedPerKm + waitFee
 		totalPrice = math.Ceil(raw/200) * 200
 	} else {
-		// Standard tariff: basePrice already includes service_fee — do NOT add it again
-		totalPrice = math.Ceil((basePrice+waitFee)/200) * 200
+		// Standard tariff: use total_price locked at order creation (includes service_fee + surge).
+		// Only add wait_fee on top — never recalculate, never lose service_fee or surge.
+		totalPrice = math.Ceil((storedTotalPrice+waitFee)/200) * 200
 	}
 
 	var driverID string

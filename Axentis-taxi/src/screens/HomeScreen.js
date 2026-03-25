@@ -65,42 +65,71 @@ async function reverseGeocode(coords) {
 }
 
 // Маршрут по реальным дорогам: два OSRM источника с актуальным покрытием ЦА
+// Использует steps=true для точной геометрии на каждом повороте (не упрощённый overview).
+// Возвращает { coords, distanceKm }.
 async function fetchRoadRoute(pickup, dest) {
   const lng1 = pickup.longitude, lat1 = pickup.latitude;
   const lng2 = dest.longitude,   lat2 = dest.latitude;
+
+  // Извлекаем координаты из пошаговой геометрии (не overview — она упрощена и режет углы).
+  function extractStepCoords(json) {
+    if (!json.routes?.[0]) return null;
+    const distanceKm = json.routes[0].distance / 1000;
+    const coords = [];
+    for (const leg of json.routes[0].legs) {
+      for (const step of leg.steps) {
+        for (const [lng, lat] of step.geometry.coordinates) {
+          // Дедупликация смежных одинаковых точек (стыки шагов)
+          if (coords.length === 0 ||
+              lat !== coords[coords.length - 1].latitude ||
+              lng !== coords[coords.length - 1].longitude) {
+            coords.push({ latitude: lat, longitude: lng });
+          }
+        }
+      }
+    }
+    if (coords.length < 2) return null;
+    return { coords, distanceKm };
+  }
 
   // 1. routing.openstreetmap.de — актуальные данные OSM, лучшее покрытие
   const c1 = new AbortController();
   const t1 = setTimeout(() => c1.abort(), 10000);
   try {
-    const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
+    const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
     const res = await fetch(url, { signal: c1.signal });
     clearTimeout(t1);
     const json = await res.json();
-    if (json.routes?.[0]?.geometry?.coordinates?.length > 1) {
-      return json.routes[0].geometry.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
-    }
+    const result = extractStepCoords(json);
+    if (result) return result;
   } catch { clearTimeout(t1); }
 
   // 2. Fallback: router.project-osrm.org
   const c2 = new AbortController();
   const t2 = setTimeout(() => c2.abort(), 10000);
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
     const res = await fetch(url, { signal: c2.signal });
     clearTimeout(t2);
     const json = await res.json();
-    if (json.routes?.[0]?.geometry?.coordinates?.length > 1) {
-      return json.routes[0].geometry.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
-    }
+    const result = extractStepCoords(json);
+    if (result) return result;
   } catch { clearTimeout(t2); }
 
-  return [pickup, dest];
+  // 3. Last resort: straight line
+  const dLat = ((dest.latitude - pickup.latitude) * Math.PI) / 180;
+  const dLon = ((dest.longitude - pickup.longitude) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(pickup.latitude * Math.PI / 180) * Math.cos(dest.latitude * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2;
+  const straight = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return { coords: [pickup, dest], distanceKm: straight };
 }
 
-// Маркер с PNG иконкой: tracksViewChanges=true до загрузки изображения, затем false
-// Это предотвращает и мигание (false), и пустые маркеры (true пока не загрузится)
-function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, zIndex, flat, rotation }) {
+// Маркер с PNG иконкой: tracksViewChanges=true до загрузки изображения, затем false.
+// forceTrack=true принудительно оставляет tracksViewChanges=true — требуется для маркеров,
+// у которых меняется rotation/coordinate после загрузки (например, иконка машины водителя).
+function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, zIndex, flat, rotation, forceTrack = false }) {
   const [trackChanges, setTrackChanges] = React.useState(true);
   return (
     <Marker
@@ -109,7 +138,7 @@ function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, z
       zIndex={zIndex}
       flat={flat}
       rotation={rotation}
-      tracksViewChanges={trackChanges}
+      tracksViewChanges={forceTrack || trackChanges}
     >
       <Image
         source={source}
@@ -183,6 +212,7 @@ export default function HomeScreen() {
   const [driverInfo, setDriverInfo] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
   const [routePreviewCoords, setRoutePreviewCoords] = useState([]);
+  const [roadDistanceKm, setRoadDistanceKm] = useState(null); // accurate road distance from OSRM
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
   const [panelHeight, setPanelHeight] = useState(190);
@@ -222,6 +252,20 @@ export default function HomeScreen() {
     return () => clearInterval(pricingInterval);
   }, []);
 
+  // Режим такси: 'yandex' (обычный) | 'royal' (только диспетчер) — каждые 60 сек
+  const [taxiMode, setTaxiMode] = useState('yandex');
+  useEffect(() => {
+    async function loadMode() {
+      try {
+        const { data } = await orderAPI.getTaxiMode();
+        setTaxiMode(data.mode || 'yandex');
+      } catch {}
+    }
+    loadMode();
+    const modeInterval = setInterval(loadMode, 60000);
+    return () => clearInterval(modeInterval);
+  }, []);
+
   const historyPanelHeight = useRef(new Animated.Value(0)).current;
 
   function calcPrice(distanceKm) {
@@ -231,8 +275,10 @@ export default function HomeScreen() {
     // Round distance UP to nearest 100m: 1m-99m → 100m, 101m → 200m, 1070m → 1100m
     const meters = distanceKm * 1000;
     const roundedKm = (meters < 1 ? 100 : Math.ceil(meters / 100) * 100) / 1000;
-    const raw = (base + roundedKm * perKm) * surge;
-    return Math.ceil(raw / 200) * 200;
+    // Match backend double-ceiling: first round base, then round base*surge
+    const rawBase = base + roundedKm * perKm;
+    const basePrice = Math.ceil(rawBase / 200) * 200;
+    return Math.ceil((basePrice * surge) / 200) * 200;
   }
 
   function togglePanel() {
@@ -348,7 +394,8 @@ export default function HomeScreen() {
   }, [orderStatus]);
 
   // ── Smooth driver marker interpolation at 60fps ───────────────────────────
-  // Receives updates at 10ms from WS; lerps display to target every 16ms (60fps)
+  // Receives updates at 10ms from WS; lerps position+heading every 16ms (60fps).
+  // Angular lerp uses shortest-path wrap to avoid spinning the wrong way (e.g. 350°→10°).
   useEffect(() => {
     clearInterval(smoothTimerRef.current);
     const isActive = [ORDER_STATUS.ACCEPTED, ORDER_STATUS.ARRIVED, ORDER_STATUS.IN_PROGRESS].includes(orderStatus);
@@ -363,11 +410,16 @@ export default function HomeScreen() {
         setDriverDisplayLocation({ ...target });
         return;
       }
-      const lerp = (a, b) => a + (b - a) * 0.5;
+      const lerp = (a, b, alpha) => a + (b - a) * alpha;
+      // Shortest-path angular interpolation — prevents spinning the wrong direction
+      const prevH = display.heading ?? 0;
+      const targetH = target.heading ?? 0;
+      let hDiff = ((targetH - prevH) % 360 + 540) % 360 - 180;
+      const nextHeading = (prevH + hDiff * 0.25 + 360) % 360;
       const next = {
-        latitude: lerp(display.latitude, target.latitude),
-        longitude: lerp(display.longitude, target.longitude),
-        heading: target.heading,
+        latitude:  lerp(display.latitude,  target.latitude,  0.5),
+        longitude: lerp(display.longitude, target.longitude, 0.5),
+        heading:   nextHeading,
       };
       driverDisplayRef.current = next;
       setDriverDisplayLocation({ ...next });
@@ -582,6 +634,7 @@ export default function HomeScreen() {
     setDestText('');
     setDestInputText('');
     setMapMode(null);
+    setRoadDistanceKm(null);
     freeRideKmRef.current = 0;
     setFreeRideKm(0);
     prevFreeDriverPosRef.current = null;
@@ -614,7 +667,10 @@ export default function HomeScreen() {
     freeRideKmRef.current = 0;
     setFreeRideKm(0);
     prevFreeDriverPosRef.current = null;
-    const distKm = tariffType === 'standard' ? calcDistanceKm(pickupCoords, destCoords) : 0;
+    // Use road distance if available (more accurate), fall back to haversine straight-line
+    const distKm = tariffType === 'standard'
+      ? (roadDistanceKm ?? calcDistanceKm(pickupCoords, destCoords))
+      : 0;
     try {
       const payload = {
         pickup_lat: pickupCoords.latitude,
@@ -688,7 +744,9 @@ export default function HomeScreen() {
           <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.5, y: 1 }} />
         )}
 
-        {/* Машина активного водителя — плавно интерполируется из WS обновлений */}
+        {/* Машина активного водителя — плавно интерполируется из WS обновлений.
+             forceTrack={true} обязателен: без него tracksViewChanges=false кэширует
+             нативный маркер и rotation перестаёт обновляться после загрузки иконки. */}
         {driverDisplayLocation && (
           <PinMarker
             coordinate={{ latitude: driverDisplayLocation.latitude, longitude: driverDisplayLocation.longitude }}
@@ -697,6 +755,7 @@ export default function HomeScreen() {
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={((driverDisplayLocation.heading ?? 0) + 180) % 360}
+            forceTrack
           />
         )}
         {/* Маршрут по дорогам — сплошная жёлтая линия */}
@@ -803,7 +862,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
             {tariffType === 'standard' && destCoords && pickupCoords ? (
               <Text style={[s.priceInline, { color: colors.primary }]}>
-                ~{calcPrice(calcDistanceKm(pickupCoords, destCoords)).toLocaleString()} {t(lang, 'sum')}
+                ~{calcPrice(roadDistanceKm ?? calcDistanceKm(pickupCoords, destCoords)).toLocaleString()} {t(lang, 'sum')}
               </Text>
             ) : tariffType === 'free' ? (
               <Text style={[s.priceInline, { color: colors.textSecondary }]}>
@@ -875,11 +934,21 @@ export default function HomeScreen() {
           {/* Кнопка заказа */}
           {((tariffType === 'standard' && destCoords) || (tariffType === 'free' && pickupCoords)) && (
             <View style={s.orderSection}>
-              <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
-                <Text style={s.orderBtnText}>
-                  {tariffType === 'free' ? t(lang, 'callFree') : t(lang, 'orderTaxi')}
-                </Text>
-              </TouchableOpacity>
+              {taxiMode === 'royal' ? (
+                <View style={[s.royalBanner, { borderColor: colors.border }]}>
+                  <Text style={[s.royalBannerTitle, { color: colors.text }]}>👑 Режим Royal Taxi</Text>
+                  <Text style={[s.royalBannerDesc, { color: colors.textSecondary }]}>
+                    Сейчас заказы принимаются только через диспетчера.{'\n'}
+                    Позвоните: <Text style={{ fontWeight: '700' }}>+998 71 000-00-00</Text>
+                  </Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
+                  <Text style={s.orderBtnText}>
+                    {tariffType === 'free' ? t(lang, 'callFree') : t(lang, 'orderTaxi')}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -1127,6 +1196,12 @@ function makeStyles(colors) {
     priceHint: { textAlign: 'center', marginBottom: 8, fontSize: 14 },
     orderBtn: { borderRadius: 14, padding: 14, alignItems: 'center' },
     orderBtnText: { fontWeight: '800', fontSize: 16, color: '#000' },
+    royalBanner: {
+      borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center',
+      backgroundColor: '#FFFDE7',
+    },
+    royalBannerTitle: { fontWeight: '800', fontSize: 15, marginBottom: 4 },
+    royalBannerDesc: { fontSize: 13, textAlign: 'center', lineHeight: 20 },
 
     // Recent trips
     historySection: { borderTopWidth: 1, marginTop: 8, paddingTop: 6 },

@@ -63,6 +63,12 @@ type Order struct {
 	ServiceFee          float64    `json:"service_fee"`
 	TotalPrice          *float64   `json:"total_price"`
 	SurgeMultiplier     float64    `json:"surge_multiplier"`
+	TripType            string     `json:"trip_type"`
+	OrderType           string     `json:"order_type"`    // "app" | "call"
+	PricingType         string     `json:"pricing_type"`  // "yandex" | "royal"
+	DispatcherPhone     string     `json:"dispatcher_phone"`
+	RoyalPricePerKm     float64    `json:"royal_price_per_km"`
+	LockedPricePerKm    float64    `json:"locked_price_per_km"`
 	CreatedAt           time.Time  `json:"created_at"`
 	AcceptedAt          *time.Time `json:"accepted_at"`
 	ArrivedAt           *time.Time `json:"arrived_at"`
@@ -75,14 +81,20 @@ type Order struct {
 }
 
 type PriceSettings struct {
-	ID                 int       `json:"id"`
-	PricePerKm         float64   `json:"price_per_km"`
-	PricePerMinuteWait float64   `json:"price_per_minute_wait"`
-	FreeWaitMinutes    int       `json:"free_wait_minutes"`
-	ServiceFee         float64   `json:"service_fee"`
-	SurgeMultiplier    float64   `json:"surge_multiplier"`
-	BaseSurgeMultiplier float64  `json:"base_surge_multiplier"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                  int       `json:"id"`
+	PricePerKm          float64   `json:"price_per_km"`
+	PricePerMinuteWait  float64   `json:"price_per_minute_wait"`
+	FreeWaitMinutes     int       `json:"free_wait_minutes"`
+	ServiceFee          float64   `json:"service_fee"`
+	SurgeMultiplier     float64   `json:"surge_multiplier"`
+	BaseSurgeMultiplier float64   `json:"base_surge_multiplier"`
+	RoyalPricePerKm     float64   `json:"royal_price_per_km"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type TaxiMode struct {
+	Mode      string    `json:"mode"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type SurgeSchedule struct {

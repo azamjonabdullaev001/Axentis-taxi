@@ -28,15 +28,42 @@ func (s *PricingService) GetSettings() (*models.PriceSettings, error) {
 	var ps models.PriceSettings
 	err := s.db.QueryRow(context.Background(),
 		`SELECT id, price_per_km, price_per_minute_wait, free_wait_minutes,
-		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0), updated_at
+		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0),
+		 COALESCE(royal_price_per_km, 3000), updated_at
 		 FROM price_settings ORDER BY id LIMIT 1`,
 	).Scan(&ps.ID, &ps.PricePerKm, &ps.PricePerMinuteWait, &ps.FreeWaitMinutes,
-		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier, &ps.UpdatedAt)
+		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier,
+		&ps.RoyalPricePerKm, &ps.UpdatedAt)
 	return &ps, err
 }
 
-func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPrice float64, surge float64) {
+// CalculateRoyalPrice computes final price for a Royal order.
+// Formula: ceil(distanceMeters / 100) * 100m blocks * (pricePerKm / 10)
+// Example: 305m → 400m → 4 blocks × (3000/10) = 4 × 300 = 1200 sum
+func (s *PricingService) CalculateRoyalPrice(distanceKm float64, pricePerKm float64) float64 {
+	distMeters := distanceKm * 1000
+	if distMeters < 1 {
+		distMeters = 100 // minimum 1 block = 100m
+	}
+	blocks := math.Ceil(distMeters / 100)
+	return blocks * (pricePerKm / 10)
+}
+
+// GetRoyalPricePerKm returns the royal tariff rate locked at order creation.
+func (s *PricingService) GetRoyalPricePerKm() float64 {
+	ps, err := s.GetSettings()
+	if err != nil {
+		return 3000
+	}
+	if ps.RoyalPricePerKm <= 0 {
+		return 3000
+	}
+	return ps.RoyalPricePerKm
+}
+
+func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPrice, surge, serviceFee float64) {
 	surge = 1.0
+	serviceFee = 2000 // fallback
 	// Шаг 100 м: 1–99 м → 100 м, 100–199 м → 200 м, 1070 м → 1100 м, и т.д.
 	// Каждые 100 м = 200 сум (при price_per_km = 2000)
 	distMeters := distanceKm * 1000
@@ -47,6 +74,7 @@ func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPri
 	roundedKm := roundedMeters / 1000
 	ps, err := s.GetSettings()
 	if err == nil {
+		serviceFee = ps.ServiceFee
 		if ps.SurgeMultiplier > 0 {
 			surge = ps.SurgeMultiplier
 		}

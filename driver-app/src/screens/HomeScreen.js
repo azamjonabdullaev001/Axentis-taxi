@@ -20,6 +20,54 @@ import {
 
 const CAR_ICON = require('../../assets/car-photo.png');
 
+// Маршрут по реальным дорогам (OSRM, steps=true для точной геометрии)
+// Возвращает { coords, distanceKm }
+async function fetchRoadRoute(pickup, dest) {
+  const lng1 = pickup.longitude, lat1 = pickup.latitude;
+  const lng2 = dest.longitude,   lat2 = dest.latitude;
+
+  function extractStepCoords(json) {
+    if (!json.routes?.[0]) return null;
+    const distanceKm = json.routes[0].distance / 1000;
+    const coords = [];
+    for (const leg of json.routes[0].legs) {
+      for (const step of leg.steps) {
+        for (const [lng, lat] of step.geometry.coordinates) {
+          if (coords.length === 0 ||
+              lat !== coords[coords.length - 1].latitude ||
+              lng !== coords[coords.length - 1].longitude) {
+            coords.push({ latitude: lat, longitude: lng });
+          }
+        }
+      }
+    }
+    if (coords.length < 2) return null;
+    return { coords, distanceKm };
+  }
+
+  const c1 = new AbortController();
+  const t1 = setTimeout(() => c1.abort(), 8000);
+  try {
+    const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
+    const res = await fetch(url, { signal: c1.signal });
+    clearTimeout(t1);
+    const result = extractStepCoords(await res.json());
+    if (result) return result;
+  } catch { clearTimeout(t1); }
+
+  const c2 = new AbortController();
+  const t2 = setTimeout(() => c2.abort(), 8000);
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
+    const res = await fetch(url, { signal: c2.signal });
+    clearTimeout(t2);
+    const result = extractStepCoords(await res.json());
+    if (result) return result;
+  } catch { clearTimeout(t2); }
+
+  return { coords: [pickup, dest], distanceKm: 0 };
+}
+
 const DRIVER_STATUS = {
   OFFLINE: 'offline',
   AVAILABLE: 'available',
@@ -51,10 +99,11 @@ export default function HomeScreen() {
   const locationSubscriptionRef = useRef(null);
   const compassSubscriptionRef = useRef(null);
   const locationBroadcastTimerRef = useRef(null);
-  const displayTimerRef = useRef(null);           // 50ms display refresh, decoupled from sensors
+  const displayTimerRef = useRef(null);           // 10ms display refresh, decoupled from sensors
   const lastBroadcastDataRef = useRef({ lat: null, lng: null, heading: 0 });
   const locationRef = useRef(null);               // raw GPS coords — updated at sensor speed (no re-render)
   const headingRef = useRef(0);                   // raw heading — updated at sensor speed (no re-render)
+  const prevCameraRef = useRef({ lat: null, lng: null, heading: -1 }); // last camera pos to skip redundant calls
   const driverStatusRef = useRef(DRIVER_STATUS.OFFLINE);
   const navModeRef = useRef(false);               // nav mode on/off, used inside GPS callback (no stale closure)
   const [driverStatus, setDriverStatus] = useState(DRIVER_STATUS.OFFLINE);
@@ -77,6 +126,7 @@ export default function HomeScreen() {
   // Falls back to order.pickup_lat/lng for routing when null
   const [passengerLiveLocation, setPassengerLiveLocation] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
+  const routeTargetRef = useRef(null); // last fetched target to avoid redundant OSRM calls
 
   // Wait timer (free 2 min, then 500 sum/min)
   const [waitSeconds, setWaitSeconds] = useState(0);
@@ -177,21 +227,46 @@ export default function HomeScreen() {
       }, 10);
     }
 
-    // ── 2. 10ms display timer — syncs refs → React state with position lerp ──
+    // ── 2. 10ms display timer — syncs refs → React state + SINGLE camera update ──
+    // All animateCamera calls go through here to prevent competing animations (flicker).
     displayTimerRef.current = setInterval(() => {
       const loc = locationRef.current;
-      if (loc) setLocation((prev) => {
-        if (!prev) return { ...loc };
-        // Exponential smoothing (alpha=0.18) — car slides smoothly to GPS target
-        // At 10ms tick rate: ~95% there in ~150ms, visually seamless
-        const ALPHA = 0.35;
-        const lat = prev.latitude  + (loc.latitude  - prev.latitude)  * ALPHA;
-        const lng = prev.longitude + (loc.longitude - prev.longitude) * ALPHA;
-        // Skip re-render if negligible change
-        if (Math.abs(lat - prev.latitude) < 1e-10 && Math.abs(lng - prev.longitude) < 1e-10) return prev;
-        return { latitude: lat, longitude: lng };
-      });
-      setHeading(headingRef.current);
+      const h = headingRef.current;
+      if (loc) {
+        setLocation((prev) => {
+          if (!prev) return { ...loc };
+          // Exponential smoothing (alpha=0.35) — car slides smoothly to GPS target
+          const ALPHA = 0.35;
+          const lat = prev.latitude  + (loc.latitude  - prev.latitude)  * ALPHA;
+          const lng = prev.longitude + (loc.longitude - prev.longitude) * ALPHA;
+          if (Math.abs(lat - prev.latitude) < 1e-10 && Math.abs(lng - prev.longitude) < 1e-10) return prev;
+          return { latitude: lat, longitude: lng };
+        });
+
+        // One authoritative camera call per tick — eliminates competing animation flicker.
+        // Skip if position/heading haven't changed meaningfully.
+        const prev = prevCameraRef.current;
+        const latD = Math.abs(loc.latitude - (prev.lat ?? loc.latitude));
+        const lngD = Math.abs(loc.longitude - (prev.lng ?? loc.longitude));
+        const hdD  = Math.abs(h - prev.heading);
+        if (latD > 1e-8 || lngD > 1e-8 || hdD > 0.3) {
+          prevCameraRef.current = { lat: loc.latitude, lng: loc.longitude, heading: h };
+          if (navModeRef.current) {
+            // Nav mode: map rotates with heading, car icon appears pointing up
+            mapRef.current?.animateCamera(
+              { center: loc, heading: h, pitch: 0 },
+              { duration: 10 },
+            );
+          } else {
+            // North-up mode: map stays fixed, car icon rotates via rotation prop
+            mapRef.current?.animateCamera(
+              { center: loc, heading: 0, pitch: 0 },
+              { duration: 150 },
+            );
+          }
+        }
+      }
+      setHeading(h);
     }, 10);
 
     // ── 3. GPS subscription (async IIFE, independent) ─────────────────────────
@@ -206,17 +281,7 @@ export default function HomeScreen() {
         lastBroadcastDataRef.current.lat = coords.latitude;
         lastBroadcastDataRef.current.lng = coords.longitude;
 
-        // Map camera follows the driver (direct animated call, no setState)
-        if (navModeRef.current) {
-          // Navigation mode: map rotates, car icon stays fixed pointing up on screen
-          mapRef.current?.animateCamera(
-            { center: coords, heading: headingRef.current, pitch: 0 },
-            { duration: 300 },
-          );
-        } else {
-          // Free mode: map stays north-up (heading=0), car icon rotates
-          mapRef.current?.animateCamera({ center: coords, heading: 0, pitch: 0 }, { duration: 300 });
-        }
+        // Camera is driven exclusively by the 10ms display timer to avoid competing animations.
 
         // GPS heading valid only while moving (speed > 0.5 m/s)
         const gpsH = loc.coords.heading;
@@ -252,13 +317,8 @@ export default function HomeScreen() {
           const h = (prev + diff * 0.4 + 360) % 360;
           headingRef.current = h;
           lastBroadcastDataRef.current.heading = h;
-          // Nav mode: rotate the MAP to match heading so icon appears pointing up on screen
-          if (navModeRef.current && locationRef.current) {
-            mapRef.current?.animateCamera(
-              { center: locationRef.current, heading: h, pitch: 0 },
-              { duration: 80 },
-            );
-          }
+          // Camera update is handled exclusively by the 10ms display timer.
+          // DO NOT call animateCamera here — it would compete with the timer and cause flicker.
         });
         if (dead) compassSub.remove();
         else compassSubscriptionRef.current = compassSub;
@@ -310,22 +370,33 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!location || !activeOrder) return;
 
+    let dest;
     if (driverStatus === DRIVER_STATUS.IN_PROGRESS) {
-      setRouteCoords([
-        location,
-        { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng },
-      ]);
-      return;
-    }
-
-    if (driverStatus === DRIVER_STATUS.ACCEPTED || driverStatus === DRIVER_STATUS.ARRIVED) {
-      // Use live passenger position if available, otherwise fall back to static pickup pin
-      const target = passengerLiveLocation || {
+      dest = { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng };
+    } else if (driverStatus === DRIVER_STATUS.ACCEPTED || driverStatus === DRIVER_STATUS.ARRIVED) {
+      dest = passengerLiveLocation || {
         latitude: activeOrder.pickup_lat,
         longitude: activeOrder.pickup_lng,
       };
-      setRouteCoords([location, target]);
+    } else {
+      return;
     }
+
+    // Skip re-fetch if target hasn't moved more than 30m
+    const prev = routeTargetRef.current;
+    if (prev) {
+      const dLat = Math.abs(dest.latitude - prev.latitude);
+      const dLng = Math.abs(dest.longitude - prev.longitude);
+      if (dLat < 0.00027 && dLng < 0.00027) return; // ~30m threshold
+    }
+    routeTargetRef.current = dest;
+
+    // Fetch road route; fall back to straight line if offline/slow
+    fetchRoadRoute(location, dest).then(({ coords }) => {
+      setRouteCoords(coords);
+    }).catch(() => {
+      setRouteCoords([location, dest]);
+    });
   }, [activeOrder, driverStatus, location, passengerLiveLocation]);
 
   function startCountdown(order) {
@@ -414,10 +485,13 @@ export default function HomeScreen() {
       const { data } = await driverAPI.startTrip(activeOrder.id);
       setDriverStatus(DRIVER_STATUS.IN_PROGRESS);
       if (location) {
-        setRouteCoords([
-          location,
-          { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng },
-        ]);
+        const dest = { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng };
+        routeTargetRef.current = null; // force re-fetch for new destination segment
+        fetchRoadRoute(location, dest).then(({ coords }) => {
+          setRouteCoords(coords);
+        }).catch(() => {
+          setRouteCoords([location, dest]);
+        });
       }
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
@@ -441,6 +515,7 @@ export default function HomeScreen() {
     setActiveOrder(null);
     setPassengerLiveLocation(null);
     setRouteCoords([]);
+    routeTargetRef.current = null;
     setDriverStatus(DRIVER_STATUS.AVAILABLE);
     stopWaitTimer();
     setWaitSeconds(0);
@@ -544,6 +619,7 @@ export default function HomeScreen() {
           onPress={() => {
             const next = !navMode;
             setNavMode(next);
+            prevCameraRef.current = { lat: null, lng: null, heading: -1 }; // force camera update on mode switch
             if (!next && location) {
               // Switching back to free mode: reset map bearing to north
               mapRef.current?.animateCamera({ center: location, heading: 0, pitch: 0 }, { duration: 400 });
@@ -642,6 +718,11 @@ export default function HomeScreen() {
             <Text style={[s.newOrderTitle, { color: colors.text }]}>{t(lang,'newOrder')}</Text>
             {incomingOrder && (
               <>
+                {incomingOrder.order_type === 'call' && (
+                  <View style={s.callBadge}>
+                    <Text style={s.callBadgeText}>📞 Звонковый заказ</Text>
+                  </View>
+                )}
                 <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
                   📍 {incomingOrder.pickup_address || t(lang,'from')}
                 </Text>
@@ -746,6 +827,11 @@ function makeStyles(colors) {
     },
     timerCount: { fontSize: 26, fontWeight: '800' },
     newOrderTitle: { fontSize: 20, fontWeight: '800', marginBottom: 12 },
+    callBadge: {
+      backgroundColor: '#E3F2FD', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5,
+      marginBottom: 10,
+    },
+    callBadgeText: { fontSize: 13, fontWeight: '700', color: '#1565C0' },
     orderDetail: { fontSize: 14, marginBottom: 4, textAlign: 'center' },
     orderPrice: { fontSize: 26, fontWeight: '800', marginVertical: 8 },
     orderDist: { fontSize: 14, marginBottom: 16 },

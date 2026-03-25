@@ -55,7 +55,7 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(db, cfg)
 	orderHandler := handlers.NewOrderHandler(db, hub, pricingService, pushService)
-	adminHandler := handlers.NewAdminHandler(db, cfg)
+	adminHandler := handlers.NewAdminHandlerFull(db, cfg, pricingService, hub, pushService)
 	wsHandler := handlers.NewWSHandler(hub, db)
 
 	api := r.Group("/api/v1")
@@ -109,11 +109,16 @@ func main() {
 			adminAPI.GET("/peak-periods", adminHandler.GetPeakPeriods)
 			adminAPI.POST("/peak-periods", adminHandler.CreatePeakPeriod)
 			adminAPI.DELETE("/peak-periods/:id", adminHandler.DeletePeakPeriod)
+			// Royal Taxi Mode
+			adminAPI.GET("/taxi-mode", adminHandler.GetTaxiMode)
+			adminAPI.PUT("/taxi-mode", adminHandler.SetTaxiMode)
+			adminAPI.POST("/call-orders", adminHandler.CreateCallOrder)
 		}
 
 		api.POST("/admin/login", adminHandler.Login)
-		// Публичный маршрут — тарифы нужны пассажирскому приложению без авторизации
+		// Public routes — no auth required (used by passenger app)
 		api.GET("/pricing/settings", adminHandler.GetPricingSettings)
+		api.GET("/taxi-mode", adminHandler.GetTaxiMode)
 	}
 
 	r.GET("/ws", wsHandler.Handle)
