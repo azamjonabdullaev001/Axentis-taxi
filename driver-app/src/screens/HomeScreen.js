@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { authAPI, driverAPI } from '../services/api';
+import { buildAvatarUrl } from '../services/api';
 import socket from '../services/socket';
 import { t } from '../i18n';
 import {
@@ -577,7 +578,8 @@ export default function HomeScreen() {
             coordinates={routeCoords}
             strokeColor={routeColor}
             strokeWidth={5}
-            lineDashPattern={driverStatus === DRIVER_STATUS.ACCEPTED ? [8, 4] : undefined}
+            lineCap="round"
+            lineJoin="round"
           />
         )}
       </MapView>
@@ -702,6 +704,20 @@ export default function HomeScreen() {
             <Text style={[s.newOrderTitle, { color: colors.text }]}>{t(lang,'newOrder')}</Text>
             {incomingOrder && (
               <>
+                {/* Passenger photo if available */}
+                {incomingOrder.passenger_photo ? (
+                  <Image
+                    source={{ uri: buildAvatarUrl(incomingOrder.passenger_photo) }}
+                    style={s.passengerPhoto}
+                  />
+                ) : (
+                  <View style={[s.passengerPhotoPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <Text style={{ fontSize: 30 }}>👤</Text>
+                  </View>
+                )}
+                <Text style={[s.passengerPhoneText, { color: colors.text }]}>
+                  📱 {incomingOrder.passenger_phone}
+                </Text>
                 {incomingOrder.order_type === 'call' && (
                   <View style={s.callBadge}>
                     <Text style={s.callBadgeText}>📞 Звонковый заказ</Text>
@@ -811,6 +827,15 @@ function makeStyles(colors) {
     },
     timerCount: { fontSize: 26, fontWeight: '800' },
     newOrderTitle: { fontSize: 20, fontWeight: '800', marginBottom: 12 },
+    passengerPhoto: {
+      width: 80, height: 80, borderRadius: 40, marginBottom: 8,
+      borderWidth: 2, borderColor: colors.primary,
+    },
+    passengerPhotoPlaceholder: {
+      width: 80, height: 80, borderRadius: 40, marginBottom: 8,
+      borderWidth: 2, alignItems: 'center', justifyContent: 'center',
+    },
+    passengerPhoneText: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
     callBadge: {
       backgroundColor: '#E3F2FD', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5,
       marginBottom: 10,

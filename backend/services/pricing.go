@@ -37,16 +37,39 @@ func (s *PricingService) GetSettings() (*models.PriceSettings, error) {
 	return &ps, err
 }
 
-// CalculateRoyalPrice computes final price for a Royal order.
-// Formula: ceil(distanceMeters / 100) * 100m blocks * (pricePerKm / 10)
-// Example: 305m → 400m → 4 blocks × (3000/10) = 4 × 300 = 1200 sum
-func (s *PricingService) CalculateRoyalPrice(distanceKm float64, pricePerKm float64) float64 {
+// CalculatePriceWithRate works exactly like CalculatePrice but uses the provided
+// pricePerKm instead of the one stored in settings. Royal dispatcher orders use
+// royal_price_per_km, but the formula (service_fee + distance + surge + 200-rounding)
+// is IDENTICAL to Yandex orders — no separate algorithm.
+func (s *PricingService) CalculatePriceWithRate(distanceKm float64, pricePerKm float64) (basePrice, totalPrice, surge, serviceFee float64) {
+	surge = 1.0
+	serviceFee = 2000 // fallback
 	distMeters := distanceKm * 1000
 	if distMeters < 1 {
-		distMeters = 100 // minimum 1 block = 100m
+		distMeters = 100
 	}
-	blocks := math.Ceil(distMeters / 100)
-	return blocks * (pricePerKm / 10)
+	roundedKm := math.Ceil(distMeters/100) * 100 / 1000
+	ps, err := s.GetSettings()
+	if err == nil {
+		serviceFee = ps.ServiceFee
+		if ps.SurgeMultiplier > 0 {
+			surge = ps.SurgeMultiplier
+		}
+		rawBase := ps.ServiceFee + roundedKm*pricePerKm
+		basePrice = math.Ceil(rawBase/200) * 200
+		totalPrice = math.Ceil((basePrice*surge)/200) * 200
+		return
+	}
+	rawBase := 2000.0 + roundedKm*pricePerKm
+	basePrice = math.Ceil(rawBase/200) * 200
+	totalPrice = basePrice
+	return
+}
+
+// CalculateRoyalPrice kept for backward compat but now delegates to CalculatePriceWithRate.
+func (s *PricingService) CalculateRoyalPrice(distanceKm float64, pricePerKm float64) float64 {
+	_, totalPrice, _, _ := s.CalculatePriceWithRate(distanceKm, pricePerKm)
+	return totalPrice
 }
 
 // GetRoyalPricePerKm returns the royal tariff rate locked at order creation.

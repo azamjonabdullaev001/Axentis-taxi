@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert, Image, Animated, ScrollView,
+  ActivityIndicator, Alert, Image, Animated, ScrollView, Modal,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -196,6 +196,7 @@ export default function HomeScreen() {
   const driverTargetRef = useRef(null);
   const driverDisplayRef = useRef(null);
   const smoothTimerRef = useRef(null);
+  const routeDriverTargetRef = useRef(null); // last driver pos used for OSRM fetch (30m throttle)
   const [driverDisplayLocation, setDriverDisplayLocation] = useState(null);
   const [driverInfo, setDriverInfo] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
@@ -214,6 +215,12 @@ export default function HomeScreen() {
   const tariffTypeRef = useRef('standard');
   const [lockedPricePerKm, setLockedPricePerKm] = useState(0);
   const lockedPricePerKmRef = useRef(0);
+
+  // Rating modal — shown after trip_completed
+  const [ratingModalVisible, setRatingModalVisible] = useState(false);
+  const [completedOrderId, setCompletedOrderId] = useState(null);
+  const [completedPrice, setCompletedPrice] = useState(null);
+  const [selectedRating, setSelectedRating] = useState(0);
 
   // Анимация пунктира "последней мили
   useEffect(() => {
@@ -292,8 +299,11 @@ export default function HomeScreen() {
       return;
     }
     let cancelled = false;
-    fetchRoadRoute(pickupCoords, destCoords).then((coords) => {
-      if (!cancelled) setRoutePreviewCoords(coords);
+    fetchRoadRoute(pickupCoords, destCoords).then(({ coords, distanceKm }) => {
+      if (!cancelled) {
+        setRoutePreviewCoords(coords);
+        setRoadDistanceKm(distanceKm);
+      }
     });
     return () => { cancelled = true; };
   }, [pickupCoords, destCoords]);
@@ -416,6 +426,27 @@ export default function HomeScreen() {
     return () => clearInterval(smoothTimerRef.current);
   }, [orderStatus]);
 
+  // ── Road route for active order (driver → pickup or destination via OSRM) ──
+  // Throttled: only refetches when driver moves more than ~30m.
+  useEffect(() => {
+    const isActive = [ORDER_STATUS.ACCEPTED, ORDER_STATUS.ARRIVED, ORDER_STATUS.IN_PROGRESS].includes(orderStatus);
+    if (!isActive || !driverLocation) return;
+    const dest = orderStatus === ORDER_STATUS.IN_PROGRESS ? destCoords : pickupCoords;
+    if (!dest) return;
+    const prev = routeDriverTargetRef.current;
+    if (prev) {
+      const dLat = Math.abs(driverLocation.latitude - prev.latitude);
+      const dLng = Math.abs(driverLocation.longitude - prev.longitude);
+      if (dLat < 0.00027 && dLng < 0.00027) return;
+    }
+    routeDriverTargetRef.current = { ...driverLocation };
+    fetchRoadRoute(driverLocation, dest).then(({ coords }) => {
+      setRouteCoords(coords);
+    }).catch(() => {
+      setRouteCoords([driverLocation, dest].filter(Boolean));
+    });
+  }, [driverLocation, orderStatus, pickupCoords, destCoords]);
+
   useEffect(() => { orderStatusRef.current = orderStatus; }, [orderStatus]);
   useEffect(() => { orderIDRef.current = orderID; }, [orderID]);
   useEffect(() => { tariffTypeRef.current = tariffType; }, [tariffType]);
@@ -513,10 +544,11 @@ export default function HomeScreen() {
       const finalPrice = tariffTypeRef.current === 'free'
         ? Math.ceil((svc + freeRoundedKm * rate) / 200) * 200
         : Math.ceil((data.total_price || 0) / 200) * 200;
+      setCompletedOrderId(orderIDRef.current);
+      setCompletedPrice(finalPrice);
+      setSelectedRating(0);
       setOrderStatus(ORDER_STATUS.COMPLETED);
-      Alert.alert(t(lang,'tripCompleted'), `${t(lang,'total')}: ${finalPrice?.toLocaleString()} ${t(lang,'sum')}`, [
-        { text: 'OK', onPress: resetOrder },
-      ]);
+      setRatingModalVisible(true);
     });
     socket.on('driver_location', (data) => {
       const pos = { latitude: data.lat, longitude: data.lng, heading: data.heading ?? 0 };
@@ -537,11 +569,7 @@ export default function HomeScreen() {
         }
         prevFreeDriverPosRef.current = pos;
       }
-      setRouteCoords([
-        { latitude: data.lat, longitude: data.lng },
-        orderStatusRef.current === ORDER_STATUS.IN_PROGRESS && tariffTypeRef.current === 'standard'
-          ? destCoords : pickupCoords,
-      ].filter(Boolean));
+      // Route line is updated by the separate OSRM useEffect (throttled to ~30m movement)
     });
     socket.on('no_drivers', () => {
       setOrderStatus(ORDER_STATUS.IDLE);
@@ -758,28 +786,25 @@ export default function HomeScreen() {
           />
         )}
 
-        {/* Последняя миля: анимированный пунктир от конца дороги до финишного пина */}
+        {/* Последняя миля: сплошная линия от конца OSRM-маршрута до финишного пина */}
         {routePreviewCoords.length >= 2 && destCoords && !mapMode && (() => {
           const lastPt = routePreviewCoords[routePreviewCoords.length - 1];
           const dist = Math.abs(lastPt.latitude - destCoords.latitude) +
                        Math.abs(lastPt.longitude - destCoords.longitude);
           if (dist < 0.00005) return null;
-          // Адаптивный размер точек: визуально ~10px при любом зуме
-          const dot  = Math.round(Math.max(5,  Math.min(40, 10 / (region.latitudeDelta * 100))));
-          const gap  = Math.round(dot * 1.6);
           return (
             <Polyline
               coordinates={[lastPt, destCoords]}
               strokeColor="#FFCC00"
               strokeWidth={4}
-              lineDashPattern={[dot, gap]}
-              lineDashPhase={dashPhase}
               geodesic
+              lineCap="round"
+              lineJoin="round"
             />
           );
         })()}
 
-        {/* Маршрут водителя: driver → pickup / destination */}
+        {/* Маршрут эктивного водителя: driver → pickup / destination */}
         {routeCoords.length >= 2 && (
           <Polyline
             coordinates={routeCoords}
@@ -788,7 +813,6 @@ export default function HomeScreen() {
             geodesic
             lineCap="round"
             lineJoin="round"
-            lineDashPattern={orderStatus === ORDER_STATUS.ACCEPTED ? [8, 4] : undefined}
           />
         )}
       </MapView>
@@ -1052,6 +1076,13 @@ export default function HomeScreen() {
                   <Text style={[s.driverName, { color: colors.text }]}>{driverInfo.first_name} {driverInfo.last_name}</Text>
                   <Text style={[s.driverDetail, { color: colors.textSecondary }]}>📱 {driverInfo.phone}</Text>
                   <Text style={[s.driverDetail, { color: colors.primary, fontWeight: '700' }]}>🚗 {driverInfo.car_number}</Text>
+                  {driverInfo.average_rating > 0 && (
+                    <Text style={{ color: '#FFC107', fontSize: 13, marginTop: 2 }}>
+                      {'★'.repeat(Math.round(driverInfo.average_rating))}{'☆'.repeat(5 - Math.round(driverInfo.average_rating))}
+                      {'  '}
+                      <Text style={{ color: colors.textSecondary }}>{Number(driverInfo.average_rating).toFixed(1)} ({driverInfo.rating_count})</Text>
+                    </Text>
+                  )}
                 </View>
               </View>
             </View>
@@ -1107,6 +1138,51 @@ export default function HomeScreen() {
           )}
         </View>
       )}
+
+      {/* ── Rating modal — shown after trip completion ── */}
+      <Modal visible={ratingModalVisible} transparent animationType="fade">
+        <View style={s.ratingOverlay}>
+          <View style={[s.ratingModal, { backgroundColor: colors.background }]}>
+            <Text style={[s.ratingTitle, { color: colors.text }]}>🎉 Спасибо, что выбрали нас!</Text>
+            {completedPrice != null && (
+              <Text style={[s.ratingPrice, { color: colors.primary }]}>
+                Итого: {completedPrice.toLocaleString()} {t(lang,'sum')}
+              </Text>
+            )}
+            <Text style={[s.ratingSubtitle, { color: colors.textSecondary }]}>
+              Оцените водителя
+            </Text>
+            <View style={s.starsRow}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <TouchableOpacity key={star} onPress={() => setSelectedRating(star)} activeOpacity={0.7} style={s.starBtn}>
+                  <Text style={[s.starIcon, { color: star <= selectedRating ? '#FFC107' : colors.border }]}>★</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={s.ratingActions}>
+              <TouchableOpacity
+                style={[s.ratingSkipBtn, { borderColor: colors.border }]}
+                onPress={() => { setRatingModalVisible(false); resetOrder(); }}
+              >
+                <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>Пропустить</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.ratingSubmitBtn, { backgroundColor: selectedRating > 0 ? colors.primary : colors.border }]}
+                disabled={selectedRating === 0}
+                onPress={() => {
+                  if (completedOrderId && selectedRating > 0) {
+                    orderAPI.rateDriver(completedOrderId, selectedRating).catch(() => {});
+                  }
+                  setRatingModalVisible(false);
+                  resetOrder();
+                }}
+              >
+                <Text style={{ color: '#000', fontWeight: '800' }}>Отправить</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1259,6 +1335,32 @@ function makeStyles(colors) {
       backgroundColor: '#4285F4',
       borderWidth: 2, borderColor: '#fff',
       shadowColor: '#4285F4', shadowOpacity: 0.6, shadowRadius: 4, elevation: 5,
+    },
+
+    // Rating modal
+    ratingOverlay: {
+      flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+      justifyContent: 'center', alignItems: 'center',
+    },
+    ratingModal: {
+      width: '88%', borderRadius: 20, padding: 24,
+      elevation: 20, shadowOpacity: 0.3, shadowRadius: 10, shadowColor: '#000',
+      alignItems: 'center',
+    },
+    ratingTitle: { fontSize: 20, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
+    ratingPrice: { fontSize: 22, fontWeight: '900', marginBottom: 4 },
+    ratingSubtitle: { fontSize: 14, marginBottom: 16, textAlign: 'center' },
+    starsRow: { flexDirection: 'row', gap: 6, marginBottom: 24 },
+    starBtn: { padding: 4 },
+    starIcon: { fontSize: 42, lineHeight: 46 },
+    ratingActions: { flexDirection: 'row', gap: 12, width: '100%' },
+    ratingSkipBtn: {
+      flex: 1, paddingVertical: 13, borderRadius: 12, borderWidth: 1,
+      alignItems: 'center',
+    },
+    ratingSubmitBtn: {
+      flex: 2, paddingVertical: 13, borderRadius: 12,
+      alignItems: 'center',
     },
   });
 }

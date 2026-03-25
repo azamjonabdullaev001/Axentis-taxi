@@ -50,6 +50,7 @@ export const driverAPI = {
   startTrip: (id) => api.post(`/orders/${id}/start`),
   completeTrip: (id) => api.post(`/orders/${id}/complete`),
   getHistory: () => api.get('/orders/history'),
+  getDriverRatings: () => api.get('/driver/ratings'),
 };
 
 export default api;

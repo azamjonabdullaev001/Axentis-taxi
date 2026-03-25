@@ -86,6 +86,8 @@ func main() {
 			protected.POST("/orders/:id/complete", orderHandler.CompleteOrder)
 			protected.POST("/orders/:id/cancel", orderHandler.CancelOrder)
 			protected.PUT("/orders/:id/distance", orderHandler.UpdateOrderDistance)
+			protected.POST("/orders/:id/rate", orderHandler.RateDriver)
+			protected.GET("/driver/ratings", orderHandler.GetDriverRatings)
 
 			protected.PUT("/driver/location", orderHandler.UpdateDriverLocation)
 			protected.PUT("/driver/availability", orderHandler.UpdateDriverAvailability)

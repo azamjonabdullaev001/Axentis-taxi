@@ -7,7 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { authAPI } from '../services/api';
+import { authAPI, driverAPI } from '../services/api';
 import { buildAvatarUrl } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../config';
@@ -21,6 +21,14 @@ export default function ProfileScreen() {
   const [langModal, setLangModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const insets = useSafeAreaInsets();
+
+  // Ratings
+  const [ratingsData, setRatingsData] = useState({ ratings: [], average_rating: 5.0, rating_count: 0 });
+  const [ratingsExpanded, setRatingsExpanded] = useState(false);
+
+  useEffect(() => {
+    driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
+  }, []);
 
   async function handlePickImage() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -108,6 +116,49 @@ export default function ProfileScreen() {
         <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
       </TouchableOpacity>
 
+      {/* Ratings section */}
+      <View style={[s.section, { backgroundColor: colors.card, marginTop: 20 }]}>
+        <TouchableOpacity style={s.row} onPress={() => setRatingsExpanded(!ratingsExpanded)} activeOpacity={0.8}>
+          <View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>⭐ Мои оценки</Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+              {ratingsData.average_rating.toFixed(1)} / 5.0 ({ratingsData.rating_count} оценок)
+            </Text>
+          </View>
+          <Text style={{ color: colors.primary, fontSize: 18 }}>{ratingsExpanded ? '▲' : '▼'}</Text>
+        </TouchableOpacity>
+        <View style={s.ratingSummaryRow}>
+          {[1,2,3,4,5].map((star) => (
+            <Text key={star} style={{ fontSize: 28, color: star <= Math.round(ratingsData.average_rating) ? '#FFC107' : colors.border }}>★</Text>
+          ))}
+          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800', marginLeft: 8 }}>
+            {ratingsData.average_rating.toFixed(1)}
+          </Text>
+        </View>
+        {ratingsExpanded && ratingsData.ratings.length > 0 && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+            {ratingsData.ratings.map((r, idx) => (
+              <View key={idx} style={[s.ratingRow, { borderTopColor: colors.border }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 14 }}>{r.passenger_name || 'Пассажир'}</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                    {new Date(r.created_at).toLocaleDateString('ru-RU')}
+                  </Text>
+                </View>
+                <Text style={{ color: '#FFC107', fontSize: 20 }}>
+                  {'★'.repeat(Math.round(r.rating))}{'☆'.repeat(5 - Math.round(r.rating))}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+        {ratingsExpanded && ratingsData.ratings.length === 0 && (
+          <Text style={{ color: colors.textSecondary, textAlign: 'center', paddingVertical: 16, fontSize: 14 }}>
+            Оценок пока нет
+          </Text>
+        )}
+      </View>
+
       <Modal visible={langModal} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <View style={[s.modalSheet, { backgroundColor: colors.background }]}>
@@ -150,6 +201,8 @@ function makeStyles(colors) {
     row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
     rowLabel: { fontSize: 15 },
     logoutBtn: { borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center' },
+    ratingSummaryRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1 },
     modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
     modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
     modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 20 },

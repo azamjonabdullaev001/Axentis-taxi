@@ -182,4 +182,18 @@ INSERT INTO taxi_mode (mode) SELECT 'yandex' WHERE NOT EXISTS (SELECT 1 FROM tax
 
 -- Royal pricing settings (separate from Yandex price_settings)
 ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS royal_price_per_km DECIMAL(12,2) DEFAULT 3000;
+
+-- Driver ratings: one rating per completed order (passenger rates driver)
+CREATE TABLE IF NOT EXISTS ratings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+    driver_id UUID REFERENCES drivers(id) ON DELETE CASCADE,
+    passenger_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    rating DECIMAL(2,1) NOT NULL CHECK (rating >= 1.0 AND rating <= 5.0),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (order_id)
+);
+
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS average_rating DECIMAL(3,2) DEFAULT 5.0;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS rating_count INTEGER DEFAULT 0;
 `

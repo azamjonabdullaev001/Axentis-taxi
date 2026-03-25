@@ -177,18 +177,23 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 
 	if o.DriverID != nil && *o.DriverID != "" {
 		var firstName, lastName, phone, carNumber, avatarURL string
+		var avgRating float64
+		var ratingCount int
 		h.db.QueryRow(context.Background(),
 			`SELECT COALESCE(u.first_name,''), COALESCE(u.last_name,''), COALESCE(u.phone,''),
-			 COALESCE(d.car_number,''), COALESCE(u.avatar_url,'')
+			 COALESCE(d.car_number,''), COALESCE(u.avatar_url,''),
+			 COALESCE(d.average_rating, 5.0), COALESCE(d.rating_count, 0)
 			 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
 			*o.DriverID,
-		).Scan(&firstName, &lastName, &phone, &carNumber, &avatarURL)
+		).Scan(&firstName, &lastName, &phone, &carNumber, &avatarURL, &avgRating, &ratingCount)
 		resp["driver"] = gin.H{
-			"first_name": firstName,
-			"last_name":  lastName,
-			"phone":      phone,
-			"car_number": carNumber,
-			"avatar_url": avatarURL,
+			"first_name":     firstName,
+			"last_name":      lastName,
+			"phone":          phone,
+			"car_number":     carNumber,
+			"avatar_url":     avatarURL,
+			"average_rating": avgRating,
+			"rating_count":   ratingCount,
 		}
 	}
 
@@ -304,11 +309,15 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 
 	var driverFirstName, driverLastName, driverPhone, driverCarNumber string
 	var driverAvatarURL *string
+	var driverAvgRating float64
+	var driverRatingCount int
 	h.db.QueryRow(context.Background(),
-		`SELECT u.first_name, u.last_name, u.phone, d.car_number, u.avatar_url
+		`SELECT u.first_name, u.last_name, u.phone, d.car_number, u.avatar_url,
+		 COALESCE(d.average_rating, 5.0), COALESCE(d.rating_count, 0)
 		 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
 		driverID,
-	).Scan(&driverFirstName, &driverLastName, &driverPhone, &driverCarNumber, &driverAvatarURL)
+	).Scan(&driverFirstName, &driverLastName, &driverPhone, &driverCarNumber, &driverAvatarURL,
+		&driverAvgRating, &driverRatingCount)
 
 	avatarStr := ""
 	if driverAvatarURL != nil {
@@ -319,12 +328,14 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 		"type":      "order_accepted",
 		"order_id":  orderID,
 		"driver_id": driverID,
-		"driver": map[string]string{
-			"first_name": driverFirstName,
-			"last_name":  driverLastName,
-			"phone":      driverPhone,
-			"car_number": driverCarNumber,
-			"avatar_url": avatarStr,
+		"driver": map[string]interface{}{
+			"first_name":     driverFirstName,
+			"last_name":      driverLastName,
+			"phone":          driverPhone,
+			"car_number":     driverCarNumber,
+			"avatar_url":     avatarStr,
+			"average_rating": driverAvgRating,
+			"rating_count":   driverRatingCount,
 		},
 	})
 	h.hub.SendToUser(passengerID, msg)
@@ -750,3 +761,111 @@ func (h *OrderHandler) UpdateDriverAvailability(c *gin.Context) {
 	)
 	c.JSON(http.StatusOK, gin.H{"available": req.Available})
 }
+
+// RateDriver — passenger rates the driver after a completed trip (1–5 stars).
+func (h *OrderHandler) RateDriver(c *gin.Context) {
+	if c.GetString("user_role") != "passenger" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only passengers can rate drivers"})
+		return
+	}
+	orderID := c.Param("id")
+	userID := c.GetString("user_id")
+
+	var req struct {
+		Rating float64 `json:"rating" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Rating < 1 || req.Rating > 5 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Rating must be between 1 and 5"})
+		return
+	}
+	// Round to nearest 0.5
+	rating := math.Round(req.Rating*2) / 2
+
+	// Verify the order belongs to this passenger and is completed
+	var driverID string
+	err := h.db.QueryRow(context.Background(),
+		`SELECT driver_id FROM orders WHERE id = $1 AND passenger_id = $2 AND status = 'completed'`,
+		orderID, userID,
+	).Scan(&driverID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found or not completed"})
+		return
+	}
+
+	// Insert rating; silently ignore if this order was already rated
+	h.db.Exec(context.Background(),
+		`INSERT INTO ratings (order_id, driver_id, passenger_id, rating)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (order_id) DO NOTHING`,
+		orderID, driverID, userID, rating,
+	)
+
+	// Recalculate driver's average rating
+	h.db.Exec(context.Background(),
+		`UPDATE drivers
+		 SET rating_count = (SELECT COUNT(*) FROM ratings WHERE driver_id = $1),
+		     average_rating = (SELECT ROUND(AVG(rating)::numeric, 2) FROM ratings WHERE driver_id = $1)
+		 WHERE id = $1`,
+		driverID,
+	)
+
+	c.JSON(http.StatusOK, gin.H{"message": "Rating saved", "rating": rating})
+}
+
+// GetDriverRatings — driver views their own rating history.
+func (h *OrderHandler) GetDriverRatings(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID,
+	).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	rows, err := h.db.Query(context.Background(),
+		`SELECT r.rating, r.created_at,
+		 COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') AS passenger_name
+		 FROM ratings r
+		 JOIN users u ON r.passenger_id = u.id
+		 WHERE r.driver_id = $1
+		 ORDER BY r.created_at DESC LIMIT 100`,
+		driverID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch ratings"})
+		return
+	}
+	defer rows.Close()
+
+	type ratingRow struct {
+		Rating        float64   `json:"rating"`
+		CreatedAt     time.Time `json:"created_at"`
+		PassengerName string    `json:"passenger_name"`
+	}
+	list := []ratingRow{}
+	for rows.Next() {
+		var r ratingRow
+		rows.Scan(&r.Rating, &r.CreatedAt, &r.PassengerName)
+		list = append(list, r)
+	}
+
+	var avgRating float64
+	var ratingCount int
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(ROUND(AVG(rating)::numeric,2),5.0), COUNT(*) FROM ratings WHERE driver_id = $1`,
+		driverID,
+	).Scan(&avgRating, &ratingCount)
+
+	c.JSON(http.StatusOK, gin.H{
+		"ratings":        list,
+		"average_rating": avgRating,
+		"rating_count":   ratingCount,
+	})
+}
+

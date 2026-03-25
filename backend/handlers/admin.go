@@ -597,10 +597,23 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		}
 	}
 
-	// Estimate price if distance provided
-	var estimatedPrice float64
+	// Estimate price if distance provided — use same formula as Yandex (service_fee + km*rate + surge)
+	var baseP, totalP, surgeV, serviceFeeV float64
+	surgeV = 1.0
+	if h.pricingService != nil {
+		ps, _ := h.pricingService.GetSettings()
+		if ps != nil {
+			serviceFeeV = ps.ServiceFee
+			surgeV = ps.SurgeMultiplier
+			if surgeV <= 0 {
+				surgeV = 1.0
+			}
+		} else {
+			serviceFeeV = 2000
+		}
+	}
 	if req.DistanceKm > 0 && h.pricingService != nil {
-		estimatedPrice = h.pricingService.CalculateRoyalPrice(req.DistanceKm, royalPricePerKm)
+		baseP, totalP, surgeV, serviceFeeV = h.pricingService.CalculatePriceWithRate(req.DistanceKm, royalPricePerKm)
 	}
 
 	orderID := uuid.New().String()
@@ -609,14 +622,14 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		 (id, passenger_id, status, pickup_lat, pickup_lng, pickup_address,
 		  destination_lat, destination_lng, destination_address, distance_km,
 		  base_price, total_price, service_fee, surge_multiplier,
-		  order_type, pricing_type, dispatcher_phone, royal_price_per_km)
+		  order_type, pricing_type, dispatcher_phone, royal_price_per_km, locked_price_per_km)
 		 VALUES
 		 ($1, $2, 'searching', $3, $4, $5, $6, $7, $8, $9,
-		  $10, $10, 0, 1.0, 'call', 'royal', $11, $12)`,
+		  $10, $11, $12, $13, 'call', 'royal', $14, $15, $15)`,
 		orderID, passengerID,
 		req.PickupLat, req.PickupLng, req.PickupAddress,
 		req.DestinationLat, req.DestinationLng, req.DestinationAddress,
-		req.DistanceKm, estimatedPrice,
+		req.DistanceKm, baseP, totalP, serviceFeeV, surgeV,
 		req.DispatcherPhone, royalPricePerKm,
 	)
 	if err != nil {
@@ -630,10 +643,10 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"order_id":          orderID,
-		"passenger_id":      passengerID,
+		"order_id":           orderID,
+		"passenger_id":       passengerID,
 		"royal_price_per_km": royalPricePerKm,
-		"estimated_price":   estimatedPrice,
-		"message":           "Call order created and driver search started",
+		"estimated_price":    totalP,
+		"message":            "Call order created and driver search started",
 	})
 }

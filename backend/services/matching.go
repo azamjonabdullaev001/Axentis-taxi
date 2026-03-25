@@ -102,19 +102,23 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		EstimatedPrice     float64 `json:"estimated_price"`
 		PassengerPhone     string  `json:"passenger_phone"`
 		PassengerName      string  `json:"passenger_name"`
+		PassengerPhoto     string  `json:"passenger_photo"`
+		OrderType          string  `json:"order_type"`
 	}
 
 	err := s.db.QueryRow(context.Background(),
 		`SELECT o.id, o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''), 
 		 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(o.destination_address,''),
 		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0),
-		 u.phone, u.first_name || ' ' || u.last_name
+		 u.phone, u.first_name || ' ' || u.last_name,
+		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app')
 		 FROM orders o JOIN users u ON o.passenger_id = u.id
 		 WHERE o.id = $1`, orderID,
 	).Scan(&orderData.ID, &orderData.PickupLat, &orderData.PickupLng, &orderData.PickupAddress,
 		&orderData.DestinationLat, &orderData.DestinationLng, &orderData.DestinationAddress,
 		&orderData.DistanceKm, &orderData.EstimatedPrice,
-		&orderData.PassengerPhone, &orderData.PassengerName)
+		&orderData.PassengerPhone, &orderData.PassengerName,
+		&orderData.PassengerPhoto, &orderData.OrderType)
 	if err != nil {
 		log.Printf("Failed to get order data: %v", err)
 		return
