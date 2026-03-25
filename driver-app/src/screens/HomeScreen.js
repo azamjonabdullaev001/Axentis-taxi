@@ -390,6 +390,11 @@ export default function HomeScreen() {
 
     let dest;
     if (driverStatus === DRIVER_STATUS.IN_PROGRESS) {
+      // Free mode has no destination — skip routing
+      if (activeOrder.trip_type === 'free') {
+        setRouteCoords([]);
+        return;
+      }
       dest = { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng };
     } else if (driverStatus === DRIVER_STATUS.ACCEPTED || driverStatus === DRIVER_STATUS.ARRIVED) {
       dest = passengerLiveLocation || {
@@ -508,7 +513,7 @@ export default function HomeScreen() {
       meteredKmRef.current = 0;
       setMeteredKm(0);
       prevMeterPosRef.current = null;
-      if (location) {
+      if (location && activeOrder.trip_type !== 'free') {
         const dest = { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng };
         routeTargetRef.current = null; // force re-fetch for new destination segment
         fetchRoadRoute(location, dest).then(({ coords }) => {
@@ -516,6 +521,8 @@ export default function HomeScreen() {
         }).catch(() => {
           setRouteCoords([location, dest]);
         });
+      } else {
+        setRouteCoords([]);
       }
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
@@ -613,7 +620,7 @@ export default function HomeScreen() {
             </View>
           </Marker>
         )}
-        {activeOrder && (
+        {activeOrder && activeOrder.trip_type !== 'free' && activeOrder.destination_lat && activeOrder.destination_lng && (
           <Marker
             coordinate={{ latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng }}
             title="Цель">
@@ -695,9 +702,11 @@ export default function HomeScreen() {
             <Text style={[s.addressText, { color: colors.textSecondary }]}>
               📍 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
             </Text>
-            <Text style={[s.addressText, { color: colors.textSecondary }]}>
-              🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
-            </Text>
+            {activeOrder.trip_type !== 'free' && activeOrder.destination_address ? (
+              <Text style={[s.addressText, { color: colors.textSecondary }]}>
+                🎯 {activeOrder.destination_address}
+              </Text>
+            ) : null}
             <Text style={[s.priceText, { color: colors.primary }]}>
               {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
             </Text>
@@ -734,20 +743,35 @@ export default function HomeScreen() {
         {driverStatus === DRIVER_STATUS.IN_PROGRESS && activeOrder && (
           <View>
             <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'passengerOnboard')}</Text>
-            <Text style={[s.addressText, { color: colors.textSecondary }]}>
-              🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
-            </Text>
-            <Text style={[s.priceText, { color: colors.primary, fontSize: 28 }]}>
-              {t(lang,'meterRunning')}: {(() => {
-                const rate = meteredPricePerKm.current || 3000;
-                const m = meteredKm * 1000;
-                const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
-                return Math.ceil(rKm * rate / 200) * 200;
-              })().toLocaleString()} {t(lang,'sum')}
-            </Text>
-            <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
-              {meteredKm.toFixed(2)} {t(lang,'km')}
-            </Text>
+            {activeOrder.destination_address ? (
+              <Text style={[s.addressText, { color: colors.textSecondary }]}>
+                🎯 {activeOrder.destination_address}
+              </Text>
+            ) : null}
+            {(activeOrder.trip_type === 'free' || activeOrder.order_type === 'call') ? (
+              <>
+                <Text style={[s.priceText, { color: colors.primary, fontSize: 28 }]}>
+                  {t(lang,'meterRunning')}: {(() => {
+                    const rate = meteredPricePerKm.current || 3000;
+                    const m = meteredKm * 1000;
+                    const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
+                    return Math.ceil(rKm * rate / 200) * 200;
+                  })().toLocaleString()} {t(lang,'sum')}
+                </Text>
+                <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
+                  {meteredKm.toFixed(2)} {t(lang,'km')}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={[s.priceText, { color: colors.primary }]}>
+                  {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
+                </Text>
+                <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
+                  {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
+                </Text>
+              </>
+            )}
             <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.success }]} onPress={handleCompleteTrip}>
               <Text style={s.actionBtnText}>{t(lang,'completeTrip')}</Text>
             </TouchableOpacity>
@@ -787,15 +811,25 @@ export default function HomeScreen() {
                 <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
                   📍 {incomingOrder.pickup_address || t(lang,'from')}
                 </Text>
-                <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                  🎯 {incomingOrder.destination_address || t(lang,'to')}
-                </Text>
-                <Text style={[s.orderPrice, { color: colors.primary }]}>
-                  {(incomingOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
-                </Text>
-                <Text style={[s.orderDist, { color: colors.textSecondary }]}>
-                  {(incomingOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
-                </Text>
+                {incomingOrder.trip_type !== 'free' && incomingOrder.destination_address ? (
+                  <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
+                    🎯 {incomingOrder.destination_address}
+                  </Text>
+                ) : incomingOrder.trip_type === 'free' ? (
+                  <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
+                    🔄 {t(lang,'free')}
+                  </Text>
+                ) : null}
+                {incomingOrder.trip_type !== 'free' && (
+                  <>
+                    <Text style={[s.orderPrice, { color: colors.primary }]}>
+                      {(incomingOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
+                    </Text>
+                    <Text style={[s.orderDist, { color: colors.textSecondary }]}>
+                      {(incomingOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
+                    </Text>
+                  </>
+                )}
               </>
             )}
             <View style={s.orderBtns}>

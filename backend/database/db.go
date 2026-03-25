@@ -196,4 +196,8 @@ CREATE TABLE IF NOT EXISTS ratings (
 
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS average_rating DECIMAL(3,2) DEFAULT 5.0;
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS rating_count INTEGER DEFAULT 0;
+
+-- Indexes for fast order history queries
+CREATE INDEX IF NOT EXISTS idx_orders_passenger_id_created ON orders (passenger_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_driver_id_created ON orders (driver_id, created_at DESC);
 `

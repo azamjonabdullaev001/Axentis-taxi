@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
-  Image, Switch, Alert, ActivityIndicator, Modal,
+  Image, Switch, Alert, ActivityIndicator, Modal, FlatList,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -25,9 +25,24 @@ export default function ProfileScreen() {
   // Ratings
   const [ratingsData, setRatingsData] = useState({ ratings: [], average_rating: 5.0, rating_count: 0 });
 
+  // Trip history
+  const [orders, setOrders] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyModalVisible, setHistoryModalVisible] = useState(false);
+
   useEffect(() => {
     driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
+    loadHistory();
   }, []);
+
+  async function loadHistory() {
+    setLoadingHistory(true);
+    try {
+      const { data } = await driverAPI.getHistory();
+      setOrders(data.orders || []);
+    } catch {}
+    setLoadingHistory(false);
+  }
 
   async function handlePickImage() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -141,6 +156,75 @@ export default function ProfileScreen() {
           </Text>
         </View>
       </View>
+
+      {/* Trip history */}
+      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <TouchableOpacity style={s.row} onPress={() => { loadHistory(); setHistoryModalVisible(true); }}>
+          <Text style={[s.rowLabel, { color: colors.text }]}>📋 {t(lang,'tripHistory') || 'История поездок'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {loadingHistory
+              ? <ActivityIndicator size="small" color={colors.textSecondary} />
+              : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
+            <Text style={{ color: colors.textSecondary, fontSize: 18 }}>›</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* History modal */}
+      <Modal visible={historyModalVisible} animationType="slide" onRequestClose={() => setHistoryModalVisible(false)}>
+        <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            <TouchableOpacity onPress={() => setHistoryModalVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={{ color: colors.primary, fontSize: 16 }}>← {t(lang, 'back') || 'Назад'}</Text>
+            </TouchableOpacity>
+            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1, textAlign: 'center', marginRight: 40 }}>
+              {t(lang, 'tripHistory') || 'История поездок'}
+            </Text>
+          </View>
+          {loadingHistory
+            ? <ActivityIndicator color={colors.primary} style={{ flex: 1 }} />
+            : <FlatList
+                data={orders}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+                ListEmptyComponent={
+                  <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>
+                    {lang === 'uz' ? "Sayohatlar yo'q" : 'Нет поездок'}
+                  </Text>
+                }
+                renderItem={({ item: order }) => {
+                  const statusColors = { completed: '#43A047', cancelled: '#E53935', searching: '#FF9800', accepted: '#2196F3', arrived: '#FF9800', in_progress: '#4CAF50' };
+                  const statusLabels = { completed: 'Завершён', cancelled: 'Отменён', searching: 'Поиск', accepted: 'Принят', arrived: 'На месте', in_progress: 'В пути' };
+                  const d = new Date(order.created_at);
+                  const dateStr = `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                  return (
+                    <View style={{ backgroundColor: colors.card, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: colors.border }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <View style={{ backgroundColor: statusColors[order.status] || '#9E9E9E', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 3 }}>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{statusLabels[order.status] || order.status}</Text>
+                        </View>
+                        <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{dateStr}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                        <Text style={{ fontSize: 10, color: '#43A047', marginRight: 6 }}>●</Text>
+                        <Text style={{ color: colors.text, fontSize: 13, flex: 1 }} numberOfLines={1}>{order.pickup_address || '—'}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 10, color: '#E53935', marginRight: 6 }}>■</Text>
+                        <Text style={{ color: colors.text, fontSize: 13, flex: 1 }} numberOfLines={1}>{order.destination_address || '—'}</Text>
+                      </View>
+                      {order.total_price != null && (
+                        <Text style={{ color: colors.primary, fontSize: 16, fontWeight: '800', marginTop: 4 }}>
+                          {parseFloat(order.total_price).toLocaleString()} {t(lang, 'sum') || 'сум'}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                }}
+              />
+          }
+        </SafeAreaView>
+      </Modal>
 
       <Modal visible={langModal} transparent animationType="slide">
         <View style={s.modalOverlay}>
