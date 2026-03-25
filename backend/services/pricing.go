@@ -55,9 +55,9 @@ func (s *PricingService) CalculatePriceWithRate(distanceKm float64, pricePerKm f
 		if ps.SurgeMultiplier > 0 {
 			surge = ps.SurgeMultiplier
 		}
-		rawBase := ps.ServiceFee + roundedKm*pricePerKm
-		basePrice = math.Ceil(rawBase/200) * 200
-		totalPrice = math.Ceil((basePrice*surge)/200) * 200
+		distCost := roundedKm * pricePerKm
+		basePrice = math.Ceil((ps.ServiceFee + distCost) / 200) * 200
+		totalPrice = math.Ceil((ps.ServiceFee + distCost*surge) / 200) * 200
 		return
 	}
 	rawBase := 2000.0 + roundedKm*pricePerKm
@@ -101,11 +101,10 @@ func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPri
 		if ps.SurgeMultiplier > 0 {
 			surge = ps.SurgeMultiplier
 		}
-		// Цена = сервисный сбор + (округлённые км × цена_за_км) × коэффициент
-		// Итог округляется ВВЕРХ до ближайших 200 сум
-		rawBase := ps.ServiceFee + roundedKm*ps.PricePerKm
-		basePrice = math.Ceil(rawBase/200) * 200
-		totalPrice = math.Ceil((basePrice*surge)/200) * 200
+		// Сервисный сбор фиксированный, surge применяется только к километражу
+		distCost := roundedKm * ps.PricePerKm
+		basePrice = math.Ceil((ps.ServiceFee + distCost) / 200) * 200
+		totalPrice = math.Ceil((ps.ServiceFee + distCost*surge) / 200) * 200
 		return
 	}
 	// Fallback при ошибке БД

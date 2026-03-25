@@ -65,7 +65,6 @@ export const orderAPI = {
   updatePassengerLocation: (lat, lng, heading = null) => api.put('/passenger/location', { lat, lng, heading }),
   updatePassengerLocationSharing: (share_live_location) => api.put('/passenger/location-sharing', { share_live_location }),
   getPricingSettings: () => api.get('/pricing/settings'),
-  getTaxiMode: () => api.get('/taxi-mode'),
 };
 
 export default api;

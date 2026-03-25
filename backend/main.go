@@ -111,16 +111,13 @@ func main() {
 			adminAPI.GET("/peak-periods", adminHandler.GetPeakPeriods)
 			adminAPI.POST("/peak-periods", adminHandler.CreatePeakPeriod)
 			adminAPI.DELETE("/peak-periods/:id", adminHandler.DeletePeakPeriod)
-			// Royal Taxi Mode
-			adminAPI.GET("/taxi-mode", adminHandler.GetTaxiMode)
-			adminAPI.PUT("/taxi-mode", adminHandler.SetTaxiMode)
-			adminAPI.POST("/call-orders", adminHandler.CreateCallOrder)
+
 		}
 
 		api.POST("/admin/login", adminHandler.Login)
 		// Public routes — no auth required (used by passenger app)
 		api.GET("/pricing/settings", adminHandler.GetPricingSettings)
-		api.GET("/taxi-mode", adminHandler.GetTaxiMode)
+
 	}
 
 	r.GET("/ws", wsHandler.Handle)

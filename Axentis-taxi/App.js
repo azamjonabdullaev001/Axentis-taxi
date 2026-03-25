@@ -14,6 +14,7 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import HistoryScreen from './src/screens/HistoryScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -52,6 +53,14 @@ function MainTabs() {
         options={{
           tabBarLabel: lang === 'uz' ? 'Asosiy' : 'Главная',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>🏠</Text>,
+        }}
+      />
+      <Tab.Screen
+        name="History"
+        component={HistoryScreen}
+        options={{
+          tabBarLabel: lang === 'uz' ? 'Tarix' : 'История',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📋</Text>,
         }}
       />
       <Tab.Screen

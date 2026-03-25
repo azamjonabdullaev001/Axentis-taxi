@@ -221,7 +221,7 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
 			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
-			 o.destination_lat, o.destination_lng, COALESCE(d.car_number,'')
+			 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(d.car_number,'')
 			 FROM orders o
 			 LEFT JOIN drivers d ON o.driver_id = d.id
 			 WHERE o.passenger_id = $1
@@ -229,6 +229,7 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			userID)
 		rows, err = r, e
 		if err == nil {
+			defer r.Close()
 			var orders []map[string]interface{}
 			pgRows := r
 			for pgRows.Next() {
@@ -251,7 +252,7 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
 			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
-			 o.destination_lat, o.destination_lng
+			 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0)
 			 FROM orders o
 			 JOIN drivers d ON o.driver_id = d.id
 			 WHERE d.user_id = $1
@@ -259,6 +260,7 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			userID)
 		rows, err = r, e
 		if err == nil {
+			defer r.Close()
 			var orders []map[string]interface{}
 			pgRows := r
 			for pgRows.Next() {
@@ -802,13 +804,17 @@ func (h *OrderHandler) RateDriver(c *gin.Context) {
 		return
 	}
 
-	// Insert rating; silently ignore if this order was already rated
-	h.db.Exec(context.Background(),
+	// Insert rating
+	_, insertErr := h.db.Exec(context.Background(),
 		`INSERT INTO ratings (order_id, driver_id, passenger_id, rating)
 		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (order_id) DO NOTHING`,
+		 ON CONFLICT (order_id) DO UPDATE SET rating = $4`,
 		orderID, driverID, userID, rating,
 	)
+	if insertErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save rating"})
+		return
+	}
 
 	// Recalculate driver's average rating
 	h.db.Exec(context.Background(),

@@ -2,27 +2,7 @@
   <div>
     <h2 class="page-title">Настройки цен</h2>
 
-    <!-- Taxi mode toggle -->
-    <div class="section-card mode-card">
-      <h3>Режим работы такси</h3>
-      <div class="mode-row">
-        <button
-          class="mode-btn"
-          :class="taxiMode === 'yandex' ? 'active-yandex' : ''"
-          @click="setMode('yandex')"
-        >🚖 Yandex (приложение)</button>
-        <button
-          class="mode-btn"
-          :class="taxiMode === 'royal' ? 'active-royal' : ''"
-          @click="setMode('royal')"
-        >👑 Royal (диспетчер)</button>
-        <span v-if="modeSaved" class="saved-msg">Режим сохранён!</span>
-      </div>
-      <p class="hint" style="margin-top:10px">
-        <b>Yandex</b> — пассажиры заказывают через приложение, тариф по км + сервисный сбор.<br/>
-        <b>Royal</b> — заказы только через диспетчера, тариф за каждые 100 м без сервисного сбора.
-      </p>
-    </div>
+
 
     <div class="section-card">
       <h3>Базовые тарифы</h3>
@@ -82,35 +62,7 @@
       </div>
     </div>
 
-    <!-- Royal Taxi tariff -->
-    <div class="section-card">
-      <h3>👑 Royal тариф (звонковые заказы)</h3>
-      <p class="hint">Цена за каждые 100 метров = royal_price_per_km / 10. Пример: 3000 сум/км → 300 сум за 100 м.</p>
-      <div v-if="loadingSettings" class="loading">Загрузка...</div>
-      <div v-else class="settings-form">
-        <div class="field-row">
-          <div class="field" style="max-width:260px">
-            <label>Тариф Royal (сум за 1 км)</label>
-            <input v-model.number="settings.royal_price_per_km" type="number" min="100" step="100" class="form-input" />
-          </div>
-          <div class="field field-info">
-            <label>Цена за 100 м</label>
-            <div class="form-input hold-display">{{ Math.round((settings.royal_price_per_km || 3000) / 10).toLocaleString() }} сум</div>
-          </div>
-          <div class="field field-info">
-            <label>Пример: 2 км</label>
-            <div class="form-input hold-display">
-              {{ Math.round(Math.ceil(2000 / 100) * ((settings.royal_price_per_km || 3000) / 10)).toLocaleString() }} сум
-            </div>
-          </div>
-        </div>
-        <div v-if="royalError" class="error-msg">{{ royalError }}</div>
-        <button class="save-btn" :disabled="savingRoyal" @click="saveRoyalPrice">
-          {{ savingRoyal ? 'Сохранение...' : 'Сохранить Royal тариф' }}
-        </button>
-        <span v-if="royalSaved" class="saved-msg">Сохранено!</span>
-      </div>
-    </div>
+
 
     <!-- Peak periods -->
     <div class="section-card">
@@ -219,12 +171,7 @@ const loadingSettings = ref(true)
 const savingSettings = ref(false)
 const settingsError = ref('')
 const settingsSaved = ref(false)
-const savingRoyal = ref(false)
-const royalError = ref('')
-const royalSaved = ref(false)
 
-const taxiMode = ref('yandex')
-const modeSaved = ref(false)
 
 const periods = ref([])
 const loadingPeriods = ref(true)
@@ -233,24 +180,10 @@ const savingPeriod = ref(false)
 const periodError = ref('')
 
 onMounted(async () => {
-  await Promise.all([loadSettings(), loadPeriods(), loadMode()])
+  await Promise.all([loadSettings(), loadPeriods()])
 })
 
-async function loadMode() {
-  try {
-    const { data } = await adminAPI.getTaxiMode()
-    taxiMode.value = data.mode || 'yandex'
-  } catch {}
-}
 
-async function setMode(mode) {
-  try {
-    await adminAPI.setTaxiMode(mode)
-    taxiMode.value = mode
-    modeSaved.value = true
-    setTimeout(() => { modeSaved.value = false }, 3000)
-  } catch {}
-}
 
 async function loadSettings() {
   try {
@@ -287,20 +220,6 @@ async function saveSettings() {
     settingsError.value = e.response?.data?.error || 'Ошибка сохранения'
   } finally {
     savingSettings.value = false
-  }
-}
-
-async function saveRoyalPrice() {
-  royalError.value = ''
-  savingRoyal.value = true
-  try {
-    await adminAPI.updatePricing({ royal_price_per_km: settings.value.royal_price_per_km })
-    royalSaved.value = true
-    setTimeout(() => { royalSaved.value = false }, 3000)
-  } catch (e) {
-    royalError.value = e.response?.data?.error || 'Ошибка сохранения'
-  } finally {
-    savingRoyal.value = false
   }
 }
 
@@ -399,19 +318,11 @@ const liveClass = computed(() => {
 <style scoped>
 .page-title { font-size: 22px; font-weight: 800; margin-bottom: 24px; }
 .section-card { background: #fff; border-radius: 18px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 24px; }
-.mode-card { border: 2px solid #FFCC00; }
+
 .section-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
 .hint { font-size: 13px; color: #888; margin-bottom: 18px; }
 .hint-inline { font-size: 12px; color: #aaa; margin-left: 6px; }
-.mode-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.mode-btn {
-  padding: 12px 24px; border-radius: 12px; border: 2px solid #ddd;
-  background: #f5f5f5; font-size: 14px; font-weight: 600; cursor: pointer;
-  transition: all .2s;
-}
-.mode-btn:hover { background: #eee; }
-.mode-btn.active-yandex { background: #e3f2fd; border-color: #1976d2; color: #1565c0; }
-.mode-btn.active-royal { background: #fff8e1; border-color: #f9a825; color: #e65100; }
+
 .loading, .empty { color: #aaa; font-size: 14px; padding: 10px 0; }
 .settings-form { display: flex; flex-direction: column; gap: 18px; }
 .field-row { display: flex; flex-wrap: wrap; gap: 16px; }

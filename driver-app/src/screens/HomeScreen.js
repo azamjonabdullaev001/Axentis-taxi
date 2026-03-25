@@ -699,7 +699,10 @@ export default function HomeScreen() {
               🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
             </Text>
             <Text style={[s.priceText, { color: colors.primary }]}>
-              {t(lang,'happyTrip')}
+              {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
+            </Text>
+            <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
+              {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
             </Text>
             <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.primary }]} onPress={handleArrived}>
               <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
@@ -788,7 +791,10 @@ export default function HomeScreen() {
                   🎯 {incomingOrder.destination_address || t(lang,'to')}
                 </Text>
                 <Text style={[s.orderPrice, { color: colors.primary }]}>
-                  {t(lang,'happyTrip')}
+                  {(incomingOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
+                </Text>
+                <Text style={[s.orderDist, { color: colors.textSecondary }]}>
+                  {(incomingOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
                 </Text>
               </>
             )}

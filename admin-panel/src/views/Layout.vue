@@ -21,9 +21,7 @@
         <router-link to="/users" class="nav-item">
           <span class="icon">👥</span> Пользователи
         </router-link>
-        <router-link to="/dispatcher" class="nav-item">
-          <span class="icon">📞</span> Диспетчер
-        </router-link>
+
       </nav>
       <button class="logout-btn" @click="logout">🚪 Выйти</button>
     </aside>

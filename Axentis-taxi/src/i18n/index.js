@@ -77,6 +77,10 @@ const translations = {
     tripHistory: 'История поездок',
     happyTrip: 'Счастливой поездки! 🚕',
     tripPrice: 'Стоимость поездки',
+    thankYou: '🎉 Спасибо, что выбрали нас!',
+    rateDriver: 'Оцените водителя',
+    skip: 'Пропустить',
+    send: 'Отправить',
   },
   uz: {
     // Auth
@@ -156,6 +160,10 @@ const translations = {
     tripHistory: 'Safarlar tarixi',
     happyTrip: 'Yoqimli safar! 🚕',
     tripPrice: 'Safar narxi',
+    thankYou: '🎉 Bizni tanlaganingiz uchun rahmat!',
+    rateDriver: 'Haydovchini baholang',
+    skip: "O'tkazib yuborish",
+    send: 'Yuborish',
   },
 };
 

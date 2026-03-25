@@ -247,33 +247,20 @@ export default function HomeScreen() {
     return () => clearInterval(pricingInterval);
   }, []);
 
-  // Режим такси: 'yandex' (обычный) | 'royal' (только диспетчер) — каждые 60 сек
-  const [taxiMode, setTaxiMode] = useState('yandex');
-  useEffect(() => {
-    async function loadMode() {
-      try {
-        const { data } = await orderAPI.getTaxiMode();
-        setTaxiMode(data.mode || 'yandex');
-      } catch {}
-    }
-    loadMode();
-    const modeInterval = setInterval(loadMode, 60000);
-    return () => clearInterval(modeInterval);
-  }, []);
+
 
   const historyPanelHeight = useRef(new Animated.Value(0)).current;
 
   function calcPrice(distanceKm) {
-    const base = Number(pricingSettings.service_fee) || 2000;
+    const serviceFee = Number(pricingSettings.service_fee) || 2000;
     const perKm = Number(pricingSettings.price_per_km) || 2000;
     const surge = Number(pricingSettings.surge_multiplier) || 1;
-    // Round distance UP to nearest 100m: 1m-99m → 100m, 101m → 200m, 1070m → 1100m
+    // Round distance UP to nearest 100m
     const meters = distanceKm * 1000;
     const roundedKm = (meters < 1 ? 100 : Math.ceil(meters / 100) * 100) / 1000;
-    // Match backend double-ceiling: first round base, then round base*surge
-    const rawBase = base + roundedKm * perKm;
-    const basePrice = Math.ceil(rawBase / 200) * 200;
-    return Math.ceil((basePrice * surge) / 200) * 200;
+    // Сервисный сбор фиксированный, surge только на километраж
+    const distCost = roundedKm * perKm;
+    return Math.ceil((serviceFee + distCost * surge) / 200) * 200;
   }
 
   function togglePanel() {
@@ -868,7 +855,9 @@ export default function HomeScreen() {
               <Text style={[s.gpsLocateText, { color: colors.primary }]}>{t(lang, 'myLocation')}</Text>
             </TouchableOpacity>
             <Text style={[s.priceInline, { color: colors.primary }]}>
-              {t(lang, 'happyTrip')}
+              {tariffType === 'standard' && destCoords && roadDistanceKm != null
+                ? `${calcPrice(roadDistanceKm).toLocaleString()} ${t(lang, 'sum')}`
+                : t(lang, 'happyTrip')}
             </Text>
           </View>
 
@@ -932,24 +921,26 @@ export default function HomeScreen() {
             )}
           </View>
 
+          {/* Price estimate for standard tariff */}
+          {tariffType === 'standard' && destCoords && roadDistanceKm != null && (
+            <View style={{ alignItems: 'center', marginBottom: 8 }}>
+              <Text style={{ color: colors.primary, fontSize: 20, fontWeight: '800' }}>
+                {calcPrice(roadDistanceKm).toLocaleString()} {t(lang, 'sum')}
+              </Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+                {roadDistanceKm.toFixed(1)} {t(lang, 'km')}
+              </Text>
+            </View>
+          )}
+
           {/* Кнопка заказа */}
           {((tariffType === 'standard' && destCoords) || (tariffType === 'free' && pickupCoords)) && (
             <View style={s.orderSection}>
-              {taxiMode === 'royal' ? (
-                <View style={[s.royalBanner, { borderColor: colors.border }]}>
-                  <Text style={[s.royalBannerTitle, { color: colors.text }]}>👑 Режим Royal Taxi</Text>
-                  <Text style={[s.royalBannerDesc, { color: colors.textSecondary }]}>
-                    Сейчас заказы принимаются только через диспетчера.{'\n'}
-                    Позвоните: <Text style={{ fontWeight: '700' }}>+998 71 000-00-00</Text>
-                  </Text>
-                </View>
-              ) : (
-                <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
-                  <Text style={s.orderBtnText}>
-                    {tariffType === 'free' ? t(lang, 'callFree') : t(lang, 'orderTaxi')}
-                  </Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity style={[s.orderBtn, { backgroundColor: colors.primary }]} onPress={handleOrder}>
+                <Text style={s.orderBtnText}>
+                  {tariffType === 'free' ? t(lang, 'callFree') : t(lang, 'orderTaxi')}
+                </Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1076,9 +1067,11 @@ export default function HomeScreen() {
               </View>
             </View>
           )}
-          <Text style={[s.priceInline, { color: colors.primary, textAlign: 'center', marginBottom: 8, fontSize: 16 }]}>
-            {t(lang, 'happyTrip')}
-          </Text>
+          {estimatedPrice != null && (
+            <Text style={[s.priceText, { color: colors.primary }]}>
+              {estimatedPrice.toLocaleString()} {t(lang, 'sum')}
+            </Text>
+          )}
           <TouchableOpacity style={[s.cancelBtn, { borderColor: colors.border }]} onPress={handleCancel}>
             <Text style={{ color: colors.error }}>{t(lang, 'cancel')}</Text>
           </TouchableOpacity>
@@ -1109,9 +1102,11 @@ export default function HomeScreen() {
           <View style={s.progressBar}>
             <View style={[s.progressFill, { backgroundColor: colors.primary }]} />
           </View>
-          <Text style={[s.priceInline, { color: colors.primary, textAlign: 'center', marginBottom: 8, fontSize: 16 }]}>
-            {t(lang, 'happyTrip')}
-          </Text>
+          {estimatedPrice != null && (
+            <Text style={[s.priceText, { color: colors.primary }]}>
+              {estimatedPrice.toLocaleString()} {t(lang, 'sum')}
+            </Text>
+          )}
         </View>
       )}
 
@@ -1119,14 +1114,14 @@ export default function HomeScreen() {
       <Modal visible={ratingModalVisible} transparent animationType="fade">
         <View style={s.ratingOverlay}>
           <View style={[s.ratingModal, { backgroundColor: colors.background }]}>
-            <Text style={[s.ratingTitle, { color: colors.text }]}>🎉 Спасибо, что выбрали нас!</Text>
+            <Text style={[s.ratingTitle, { color: colors.text }]}>{t(lang, 'thankYou')}</Text>
             {completedPrice != null && (
               <Text style={[s.ratingPrice, { color: colors.primary }]}>
-                Итого: {completedPrice.toLocaleString()} {t(lang,'sum')}
+                {t(lang, 'total')}: {completedPrice.toLocaleString()} {t(lang,'sum')}
               </Text>
             )}
             <Text style={[s.ratingSubtitle, { color: colors.textSecondary }]}>
-              Оцените водителя
+              {t(lang, 'rateDriver')}
             </Text>
             <View style={s.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
@@ -1140,20 +1135,24 @@ export default function HomeScreen() {
                 style={[s.ratingSkipBtn, { borderColor: colors.border }]}
                 onPress={() => { setRatingModalVisible(false); resetOrder(); }}
               >
-                <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>Пропустить</Text>
+                <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>{t(lang, 'skip')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.ratingSubmitBtn, { backgroundColor: selectedRating > 0 ? colors.primary : colors.border }]}
                 disabled={selectedRating === 0}
-                onPress={() => {
+                onPress={async () => {
                   if (completedOrderId && selectedRating > 0) {
-                    orderAPI.rateDriver(completedOrderId, selectedRating).catch(() => {});
+                    try {
+                      await orderAPI.rateDriver(completedOrderId, selectedRating);
+                    } catch (e) {
+                      Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Rating failed');
+                    }
                   }
                   setRatingModalVisible(false);
                   resetOrder();
                 }}
               >
-                <Text style={{ color: '#000', fontWeight: '800' }}>Отправить</Text>
+                <Text style={{ color: '#000', fontWeight: '800' }}>{t(lang, 'send')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1236,12 +1235,7 @@ function makeStyles(colors) {
     priceHint: { textAlign: 'center', marginBottom: 8, fontSize: 14 },
     orderBtn: { borderRadius: 14, padding: 14, alignItems: 'center' },
     orderBtnText: { fontWeight: '800', fontSize: 16, color: '#000' },
-    royalBanner: {
-      borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center',
-      backgroundColor: '#FFFDE7',
-    },
-    royalBannerTitle: { fontWeight: '800', fontSize: 15, marginBottom: 4 },
-    royalBannerDesc: { fontSize: 13, textAlign: 'center', lineHeight: 20 },
+
 
     // Recent trips
     historySection: { borderTopWidth: 1, marginTop: 8, paddingTop: 6 },
