@@ -855,9 +855,7 @@ export default function HomeScreen() {
               <Text style={[s.gpsLocateText, { color: colors.primary }]}>{t(lang, 'myLocation')}</Text>
             </TouchableOpacity>
             <Text style={[s.priceInline, { color: colors.primary }]}>
-              {tariffType === 'standard' && destCoords && roadDistanceKm != null
-                ? `${calcPrice(roadDistanceKm).toLocaleString()} ${t(lang, 'sum')}`
-                : t(lang, 'happyTrip')}
+              {t(lang, 'happyTrip')}
             </Text>
           </View>
 
@@ -1102,11 +1100,26 @@ export default function HomeScreen() {
           <View style={s.progressBar}>
             <View style={[s.progressFill, { backgroundColor: colors.primary }]} />
           </View>
-          {estimatedPrice != null && (
+          {tariffType === 'free' ? (
+            <View style={{ alignItems: 'center', marginTop: 8 }}>
+              <Text style={[s.priceText, { color: colors.primary }]}>
+                {(() => {
+                  const sf = Number(pricingSettings.service_fee) || 2000;
+                  const ppk = lockedPricePerKm || Number(pricingSettings.price_per_km) || 2000;
+                  const meters = freeRideKm * 1000;
+                  const roundedKm = (meters < 1 ? 100 : Math.ceil(meters / 100) * 100) / 1000;
+                  return Math.ceil((sf + roundedKm * ppk) / 200) * 200;
+                })().toLocaleString()} {t(lang, 'sum')}
+              </Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+                {freeRideKm.toFixed(1)} {t(lang, 'km')}
+              </Text>
+            </View>
+          ) : estimatedPrice != null ? (
             <Text style={[s.priceText, { color: colors.primary }]}>
               {estimatedPrice.toLocaleString()} {t(lang, 'sum')}
             </Text>
-          )}
+          ) : null}
         </View>
       )}
 
@@ -1323,14 +1336,14 @@ function makeStyles(colors) {
     starsRow: { flexDirection: 'row', gap: 6, marginBottom: 24 },
     starBtn: { padding: 4 },
     starIcon: { fontSize: 42, lineHeight: 46 },
-    ratingActions: { flexDirection: 'row', gap: 12, width: '100%' },
+    ratingActions: { flexDirection: 'row', gap: 12, width: '100%', marginTop: 4 },
     ratingSkipBtn: {
-      flex: 1, paddingVertical: 13, borderRadius: 12, borderWidth: 1,
-      alignItems: 'center',
+      flex: 1, paddingVertical: 14, borderRadius: 14, borderWidth: 1.5,
+      alignItems: 'center', justifyContent: 'center', minHeight: 48,
     },
     ratingSubmitBtn: {
-      flex: 2, paddingVertical: 13, borderRadius: 12,
-      alignItems: 'center',
+      flex: 1, paddingVertical: 14, borderRadius: 14,
+      alignItems: 'center', justifyContent: 'center', minHeight: 48,
     },
   });
 }

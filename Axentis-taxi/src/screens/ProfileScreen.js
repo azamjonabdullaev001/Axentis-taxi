@@ -52,16 +52,16 @@ export default function ProfileScreen() {
     setSharingLocation(user?.share_live_location !== false);
   }, [user?.share_live_location]);
 
-  useEffect(() => {
-    (async () => {
-      setLoadingHistory(true);
-      try {
-        const { data } = await orderAPI.getHistory();
-        setOrders(data.orders || []);
-      } catch {}
-      setLoadingHistory(false);
-    })();
-  }, []);
+  async function loadHistory() {
+    setLoadingHistory(true);
+    try {
+      const { data } = await orderAPI.getHistory();
+      setOrders(data.orders || []);
+    } catch {}
+    setLoadingHistory(false);
+  }
+
+  useEffect(() => { loadHistory(); }, []);
 
   async function handleToggleLocationSharing(value) {
     setSharingLocation(value);
@@ -186,7 +186,7 @@ export default function ProfileScreen() {
 
       {/* Trip history — opens in full-screen modal */}
       <View style={[s.section, { backgroundColor: colors.card, marginBottom: 20 }]}>
-        <TouchableOpacity style={s.row} onPress={() => setHistoryModalVisible(true)}>
+        <TouchableOpacity style={s.row} onPress={() => { loadHistory(); setHistoryModalVisible(true); }}>
           <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'tripHistory')}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             {loadingHistory
