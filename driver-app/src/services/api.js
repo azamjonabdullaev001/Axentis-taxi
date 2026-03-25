@@ -49,6 +49,7 @@ export const driverAPI = {
   arrivedAtPickup: (id) => api.post(`/orders/${id}/arrived`),
   startTrip: (id) => api.post(`/orders/${id}/start`),
   completeTrip: (id) => api.post(`/orders/${id}/complete`),
+  updateOrderDistance: (id, driven_km) => api.put(`/orders/${id}/distance`, { driven_km }),
   getHistory: () => api.get('/orders/history'),
   getDriverRatings: () => api.get('/driver/ratings'),
 };

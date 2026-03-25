@@ -130,6 +130,12 @@ export default function HomeScreen() {
   const [acceptCountdown, setAcceptCountdown] = useState(10);
   const countdownRef = useRef(null);
 
+  // 100m metering: accumulate driven distance and calculate running price
+  const [meteredKm, setMeteredKm] = useState(0);
+  const meteredKmRef = useRef(0);
+  const prevMeterPosRef = useRef(null);
+  const meteredPricePerKm = useRef(0);
+
   useEffect(() => {
     driverStatusRef.current = driverStatus;
   }, [driverStatus]);
@@ -279,6 +285,28 @@ export default function HomeScreen() {
           lastBroadcastDataRef.current.heading = gpsH;
         }
 
+        // 100m metering: accumulate distance during IN_PROGRESS
+        if (driverStatusRef.current === DRIVER_STATUS.IN_PROGRESS) {
+          if (prevMeterPosRef.current) {
+            const R = 6371;
+            const dLat2 = ((coords.latitude - prevMeterPosRef.current.latitude) * Math.PI) / 180;
+            const dLon2 = ((coords.longitude - prevMeterPosRef.current.longitude) * Math.PI) / 180;
+            const a2 = Math.sin(dLat2 / 2) ** 2 +
+              Math.cos(prevMeterPosRef.current.latitude * Math.PI / 180) *
+              Math.cos(coords.latitude * Math.PI / 180) *
+              Math.sin(dLon2 / 2) ** 2;
+            const segmentKm = R * 2 * Math.atan2(Math.sqrt(a2), Math.sqrt(1 - a2));
+            // Only accumulate if segment > 5m (filter GPS jitter)
+            if (segmentKm > 0.005) {
+              meteredKmRef.current += segmentKm;
+              setMeteredKm(meteredKmRef.current);
+              prevMeterPosRef.current = coords;
+            }
+          } else {
+            prevMeterPosRef.current = coords;
+          }
+        }
+
         if (driverStatusRef.current !== DRIVER_STATUS.OFFLINE) {
           driverAPI.updateLocation(
             coords.latitude,
@@ -426,6 +454,8 @@ export default function HomeScreen() {
       setIncomingOrder(null);
       setPassengerLiveLocation(null); // Will be populated by socket if passenger is sharing live location
       setDriverStatus(DRIVER_STATUS.ACCEPTED);
+      // Store locked price per km for metering (sent from backend)
+      meteredPricePerKm.current = incomingOrder.locked_price_per_km || 3000;
       mapRef.current?.animateToRegion({
         latitude: incomingOrder.pickup_lat,
         longitude: incomingOrder.pickup_lng,
@@ -474,6 +504,10 @@ export default function HomeScreen() {
     try {
       const { data } = await driverAPI.startTrip(activeOrder.id);
       setDriverStatus(DRIVER_STATUS.IN_PROGRESS);
+      // Reset metering for the trip
+      meteredKmRef.current = 0;
+      setMeteredKm(0);
+      prevMeterPosRef.current = null;
       if (location) {
         const dest = { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng };
         routeTargetRef.current = null; // force re-fetch for new destination segment
@@ -490,6 +524,10 @@ export default function HomeScreen() {
 
   async function handleCompleteTrip() {
     try {
+      // Send metered distance to server before completing
+      if (meteredKmRef.current > 0) {
+        await driverAPI.updateOrderDistance(activeOrder.id, meteredKmRef.current).catch(() => {});
+      }
       const { data } = await driverAPI.completeTrip(activeOrder.id);
       const rounded = Math.ceil((data.total_price || 0) / 200) * 200;
       Alert.alert(t(lang,'tripCompleted'),
@@ -509,6 +547,10 @@ export default function HomeScreen() {
     setDriverStatus(DRIVER_STATUS.AVAILABLE);
     stopWaitTimer();
     setWaitSeconds(0);
+    meteredKmRef.current = 0;
+    setMeteredKm(0);
+    prevMeterPosRef.current = null;
+    meteredPricePerKm.current = 0;
   }
 
   // Wait fee calculation
@@ -657,7 +699,7 @@ export default function HomeScreen() {
               🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
             </Text>
             <Text style={[s.priceText, { color: colors.primary }]}>
-              ~{activeOrder.estimated_price?.toLocaleString() || '—'} {t(lang,'sum')}
+              {t(lang,'happyTrip')}
             </Text>
             <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.primary }]} onPress={handleArrived}>
               <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
@@ -691,6 +733,17 @@ export default function HomeScreen() {
             <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'passengerOnboard')}</Text>
             <Text style={[s.addressText, { color: colors.textSecondary }]}>
               🎯 {activeOrder.destination_address || `${activeOrder.destination_lat?.toFixed(4)}, ${activeOrder.destination_lng?.toFixed(4)}`}
+            </Text>
+            <Text style={[s.priceText, { color: colors.primary, fontSize: 28 }]}>
+              {t(lang,'meterRunning')}: {(() => {
+                const rate = meteredPricePerKm.current || 3000;
+                const m = meteredKm * 1000;
+                const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
+                return Math.ceil(rKm * rate / 200) * 200;
+              })().toLocaleString()} {t(lang,'sum')}
+            </Text>
+            <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
+              {meteredKm.toFixed(2)} {t(lang,'km')}
             </Text>
             <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.success }]} onPress={handleCompleteTrip}>
               <Text style={s.actionBtnText}>{t(lang,'completeTrip')}</Text>
@@ -735,10 +788,7 @@ export default function HomeScreen() {
                   🎯 {incomingOrder.destination_address || t(lang,'to')}
                 </Text>
                 <Text style={[s.orderPrice, { color: colors.primary }]}>
-                  {incomingOrder.estimated_price?.toLocaleString() || '—'} {t(lang,'sum')}
-                </Text>
-                <Text style={[s.orderDist, { color: colors.textSecondary }]}>
-                  {incomingOrder.distance_km?.toFixed(1)} {t(lang,'km')}
+                  {t(lang,'happyTrip')}
                 </Text>
               </>
             )}

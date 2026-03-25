@@ -75,6 +75,8 @@ const translations = {
     standard: 'Стандарт',
     free: 'Свободный',
     tripHistory: 'История поездок',
+    happyTrip: 'Счастливой поездки! 🚕',
+    tripPrice: 'Стоимость поездки',
   },
   uz: {
     // Auth
@@ -152,6 +154,8 @@ const translations = {
     standard: 'Standart',
     free: 'Erkin',
     tripHistory: 'Safarlar tarixi',
+    happyTrip: 'Yoqimli safar! 🚕',
+    tripPrice: 'Safar narxi',
   },
 };
 

@@ -24,7 +24,6 @@ export default function ProfileScreen() {
 
   // Ratings
   const [ratingsData, setRatingsData] = useState({ ratings: [], average_rating: 5.0, rating_count: 0 });
-  const [ratingsExpanded, setRatingsExpanded] = useState(false);
 
   useEffect(() => {
     driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
@@ -42,11 +41,12 @@ export default function ProfileScreen() {
       try {
         const asset = result.assets[0];
         const token = await AsyncStorage.getItem('auth_token');
+        const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
         const formData = new FormData();
         formData.append('file', {
           uri: asset.uri,
           type: asset.mimeType || 'image/jpeg',
-          name: 'avatar.jpg',
+          name: `avatar.${ext}`,
         });
         const res = await fetch(`${API_BASE}/upload/avatar`, {
           method: 'POST',
@@ -55,7 +55,13 @@ export default function ProfileScreen() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Upload failed');
-        setUser({ ...user, avatar_url: data.url });
+        // Re-fetch profile from server to get the persisted avatar URL
+        try {
+          const profile = await authAPI.getProfile();
+          setUser(profile.data.user);
+        } catch {
+          setUser({ ...user, avatar_url: data.url });
+        }
       } finally {
         setLoading(false);
       }
@@ -118,15 +124,14 @@ export default function ProfileScreen() {
 
       {/* Ratings section */}
       <View style={[s.section, { backgroundColor: colors.card, marginTop: 20 }]}>
-        <TouchableOpacity style={s.row} onPress={() => setRatingsExpanded(!ratingsExpanded)} activeOpacity={0.8}>
+        <View style={s.row}>
           <View>
             <Text style={[s.rowLabel, { color: colors.text }]}>⭐ Мои оценки</Text>
             <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
               {ratingsData.average_rating.toFixed(1)} / 5.0 ({ratingsData.rating_count} оценок)
             </Text>
           </View>
-          <Text style={{ color: colors.primary, fontSize: 18 }}>{ratingsExpanded ? '▲' : '▼'}</Text>
-        </TouchableOpacity>
+        </View>
         <View style={s.ratingSummaryRow}>
           {[1,2,3,4,5].map((star) => (
             <Text key={star} style={{ fontSize: 28, color: star <= Math.round(ratingsData.average_rating) ? '#FFC107' : colors.border }}>★</Text>
@@ -135,28 +140,6 @@ export default function ProfileScreen() {
             {ratingsData.average_rating.toFixed(1)}
           </Text>
         </View>
-        {ratingsExpanded && ratingsData.ratings.length > 0 && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-            {ratingsData.ratings.map((r, idx) => (
-              <View key={idx} style={[s.ratingRow, { borderTopColor: colors.border }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontSize: 14 }}>{r.passenger_name || 'Пассажир'}</Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                    {new Date(r.created_at).toLocaleDateString('ru-RU')}
-                  </Text>
-                </View>
-                <Text style={{ color: '#FFC107', fontSize: 20 }}>
-                  {'★'.repeat(Math.round(r.rating))}{'☆'.repeat(5 - Math.round(r.rating))}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
-        {ratingsExpanded && ratingsData.ratings.length === 0 && (
-          <Text style={{ color: colors.textSecondary, textAlign: 'center', paddingVertical: 16, fontSize: 14 }}>
-            Оценок пока нет
-          </Text>
-        )}
       </View>
 
       <Modal visible={langModal} transparent animationType="slide">

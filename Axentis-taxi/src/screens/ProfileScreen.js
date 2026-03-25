@@ -91,11 +91,12 @@ export default function ProfileScreen() {
       try {
         const asset = result.assets[0];
         const token = await AsyncStorage.getItem('auth_token');
+        const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
         const formData = new FormData();
         formData.append('file', {
           uri: asset.uri,
           type: asset.mimeType || 'image/jpeg',
-          name: 'avatar.jpg',
+          name: `avatar.${ext}`,
         });
         const res = await fetch(`${API_BASE}/upload/avatar`, {
           method: 'POST',
@@ -104,7 +105,13 @@ export default function ProfileScreen() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Upload failed');
-        await updateUser({ ...user, avatar_url: data.url });
+        // Re-fetch profile from server to get the persisted avatar URL
+        try {
+          const profile = await authAPI.getProfile();
+          await updateUser(profile.data.user);
+        } catch {
+          await updateUser({ ...user, avatar_url: data.url });
+        }
       } catch {
         Alert.alert(t(lang, 'error'), t(lang, 'updateError'));
       } finally {

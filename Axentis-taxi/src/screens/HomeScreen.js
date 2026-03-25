@@ -533,17 +533,12 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!user?.id) return;
     socket.on('trip_completed', (data) => {
-      // Для свободного тарифа отправляем финальные км и считаем цену по зафиксированному тарифу
+      // Для свободного тарифа отправляем финальные км на сервер
       if (tariffTypeRef.current === 'free' && orderIDRef.current && freeRideKmRef.current > 0) {
         orderAPI.updateOrderDistance(orderIDRef.current, freeRideKmRef.current).catch(() => {});
       }
-      const rate = lockedPricePerKmRef.current || pricingSettings.price_per_km || 2000;
-      const svc = pricingSettings.service_fee || 2000;
-      const freeMeters = freeRideKmRef.current * 1000;
-      const freeRoundedKm = freeMeters < 1 ? 100 / 1000 : (Math.ceil(freeMeters / 100) * 100) / 1000;
-      const finalPrice = tariffTypeRef.current === 'free'
-        ? Math.ceil((svc + freeRoundedKm * rate) / 200) * 200
-        : Math.ceil((data.total_price || 0) / 200) * 200;
+      // Use the server-calculated price to ensure driver and passenger see the same amount
+      const finalPrice = Math.ceil((data.total_price || 0) / 200) * 200;
       setCompletedOrderId(orderIDRef.current);
       setCompletedPrice(finalPrice);
       setSelectedRating(0);
@@ -872,15 +867,9 @@ export default function HomeScreen() {
               <Ionicons name="locate" size={16} color={colors.primary} />
               <Text style={[s.gpsLocateText, { color: colors.primary }]}>{t(lang, 'myLocation')}</Text>
             </TouchableOpacity>
-            {tariffType === 'standard' && destCoords && pickupCoords ? (
-              <Text style={[s.priceInline, { color: colors.primary }]}>
-                ~{calcPrice(roadDistanceKm ?? calcDistanceKm(pickupCoords, destCoords)).toLocaleString()} {t(lang, 'sum')}
-              </Text>
-            ) : tariffType === 'free' ? (
-              <Text style={[s.priceInline, { color: colors.textSecondary }]}>
-                {(lockedPricePerKm || pricingSettings.price_per_km || 2000).toLocaleString()} {t(lang, 'sum')}/км
-              </Text>
-            ) : null}
+            <Text style={[s.priceInline, { color: colors.primary }]}>
+              {t(lang, 'happyTrip')}
+            </Text>
           </View>
 
           {/* Выбор тарифа */}
@@ -1087,7 +1076,9 @@ export default function HomeScreen() {
               </View>
             </View>
           )}
-          <Text style={[s.priceText, { color: colors.primary }]}>{estimatedPrice?.toLocaleString()} {t(lang, 'sum')}</Text>
+          <Text style={[s.priceInline, { color: colors.primary, textAlign: 'center', marginBottom: 8, fontSize: 16 }]}>
+            {t(lang, 'happyTrip')}
+          </Text>
           <TouchableOpacity style={[s.cancelBtn, { borderColor: colors.border }]} onPress={handleCancel}>
             <Text style={{ color: colors.error }}>{t(lang, 'cancel')}</Text>
           </TouchableOpacity>
@@ -1118,24 +1109,9 @@ export default function HomeScreen() {
           <View style={s.progressBar}>
             <View style={[s.progressFill, { backgroundColor: colors.primary }]} />
           </View>
-          {tariffType === 'free' ? (
-            <>
-              <Text style={[s.priceHint, { color: colors.textSecondary }]}>
-                {freeRideKm.toFixed(2)} {t(lang,'km')} × {(lockedPricePerKm || pricingSettings.price_per_km || 2000).toLocaleString()} {t(lang,'sum')}/{t(lang,'km')}
-              </Text>
-              <Text style={[s.priceText, { color: colors.primary }]}>
-                ~{(() => {
-                  const rate = lockedPricePerKm || pricingSettings.price_per_km || 2000;
-                  const svc = pricingSettings.service_fee || 2000;
-                  const m = freeRideKm * 1000;
-                  const rKm = m < 1 ? 0.1 : (Math.ceil(m / 100) * 100) / 1000;
-                  return Math.ceil((svc + rKm * rate) / 200) * 200;
-                })().toLocaleString()} {t(lang, 'sum')}
-              </Text>
-            </>
-          ) : (
-            <Text style={[s.priceText, { color: colors.primary }]}>{estimatedPrice?.toLocaleString()} {t(lang, 'sum')}</Text>
-          )}
+          <Text style={[s.priceInline, { color: colors.primary, textAlign: 'center', marginBottom: 8, fontSize: 16 }]}>
+            {t(lang, 'happyTrip')}
+          </Text>
         </View>
       )}
 

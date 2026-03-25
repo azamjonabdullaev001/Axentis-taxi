@@ -100,6 +100,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 func (h *OrderHandler) UpdateOrderDistance(c *gin.Context) {
 	orderID := c.Param("id")
 	userID := c.GetString("user_id")
+	role := c.GetString("user_role")
 
 	var req struct {
 		DrivenKm float64 `json:"driven_km"`
@@ -109,12 +110,21 @@ func (h *OrderHandler) UpdateOrderDistance(c *gin.Context) {
 		return
 	}
 
-	h.db.Exec(context.Background(),
-		`UPDATE orders SET distance_km = $1
-		 WHERE id = $2 AND trip_type = 'free' AND status = 'in_progress'
-		 AND passenger_id = $3`,
-		req.DrivenKm, orderID, userID,
-	)
+	if role == "passenger" {
+		h.db.Exec(context.Background(),
+			`UPDATE orders SET distance_km = $1
+			 WHERE id = $2 AND trip_type = 'free' AND status = 'in_progress'
+			 AND passenger_id = $3`,
+			req.DrivenKm, orderID, userID,
+		)
+	} else if role == "driver" {
+		h.db.Exec(context.Background(),
+			`UPDATE orders SET distance_km = $1
+			 WHERE id = $2 AND status IN ('in_progress', 'completed')
+			 AND EXISTS (SELECT 1 FROM drivers WHERE id = orders.driver_id AND user_id = $3)`,
+			req.DrivenKm, orderID, userID,
+		)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -829,10 +839,8 @@ func (h *OrderHandler) GetDriverRatings(c *gin.Context) {
 	}
 
 	rows, err := h.db.Query(context.Background(),
-		`SELECT r.rating, r.created_at,
-		 COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') AS passenger_name
+		`SELECT r.rating, r.created_at
 		 FROM ratings r
-		 JOIN users u ON r.passenger_id = u.id
 		 WHERE r.driver_id = $1
 		 ORDER BY r.created_at DESC LIMIT 100`,
 		driverID,
@@ -844,14 +852,13 @@ func (h *OrderHandler) GetDriverRatings(c *gin.Context) {
 	defer rows.Close()
 
 	type ratingRow struct {
-		Rating        float64   `json:"rating"`
-		CreatedAt     time.Time `json:"created_at"`
-		PassengerName string    `json:"passenger_name"`
+		Rating    float64   `json:"rating"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 	list := []ratingRow{}
 	for rows.Next() {
 		var r ratingRow
-		rows.Scan(&r.Rating, &r.CreatedAt, &r.PassengerName)
+		rows.Scan(&r.Rating, &r.CreatedAt)
 		list = append(list, r)
 	}
 
