@@ -93,6 +93,9 @@ func main() {
 			protected.PUT("/driver/availability", orderHandler.UpdateDriverAvailability)
 			protected.PUT("/passenger/location", orderHandler.UpdatePassengerLocation)
 			protected.PUT("/passenger/location-sharing", orderHandler.UpdatePassengerLocationSharing)
+
+			// Referral
+			protected.POST("/referral/apply", authHandler.ApplyReferral)
 		}
 
 		adminAPI := api.Group("/admin")
@@ -113,6 +116,14 @@ func main() {
 			adminAPI.DELETE("/peak-periods/:id", adminHandler.DeletePeakPeriod)
 			adminAPI.POST("/call-orders", adminHandler.CreateCallOrder)
 
+			// Driver management
+			adminAPI.POST("/drivers", adminHandler.CreateDriver)
+			adminAPI.GET("/drivers/:id/analytics", adminHandler.GetDriverAnalytics)
+
+			// Referral program
+			adminAPI.GET("/referral-settings", adminHandler.GetReferralSettings)
+			adminAPI.PUT("/referral-settings", adminHandler.UpdateReferralSettings)
+			adminAPI.GET("/referrals", adminHandler.GetReferrals)
 		}
 
 		api.POST("/admin/login", adminHandler.Login)

@@ -1,14 +1,18 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+// In Expo Go, setNotificationHandler may throw — wrap to prevent module crash
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+} catch {}
 
 export async function initializeNotifications() {
   const permissions = await Notifications.getPermissionsAsync();
@@ -40,7 +44,12 @@ export async function initializeNotifications() {
  */
 export async function getExpoPushToken() {
   try {
-    const { data } = await Notifications.getExpoPushTokenAsync();
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ??
+      Constants.easConfig?.projectId;
+    const { data } = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined,
+    );
     return data;
   } catch {
     return null;

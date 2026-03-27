@@ -41,6 +41,14 @@ export const adminAPI = {
   getTaxiMode: () => api.get('/admin/taxi-mode'),
   setTaxiMode: (mode) => api.put('/admin/taxi-mode', { mode }),
   createCallOrder: (d) => api.post('/admin/call-orders', d),
+  // Driver management
+  createDriver: (d) => api.post('/admin/drivers', d),
+  getDriverAnalytics: (id, params) => api.get(`/admin/drivers/${id}/analytics`, { params }),
+  getDriversWithDetails: () => api.get('/admin/users', { params: { role: 'driver' } }),
+  // Referral program
+  getReferralSettings: () => api.get('/admin/referral-settings'),
+  updateReferralSettings: (d) => api.put('/admin/referral-settings', d),
+  getReferrals: () => api.get('/admin/referrals'),
 }
 
 export default api

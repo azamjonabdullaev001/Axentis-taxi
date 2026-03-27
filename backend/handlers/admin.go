@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -204,15 +206,35 @@ func (h *AdminHandler) GetRevenue(c *gin.Context) {
 
 func (h *AdminHandler) GetUsers(c *gin.Context) {
 	role := c.Query("role")
-	query := `SELECT id, first_name, last_name, phone, role, is_active, created_at FROM users`
-	args := []interface{}{}
-	if role != "" {
-		query += ` WHERE role = $1`
-		args = append(args, role)
-	}
-	query += ` ORDER BY created_at DESC LIMIT 100`
 
-	rows, err := h.db.Query(context.Background(), query, args...)
+	// For driver role, join with drivers table to include car_number, is_available, driver_id
+	var rows interface{ Next() bool; Scan(...interface{}) error; Close() }
+	var err error
+
+	if role == "driver" {
+		rows, err = h.db.Query(context.Background(),
+			`SELECT u.id, u.first_name, u.last_name, u.phone, u.role, u.is_active, u.created_at,
+			 COALESCE(d.id::text,'') as driver_id,
+			 COALESCE(d.car_number,'') as car_number,
+			 COALESCE(d.is_available, false) as is_available
+			 FROM users u
+			 LEFT JOIN drivers d ON d.user_id = u.id
+			 WHERE u.role = 'driver'
+			 ORDER BY u.created_at DESC LIMIT 200`,
+		)
+	} else if role != "" {
+		rows, err = h.db.Query(context.Background(),
+			`SELECT id, first_name, last_name, phone, role, is_active, created_at,
+			 '', '', false FROM users WHERE role = $1 ORDER BY created_at DESC LIMIT 200`,
+			role,
+		)
+	} else {
+		rows, err = h.db.Query(context.Background(),
+			`SELECT id, first_name, last_name, phone, role, is_active, created_at,
+			 '', '', false FROM users ORDER BY created_at DESC LIMIT 200`,
+		)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch users"})
 		return
@@ -221,14 +243,21 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 
 	var users []map[string]interface{}
 	for rows.Next() {
-		var id, firstName, lastName, phone, userRole string
-		var isActive bool
+		var id, firstName, lastName, phone, userRole, driverID, carNum string
+		var isActive, isAvailable bool
 		var createdAt time.Time
-		rows.Scan(&id, &firstName, &lastName, &phone, &userRole, &isActive, &createdAt)
-		users = append(users, map[string]interface{}{
+		rows.Scan(&id, &firstName, &lastName, &phone, &userRole, &isActive, &createdAt,
+			&driverID, &carNum, &isAvailable)
+		u := map[string]interface{}{
 			"id": id, "first_name": firstName, "last_name": lastName,
 			"phone": phone, "role": userRole, "is_active": isActive, "created_at": createdAt,
-		})
+		}
+		if driverID != "" {
+			u["driver_id"] = driverID
+			u["car_number"] = carNum
+			u["is_available"] = isAvailable
+		}
+		users = append(users, u)
 	}
 	if users == nil {
 		users = []map[string]interface{}{}
@@ -624,5 +653,314 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		"order_id":           orderID,
 		"royal_price_per_km": royalPricePerKm,
 		"message":            "Call order created and driver search started",
+	})
+}
+
+// ── Create Driver (admin/dispatcher creates driver account) ──────────────────
+
+func (h *AdminHandler) CreateDriver(c *gin.Context) {
+	var req struct {
+		FirstName string `json:"first_name" binding:"required"`
+		LastName  string `json:"last_name" binding:"required"`
+		Phone     string `json:"phone" binding:"required"`
+		Password  string `json:"password" binding:"required,min=8"`
+		CarNumber string `json:"car_number" binding:"required"`
+		PINFL     string `json:"pinfl"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	phone := strings.TrimSpace(req.Phone)
+	if !strings.HasPrefix(phone, "+998") || len(strings.TrimPrefix(phone, "+")) != 12 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Uzbekistan phone number"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Hashing failed"})
+		return
+	}
+
+	tx, err := h.db.Begin(context.Background())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction failed"})
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	var userID string
+	err = tx.QueryRow(context.Background(),
+		`INSERT INTO users (first_name, last_name, phone, password_hash, role)
+		 VALUES ($1, $2, $3, $4, 'driver') RETURNING id`,
+		req.FirstName, req.LastName, phone, string(hash),
+	).Scan(&userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "unique") {
+			c.JSON(http.StatusConflict, gin.H{"error": "Phone number already registered"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		return
+	}
+
+	// Generate unique 7-digit referral code
+	refCode, err := generateReferralCodeAdmin(context.Background(), h.db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate referral code"})
+		return
+	}
+
+	carNumber := strings.ToUpper(strings.TrimSpace(req.CarNumber))
+	pinfl := strings.TrimSpace(req.PINFL)
+
+	_, err = tx.Exec(context.Background(),
+		`INSERT INTO drivers (user_id, car_number, pinfl, referral_code) VALUES ($1, $2, $3, $4)`,
+		userID, carNumber, pinfl, refCode,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})
+		return
+	}
+
+	if err := tx.Commit(context.Background()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"user_id":       userID,
+		"referral_code": refCode,
+		"message":       "Driver created",
+	})
+}
+
+func generateReferralCodeAdmin(ctx context.Context, db *pgxpool.Pool) (string, error) {
+	for i := 0; i < 20; i++ {
+		b := make([]byte, 4)
+		rand.Read(b)
+		num := (int(b[0])<<24 | int(b[1])<<16 | int(b[2])<<8 | int(b[3])) & 0x7FFFFFFF
+		code := fmt.Sprintf("%07d", num%9000000+1000000)
+		var exists bool
+		db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM drivers WHERE referral_code = $1)`, code).Scan(&exists)
+		if !exists {
+			return code, nil
+		}
+	}
+	return "", fmt.Errorf("referral code generation failed")
+}
+
+// ── Referral Settings ─────────────────────────────────────────────────────────
+
+func (h *AdminHandler) GetReferralSettings(c *gin.Context) {
+	var rs models.ReferralSettings
+	err := h.db.QueryRow(context.Background(),
+		`SELECT id, default_commission_pct, reduced_commission_pct, weekly_bonus_amount, updated_at
+		 FROM referral_settings ORDER BY id LIMIT 1`,
+	).Scan(&rs.ID, &rs.DefaultCommissionPct, &rs.ReducedCommissionPct, &rs.WeeklyBonusAmount, &rs.UpdatedAt)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch referral settings"})
+		return
+	}
+	c.JSON(http.StatusOK, rs)
+}
+
+func (h *AdminHandler) UpdateReferralSettings(c *gin.Context) {
+	var req struct {
+		DefaultCommissionPct *float64 `json:"default_commission_pct"`
+		ReducedCommissionPct *float64 `json:"reduced_commission_pct"`
+		WeeklyBonusAmount    *float64 `json:"weekly_bonus_amount"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.DefaultCommissionPct != nil && (*req.DefaultCommissionPct < 0 || *req.DefaultCommissionPct > 50) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "default_commission_pct must be 0–50"})
+		return
+	}
+	if req.ReducedCommissionPct != nil && (*req.ReducedCommissionPct < 0 || *req.ReducedCommissionPct > 50) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "reduced_commission_pct must be 0–50"})
+		return
+	}
+	if req.WeeklyBonusAmount != nil && *req.WeeklyBonusAmount < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "weekly_bonus_amount must be >= 0"})
+		return
+	}
+	_, err := h.db.Exec(context.Background(),
+		`UPDATE referral_settings SET
+		 default_commission_pct = COALESCE($1, default_commission_pct),
+		 reduced_commission_pct = COALESCE($2, reduced_commission_pct),
+		 weekly_bonus_amount    = COALESCE($3, weekly_bonus_amount),
+		 updated_at = NOW()`,
+		req.DefaultCommissionPct, req.ReducedCommissionPct, req.WeeklyBonusAmount,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update referral settings"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Referral settings updated"})
+}
+
+// ── Get Referrals List ────────────────────────────────────────────────────────
+
+func (h *AdminHandler) GetReferrals(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT d.id, u.first_name, u.last_name, u.phone,
+		 COALESCE(d.referral_code,''), COALESCE(d.referred_by,''),
+		 COALESCE(d.referral_benefit_type,''), COALESCE(d.balance,0),
+		 d.car_number, d.created_at
+		 FROM drivers d
+		 JOIN users u ON d.user_id = u.id
+		 ORDER BY d.created_at DESC LIMIT 200`,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch referrals"})
+		return
+	}
+	defer rows.Close()
+
+	var list []map[string]interface{}
+	for rows.Next() {
+		var id, firstName, lastName, phone, refCode, referredBy, benefitType, carNum string
+		var balance float64
+		var createdAt time.Time
+		rows.Scan(&id, &firstName, &lastName, &phone, &refCode, &referredBy, &benefitType, &balance, &carNum, &createdAt)
+		list = append(list, map[string]interface{}{
+			"id": id, "first_name": firstName, "last_name": lastName, "phone": phone,
+			"referral_code": refCode, "referred_by": referredBy,
+			"referral_benefit_type": benefitType, "balance": balance,
+			"car_number": carNum, "created_at": createdAt,
+		})
+	}
+	if list == nil {
+		list = []map[string]interface{}{}
+	}
+	c.JSON(http.StatusOK, gin.H{"referrals": list})
+}
+
+// ── Driver Analytics ──────────────────────────────────────────────────────────
+
+func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
+	driverID := c.Param("id")
+
+	// Basic driver info
+	var firstName, lastName, phone, carNum, refCode, referredBy, benefitType string
+	var balance float64
+	var driverCreatedAt time.Time
+	err := h.db.QueryRow(context.Background(),
+		`SELECT u.first_name, u.last_name, u.phone, d.car_number,
+		 COALESCE(d.referral_code,''), COALESCE(d.referred_by,''),
+		 COALESCE(d.referral_benefit_type,''), COALESCE(d.balance,0), d.created_at
+		 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
+		driverID,
+	).Scan(&firstName, &lastName, &phone, &carNum, &refCode, &referredBy, &benefitType, &balance, &driverCreatedAt)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	// Fetch referral settings for commission %
+	var defaultPct, reducedPct float64
+	h.db.QueryRow(context.Background(),
+		`SELECT default_commission_pct, reduced_commission_pct FROM referral_settings ORDER BY id LIMIT 1`,
+	).Scan(&defaultPct, &reducedPct)
+
+	commissionPct := defaultPct
+	if benefitType == "commission" {
+		commissionPct = reducedPct
+	}
+
+	period := c.DefaultQuery("period", "week") // day | week | month | custom
+	dateFrom := c.Query("date_from")           // YYYY-MM-DD
+	dateTo := c.Query("date_to")               // YYYY-MM-DD
+
+	var interval string
+	switch period {
+	case "day":
+		interval = "1 day"
+	case "month":
+		interval = "30 days"
+	case "custom":
+		interval = ""
+	default:
+		interval = "7 days"
+	}
+
+	var earningsRows interface{ Next() bool; Scan(...interface{}) error; Close() }
+	if period == "custom" && dateFrom != "" && dateTo != "" {
+		earningsRows, err = h.db.Query(context.Background(),
+			`SELECT DATE(completed_at)::text, COALESCE(SUM(total_price), 0), COUNT(*)
+			 FROM orders
+			 WHERE driver_id = $1 AND status = 'completed'
+			   AND completed_at >= $2::date AND completed_at < ($3::date + INTERVAL '1 day')
+			 GROUP BY DATE(completed_at) ORDER BY DATE(completed_at) ASC`,
+			driverID, dateFrom, dateTo,
+		)
+	} else {
+		earningsRows, err = h.db.Query(context.Background(),
+			`SELECT DATE(completed_at)::text, COALESCE(SUM(total_price), 0), COUNT(*)
+			 FROM orders
+			 WHERE driver_id = $1 AND status = 'completed'
+			   AND completed_at >= NOW() - $2::interval
+			 GROUP BY DATE(completed_at) ORDER BY DATE(completed_at) ASC`,
+			driverID, interval,
+		)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch earnings"})
+		return
+	}
+	defer earningsRows.Close()
+
+	type dailyEntry struct {
+		Date    string  `json:"date"`
+		Revenue float64 `json:"revenue"`
+		Orders  int     `json:"orders"`
+	}
+	var daily []dailyEntry
+	var totalRevenue float64
+	var totalOrders int
+	for earningsRows.Next() {
+		var e dailyEntry
+		earningsRows.Scan(&e.Date, &e.Revenue, &e.Orders)
+		totalRevenue += e.Revenue
+		totalOrders += e.Orders
+		daily = append(daily, e)
+	}
+	if daily == nil {
+		daily = []dailyEntry{}
+	}
+
+	companyShare := totalRevenue * commissionPct / 100
+	driverEarnings := totalRevenue - companyShare
+
+	// Count how many drivers this driver referred
+	var referralCount int
+	h.db.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM drivers WHERE referred_by = $1`, refCode,
+	).Scan(&referralCount)
+
+	c.JSON(http.StatusOK, gin.H{
+		"driver_id":    driverID,
+		"first_name":   firstName,
+		"last_name":    lastName,
+		"phone":        phone,
+		"car_number":   carNum,
+		"referral_code":         refCode,
+		"referred_by":           referredBy,
+		"referral_benefit_type": benefitType,
+		"commission_pct":        commissionPct,
+		"balance":               balance,
+		"created_at":            driverCreatedAt,
+		"period":                period,
+		"total_revenue":         totalRevenue,
+		"total_orders":          totalOrders,
+		"company_share":         companyShare,
+		"driver_earnings":       driverEarnings,
+		"referral_count":        referralCount,
+		"daily":                 daily,
 	})
 }

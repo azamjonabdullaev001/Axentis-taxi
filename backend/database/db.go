@@ -203,4 +203,42 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS passenger_phone VARCHAR(30);
 -- Indexes for fast order history queries
 CREATE INDEX IF NOT EXISTS idx_orders_passenger_id_created ON orders (passenger_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_driver_id_created ON orders (driver_id, created_at DESC);
+
+-- PINFL (JSHSHIR) — 14-digit Uzbek personal ID, required for drivers only
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS pinfl VARCHAR(20) DEFAULT '';
+
+-- 7-digit unique referral code assigned to each driver on registration
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS referral_code VARCHAR(7);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_drivers_referral_code ON drivers (referral_code) WHERE referral_code IS NOT NULL;
+
+-- The referral code the driver entered (who referred them)
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS referred_by VARCHAR(7);
+
+-- Which referral benefit the driver chose: 'commission' (lower %) or 'bonus' (weekly cash)
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS referral_benefit_type VARCHAR(12);
+
+-- Balance: sum accumulated via completed rides (before commission deduction)
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS balance DECIMAL(14,2) DEFAULT 0;
+
+-- Referral program settings (single row)
+CREATE TABLE IF NOT EXISTS referral_settings (
+    id SERIAL PRIMARY KEY,
+    default_commission_pct  DECIMAL(5,2) DEFAULT 8.0,
+    reduced_commission_pct  DECIMAL(5,2) DEFAULT 6.0,
+    weekly_bonus_amount     DECIMAL(14,2) DEFAULT 10000,
+    updated_at              TIMESTAMPTZ DEFAULT NOW()
+);
+INSERT INTO referral_settings (default_commission_pct, reduced_commission_pct, weekly_bonus_amount)
+SELECT 8.0, 6.0, 10000
+WHERE NOT EXISTS (SELECT 1 FROM referral_settings);
+
+-- Scheduled weekly bonuses given to drivers who chose the bonus benefit
+CREATE TABLE IF NOT EXISTS referral_bonuses (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_id  UUID REFERENCES drivers(id) ON DELETE CASCADE,
+    week_start DATE NOT NULL,
+    amount     DECIMAL(14,2) NOT NULL,
+    paid_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_bonuses_driver_week ON referral_bonuses (driver_id, week_start);
 `

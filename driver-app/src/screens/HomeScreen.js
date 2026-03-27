@@ -131,6 +131,11 @@ export default function HomeScreen() {
   const [acceptCountdown, setAcceptCountdown] = useState(10);
   const countdownRef = useRef(null);
 
+  // Trip completion bottom-sheet popup
+  const [completionModal, setCompletionModal] = useState(null);
+  // Prevents double-tap on async action buttons
+  const [isProcessing, setIsProcessing] = useState(false);
+
   // 100m metering: accumulate driven distance and calculate running price
   const [meteredKm, setMeteredKm] = useState(0);
   const meteredKmRef = useRef(0);
@@ -452,7 +457,8 @@ export default function HomeScreen() {
   }
 
   async function handleAcceptOrder() {
-    if (!incomingOrder) return;
+    if (!incomingOrder || isProcessing) return;
+    setIsProcessing(true);
     clearInterval(countdownRef.current);
     try {
       await driverAPI.acceptOrder(incomingOrder.id);
@@ -476,6 +482,8 @@ export default function HomeScreen() {
       Alert.alert(t(lang,'error'), t(lang,'orderBusy'));
       setIncomingOrder(null);
       resetToAvailable();
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -486,12 +494,16 @@ export default function HomeScreen() {
   }
 
   async function handleArrived() {
+    if (isProcessing) return;
+    setIsProcessing(true);
     try {
       await driverAPI.arrivedAtPickup(activeOrder.id);
       setDriverStatus(DRIVER_STATUS.ARRIVED);
       startWaitTimer();
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -510,6 +522,8 @@ export default function HomeScreen() {
   }
 
   async function handleStartTrip() {
+    if (isProcessing) return;
+    setIsProcessing(true);
     stopWaitTimer();
     try {
       const { data } = await driverAPI.startTrip(activeOrder.id);
@@ -531,10 +545,14 @@ export default function HomeScreen() {
       }
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
+    } finally {
+      setIsProcessing(false);
     }
   }
 
   async function handleCompleteTrip() {
+    if (isProcessing) return;
+    setIsProcessing(true);
     try {
       // Send metered distance to server before completing
       if (meteredKmRef.current > 0) {
@@ -542,12 +560,11 @@ export default function HomeScreen() {
       }
       const { data } = await driverAPI.completeTrip(activeOrder.id);
       const rounded = Math.ceil((data.total_price || 0) / 200) * 200;
-      Alert.alert(t(lang,'tripCompleted'),
-        `${t(lang,'total')}: ${rounded.toLocaleString()} ${t(lang,'sum')}`,
-        [{ text: 'OK', onPress: resetToAvailable }]
-      );
+      setCompletionModal({ price: rounded });
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -719,7 +736,11 @@ export default function HomeScreen() {
             <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
               {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
             </Text>
-            <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.primary }]} onPress={handleArrived}>
+            <TouchableOpacity
+              style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
+              onPress={handleArrived}
+              disabled={isProcessing}
+            >
               <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
             </TouchableOpacity>
           </View>
@@ -740,7 +761,11 @@ export default function HomeScreen() {
                 </Text>
               </View>
             </View>
-            <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.primary }]} onPress={handleStartTrip}>
+            <TouchableOpacity
+              style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
+              onPress={handleStartTrip}
+              disabled={isProcessing}
+            >
               <Text style={s.actionBtnText}>{t(lang,'startTrip')}</Text>
             </TouchableOpacity>
           </View>
@@ -779,14 +804,18 @@ export default function HomeScreen() {
                 </Text>
               </>
             )}
-            <TouchableOpacity style={[s.actionBtn, { backgroundColor: colors.success }]} onPress={handleCompleteTrip}>
+            <TouchableOpacity
+              style={[s.actionBtn, { backgroundColor: colors.success, opacity: isProcessing ? 0.6 : 1 }]}
+              onPress={handleCompleteTrip}
+              disabled={isProcessing}
+            >
               <Text style={s.actionBtnText}>{t(lang,'completeTrip')}</Text>
             </TouchableOpacity>
           </View>
         )}
       </View>
 
-      {/* Incoming order modal */}
+      {/* Incoming order modal — slides up from bottom */}
       <Modal visible={!!incomingOrder} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <View style={[s.orderModal, { backgroundColor: colors.background }]}>
@@ -843,10 +872,30 @@ export default function HomeScreen() {
               <TouchableOpacity style={[s.declineBtn, { borderColor: colors.error }]} onPress={handleDeclineOrder}>
                 <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'decline')}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.acceptBtn, { backgroundColor: colors.primary }]} onPress={handleAcceptOrder}>
+              <TouchableOpacity style={[s.acceptBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]} onPress={handleAcceptOrder} disabled={isProcessing}>
                 <Text style={{ color: '#000', fontWeight: '800', fontSize: 15 }}>{t(lang,'accept')}</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Trip completion popup — slides up from bottom */}
+      <Modal visible={!!completionModal} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={[s.orderModal, { backgroundColor: colors.background }]}>
+            <Text style={[s.newOrderTitle, { color: colors.text }]}>{t(lang,'tripCompleted')}</Text>
+            {completionModal && (
+              <Text style={[s.orderPrice, { color: colors.primary }]}>
+                {t(lang,'total')}: {completionModal.price.toLocaleString()} {t(lang,'sum')}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={[s.acceptBtn, { backgroundColor: colors.primary, marginTop: 16, alignSelf: 'stretch' }]}
+              onPress={() => { setCompletionModal(null); resetToAvailable(); }}
+            >
+              <Text style={{ color: '#000', fontWeight: '800', fontSize: 16 }}>OK</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -920,8 +969,8 @@ function makeStyles(colors) {
       justifyContent: 'center', alignItems: 'center',
     },
     // Modal
-    modalOverlay: { flex: 1, justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 20 },
-    orderModal: { borderRadius: 24, padding: 24, alignItems: 'center' },
+    modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+    orderModal: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 32, alignItems: 'center' },
     timerCircle: {
       width: 64, height: 64, borderRadius: 32,
       borderWidth: 3, borderColor: colors.primary,

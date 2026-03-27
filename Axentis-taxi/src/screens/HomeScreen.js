@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert, Image, Animated, ScrollView, Modal,
+  ActivityIndicator, Alert, Image, Animated, ScrollView, Modal, PanResponder,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -117,7 +117,7 @@ async function fetchRoadRoute(pickup, dest) {
 // Маркер с PNG иконкой: tracksViewChanges=true до загрузки изображения, затем false.
 // forceTrack=true принудительно оставляет tracksViewChanges=true — требуется для маркеров,
 // у которых меняется rotation/coordinate после загрузки (например, иконка машины водителя).
-function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, zIndex, flat, rotation, forceTrack = false }) {
+function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, zIndex, flat, rotation, forceTrack = false, onLongPress }) {
   const [trackChanges, setTrackChanges] = React.useState(true);
   return (
     <Marker
@@ -127,6 +127,7 @@ function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, z
       flat={flat}
       rotation={rotation}
       tracksViewChanges={forceTrack || trackChanges}
+      onLongPress={onLongPress}
     >
       <Image
         source={source}
@@ -171,6 +172,7 @@ export default function HomeScreen() {
   const orderIDRef = useRef(null);
   const sharingLocationRef = useRef(user?.share_live_location !== false);
   const pickupLockedRef = useRef(false);
+  const mapModeRef = useRef(null);
 
   const [region, setRegion] = useState({
     latitude: 41.2995, longitude: 69.2401,
@@ -204,8 +206,20 @@ export default function HomeScreen() {
   const [roadDistanceKm, setRoadDistanceKm] = useState(null); // accurate road distance from OSRM
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
-  const [panelHeight, setPanelHeight] = useState(190);
+  const recentTripsRef = useRef([]); // ref so PanResponder closure can read it
+  // gpsBtnBottomAnim replaces panelHeight state — setValue() skips React re-renders
+  const gpsBtnBottomAnim = useRef(new Animated.Value(202)).current;
   const [panelExpanded, setPanelExpanded] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const panelCollapsedRef = useRef(false);
+  const panelExpandedRef = useRef(false);
+  // translateY-based: 0 = fully visible, positive = slid down off-screen (collapsed)
+  const panelTranslateY    = useRef(new Animated.Value(0)).current;
+  const panelFullHeightRef = useRef(300);  // total panel height (updated by onLayout)
+  const panelHandleHeightRef = useRef(48); // handle bar height only
+  const PANEL_PEEK_HEIGHT = 60;            // minimum visible height when collapsed (handle + safe margin)
+  const dragStartYRef      = useRef(0);
+  const historyDragStartRef = useRef(0);   // history panel height at gesture start
   const [dashPhase, setDashPhase] = useState(0);
   const [pricingSettings, setPricingSettings] = useState({ service_fee: 2000, price_per_km: 2000, surge_multiplier: 1.0 });
   const [tariffType, setTariffType] = useState('standard'); // 'standard' | 'free'
@@ -299,15 +313,14 @@ export default function HomeScreen() {
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-      setUserLocation(coords);
-      setPickupCoords(coords);
-      setPickupText(t(lang, 'yourLocation'));
-      setRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
-      // Фоновое геокодирование текущей позиции
-      reverseGeocode(coords).then((label) => setPickupText(label));
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+        setUserLocation(coords);
+        setRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+      }
+      // Always start in pickup selection mode — user confirms their location
+      setMapMode('pickup');
     })();
 
     (async () => {
@@ -320,15 +333,17 @@ export default function HomeScreen() {
       } catch {}
     })();
 
-    (async () => {
+    async function loadHistory() {
       try {
         const { data } = await orderAPI.getHistory();
         const completed = (data.orders || [])
           .filter((o) => o.status === 'completed')
           .slice(0, 10);
         setRecentTrips(completed);
+        recentTripsRef.current = completed;
       } catch {}
-    })();
+    }
+    loadHistory();
 
     return () => {
       locationSubscriptionRef.current?.remove?.();
@@ -355,7 +370,7 @@ export default function HomeScreen() {
           longitude: watchLoc.coords.longitude,
         };
         setUserLocation(nextCoords);
-        if (!pickupLockedRef.current) {
+        if (!pickupLockedRef.current && !mapModeRef.current) {
           setPickupCoords(nextCoords);
           setPickupText(t(lang, 'yourLocation'));
         }
@@ -438,6 +453,9 @@ export default function HomeScreen() {
   useEffect(() => { orderIDRef.current = orderID; }, [orderID]);
   useEffect(() => { tariffTypeRef.current = tariffType; }, [tariffType]);
   useEffect(() => { lockedPricePerKmRef.current = lockedPricePerKm; }, [lockedPricePerKm]);
+  useEffect(() => { mapModeRef.current = mapMode; }, [mapMode]);
+  useEffect(() => { panelCollapsedRef.current = panelCollapsed; }, [panelCollapsed]);
+  useEffect(() => { panelExpandedRef.current = panelExpanded; }, [panelExpanded]);
 
   // Периодически сохраняем пройденные км на сервере (свободный тариф, каждые 5 сек)
   useEffect(() => {
@@ -701,6 +719,122 @@ export default function HomeScreen() {
     resetOrder();
   }
 
+  const handlePanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gs) =>
+        Math.abs(gs.dy) > 6 && Math.abs(gs.dy) > Math.abs(gs.dx) * 1.2,
+
+      onPanResponderGrant: () => {
+        panelTranslateY.stopAnimation();
+        historyPanelHeight.stopAnimation();
+        dragStartYRef.current = panelTranslateY.__getValue();
+        historyDragStartRef.current = historyPanelHeight.__getValue();
+      },
+
+      onPanResponderMove: (_, { dy }) => {
+        if (panelExpandedRef.current) {
+          // Stage 2: track history panel height 1:1 with finger (drag down = close)
+          const next = Math.max(0, Math.min(280, historyDragStartRef.current - dy));
+          historyPanelHeight.setValue(next);
+          return;
+        }
+        // Stage 1: slide main panel up/down with finger
+        const maxSlide = Math.max(0, panelFullHeightRef.current - PANEL_PEEK_HEIGHT);
+        const next = Math.max(0, Math.min(maxSlide, dragStartYRef.current + dy));
+        panelTranslateY.setValue(next);
+      },
+
+      onPanResponderRelease: (_, { dy, vy }) => {
+        const isTap       = Math.abs(dy) < 10 && Math.abs(vy) < 0.2;
+        const isSwipeDown = dy > 30  || vy > 0.3;
+        const isSwipeUp   = dy < -30 || vy < -0.3;
+        // Use PANEL_PEEK_HEIGHT to guarantee handle stays visible when collapsed
+        const maxSlide    = Math.max(0, panelFullHeightRef.current - PANEL_PEEK_HEIGHT);
+
+        // 2× faster springs: tension 280, friction 24
+        const springTo = (toValue, onDone) => {
+          Animated.spring(panelTranslateY, {
+            toValue,
+            useNativeDriver: true,
+            tension: 280,
+            friction: 24,
+            overshootClamping: true,
+          }).start(onDone);
+          Animated.spring(gpsBtnBottomAnim, {
+            toValue: toValue === 0
+              ? (panelFullHeightRef.current + 12)
+              : (PANEL_PEEK_HEIGHT + 12),
+            useNativeDriver: false,
+            tension: 280,
+            friction: 24,
+          }).start();
+        };
+
+        // 2× faster history panel spring
+        const springHistory = (toValue, onDone) => {
+          Animated.spring(historyPanelHeight, {
+            toValue,
+            useNativeDriver: false,
+            tension: 160,
+            friction: 22,
+            overshootClamping: true,
+          }).start(onDone);
+        };
+
+        if (isTap) {
+          if (panelCollapsedRef.current) {
+            panelCollapsedRef.current = false;
+            springTo(0, () => setPanelCollapsed(false));
+          } else {
+            const next = !panelExpandedRef.current;
+            panelExpandedRef.current = next;
+            setPanelExpanded(next);
+            springHistory(next ? 280 : 0, next ? undefined : () => setPanelExpanded(false));
+          }
+          return;
+        }
+
+        // Stage 2: history panel is open — position-based snap
+        if (panelExpandedRef.current) {
+          const currentH = historyPanelHeight.__getValue();
+          const shouldClose = isSwipeDown || currentH < 140;
+          if (shouldClose) {
+            panelExpandedRef.current = false;
+            springHistory(0, () => setPanelExpanded(false));
+            springTo(0);
+          } else {
+            springHistory(280);
+          }
+          return;
+        }
+
+        // Stage 1: main panel swipe
+        if (isSwipeDown) {
+          if (!panelCollapsedRef.current) {
+            panelCollapsedRef.current = true;
+            springTo(maxSlide, () => setPanelCollapsed(true));
+          } else {
+            springTo(maxSlide);
+          }
+        } else if (isSwipeUp) {
+          if (panelCollapsedRef.current) {
+            panelCollapsedRef.current = false;
+            springTo(0, () => setPanelCollapsed(false));
+          } else if (recentTripsRef.current.length > 0) {
+            panelExpandedRef.current = true;
+            springHistory(280, () => setPanelExpanded(true));
+            springTo(0);
+          } else {
+            springTo(0);
+          }
+        } else {
+          springTo(panelCollapsedRef.current ? maxSlide : 0);
+        }
+      },
+    })
+  ).current;
+
   const s = makeStyles(colors);
   const routeColor = ROUTE_COLORS[orderStatus] || '#2196F3';
 
@@ -735,11 +869,11 @@ export default function HomeScreen() {
 
         {/* Пин отправления */}
         {pickupCoords && !mapMode && (
-          <PinMarker coordinate={pickupCoords} source={PICKUP_ICON} size={40} anchor={{ x: 0.5, y: 1 }} />
+          <PinMarker coordinate={pickupCoords} source={PICKUP_ICON} size={40} anchor={{ x: 0.5, y: 1 }} onLongPress={() => enterMapMode('pickup')} />
         )}
         {/* Пин назначения */}
         {destCoords && !mapMode && (
-          <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.5, y: 1 }} />
+          <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.5, y: 1 }} onLongPress={() => enterMapMode('dest')} />
         )}
 
         {/* Машина активного водителя — плавно интерполируется из WS обновлений.
@@ -800,8 +934,12 @@ export default function HomeScreen() {
       </MapView>
 
       {/* Floating GPS button — always visible */}
+      <Animated.View
+        pointerEvents="box-none"
+        style={[s.floatingGpsBtn, { backgroundColor: colors.card, bottom: gpsBtnBottomAnim }]}
+      >
       <TouchableOpacity
-        style={[s.floatingGpsBtn, { backgroundColor: colors.card, bottom: panelHeight + 12 }]}
+        style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
         onPress={async () => {
           let loc = userLocation;
           if (!loc) {
@@ -817,6 +955,7 @@ export default function HomeScreen() {
       >
         <Ionicons name="navigate" size={22} color={colors.primary} />
       </TouchableOpacity>
+      </Animated.View>
 
       {/* Center crosshair during map selection — PNG иконка, острый кончик в центре экрана */}
       {mapMode && (
@@ -834,19 +973,35 @@ export default function HomeScreen() {
 
       {/* ── IDLE panel ── */}
       {orderStatus === ORDER_STATUS.IDLE && !mapMode && (
-        <View
-          style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}
+        <Animated.View
+          style={[s.panel, {
+            backgroundColor: colors.background,
+            bottom: 0,
+            paddingBottom: 16,
+            transform: [{ translateY: panelTranslateY }],
+          }]}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            panelFullHeightRef.current = h;
+            // Only drive GPS button when panel is visible (not mid-collapse)
+            if (!panelCollapsedRef.current) {
+              gpsBtnBottomAnim.setValue(h + 12);
+            }
+          }}
         >
-          <TouchableOpacity style={s.handleWrap} onPress={togglePanel} activeOpacity={0.7}>
+          <View
+            {...handlePanResponder.panHandlers}
+            style={s.handleWrap}
+            onLayout={(e) => { panelHandleHeightRef.current = e.nativeEvent.layout.height; }}
+          >
             <View style={[s.handle, { backgroundColor: colors.border }]} />
             <Ionicons
-              name={panelExpanded ? 'chevron-down' : 'chevron-up'}
+              name={panelCollapsed ? 'chevron-up' : panelExpanded ? 'chevron-down' : 'chevron-up'}
               size={16}
               color={colors.textSecondary}
               style={{ marginTop: 2 }}
             />
-          </TouchableOpacity>
+          </View>
 
           {/* GPS кнопка + цена справа */}
           <View style={s.gpsLocatePriceRow}>
@@ -899,22 +1054,16 @@ export default function HomeScreen() {
             {tariffType === 'standard' && (
               <>
                 <View style={[s.inputConnector, { backgroundColor: colors.border }]} />
-                <View style={s.inputRow}>
+                <TouchableOpacity style={s.inputRow} onPress={() => enterMapMode('dest')} activeOpacity={0.8}>
                   <View style={s.dotRed} />
-                  <TextInput
-                    style={[s.inputText, { color: colors.text, flex: 1 }]}
-                    placeholder={t(lang, 'to')}
-                    placeholderTextColor={colors.textSecondary}
-                    value={destText}
-                    onChangeText={(text) => {
-                      setDestText(text);
-                      if (!text) setDestCoords(null);
-                    }}
-                  />
-                  <TouchableOpacity style={s.inputIconBtn} onPress={() => enterMapMode('dest')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Ionicons name="map-outline" size={20} color={colors.textSecondary} />
-                  </TouchableOpacity>
-                </View>
+                  <Text
+                    style={[s.inputText, { color: destText ? colors.text : colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
+                    {destText || t(lang, 'to')}
+                  </Text>
+                  <Ionicons name="map-outline" size={20} color={colors.textSecondary} />
+                </TouchableOpacity>
               </>
             )}
           </View>
@@ -955,7 +1104,7 @@ export default function HomeScreen() {
           )}
 
           {/* Recent trips — свайп-панель с историей */}
-          {recentTrips.length > 0 && (
+          {!panelCollapsed && recentTrips.length > 0 && (
             <Animated.View style={{ maxHeight: historyPanelHeight, overflow: 'hidden' }}>
               <View style={[s.historySection, { borderTopColor: colors.border }]}>
                 <Text style={[s.historySectionTitle, { color: colors.textSecondary }]}>{t(lang, 'recentTrips')}</Text>
@@ -965,13 +1114,29 @@ export default function HomeScreen() {
                       key={trip.id}
                       style={s.historyRow}
                       onPress={() => {
+                        // Restore destination
                         if (trip.destination_address) setDestText(trip.destination_address);
                         if (trip.destination_lat && trip.destination_lng) {
-                          const coords = { latitude: Number(trip.destination_lat), longitude: Number(trip.destination_lng) };
-                          setDestCoords(coords);
-                          mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+                          setDestCoords({ latitude: Number(trip.destination_lat), longitude: Number(trip.destination_lng) });
                         } else {
                           enterMapMode('dest');
+                        }
+                        // Restore pickup (start) — это исправление: старт тоже должен обновляться
+                        if (trip.pickup_address) setPickupText(trip.pickup_address);
+                        if (trip.pickup_lat && trip.pickup_lng) {
+                          const pickup = { latitude: Number(trip.pickup_lat), longitude: Number(trip.pickup_lng) };
+                          setPickupCoords(pickup);
+                          pickupLockedRef.current = true;
+                        }
+                        // Zoom map to show full route
+                        if (trip.pickup_lat && trip.pickup_lng && trip.destination_lat && trip.destination_lng) {
+                          const midLat = (Number(trip.pickup_lat) + Number(trip.destination_lat)) / 2;
+                          const midLng = (Number(trip.pickup_lng) + Number(trip.destination_lng)) / 2;
+                          const latD = Math.abs(Number(trip.pickup_lat) - Number(trip.destination_lat)) * 1.6 + 0.02;
+                          const lngD = Math.abs(Number(trip.pickup_lng) - Number(trip.destination_lng)) * 1.6 + 0.02;
+                          mapRef.current?.animateToRegion({ latitude: midLat, longitude: midLng, latitudeDelta: latD, longitudeDelta: lngD });
+                        } else if (trip.destination_lat && trip.destination_lng) {
+                          mapRef.current?.animateToRegion({ latitude: Number(trip.destination_lat), longitude: Number(trip.destination_lng), latitudeDelta: 0.02, longitudeDelta: 0.02 });
                         }
                         togglePanel();
                       }}
@@ -1000,17 +1165,24 @@ export default function HomeScreen() {
               </View>
             </Animated.View>
           )}
-        </View>
+        </Animated.View>
       )}
 
       {/* ── Map selection confirm bar ── */}
       {orderStatus === ORDER_STATUS.IDLE && mapMode && (
         <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
+          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
           {/* Заголовок текущего режима */}
           <Text style={[s.mapModeLabel, { color: colors.textSecondary }]}>
             {mapMode === 'pickup' ? t(lang,'selectPickupPoint') : t(lang,'selectDestination')}
           </Text>
+          {/* Locate me button — only in pickup mode */}
+          {mapMode === 'pickup' && (
+            <TouchableOpacity style={s.gpsLocateBtn} onPress={handleLocateMe} activeOpacity={0.8}>
+              <Ionicons name="locate" size={16} color={colors.primary} />
+              <Text style={[s.gpsLocateText, { color: colors.primary }]}>{t(lang, 'myLocation')}</Text>
+            </TouchableOpacity>
+          )}
           {mapMode === 'dest' && (
             <TextInput
               style={[s.mapInputText, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
@@ -1036,7 +1208,7 @@ export default function HomeScreen() {
       {/* ── SEARCHING panel ── */}
       {orderStatus === ORDER_STATUS.SEARCHING && (
         <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
+          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 8 }} />
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'searching')}</Text>
@@ -1049,7 +1221,7 @@ export default function HomeScreen() {
       {/* ── ACCEPTED / ARRIVED panel ── */}
       {(orderStatus === ORDER_STATUS.ACCEPTED || orderStatus === ORDER_STATUS.ARRIVED) && (
         <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
+          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>
             {orderStatus === ORDER_STATUS.ACCEPTED ? t(lang, 'driverFound') : t(lang, 'driverArrived')}
@@ -1091,7 +1263,7 @@ export default function HomeScreen() {
       {/* ── IN_PROGRESS panel ── */}
       {orderStatus === ORDER_STATUS.IN_PROGRESS && (
         <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
+          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'tripInProgress')}</Text>
           {driverInfo && (
@@ -1135,8 +1307,8 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* ── Rating modal — shown after trip completion ── */}
-      <Modal visible={ratingModalVisible} transparent animationType="fade">
+      {/* ── Rating modal — slides up from bottom after trip completion ── */}
+      <Modal visible={ratingModalVisible} transparent animationType="slide">
         <View style={s.ratingOverlay}>
           <View style={[s.ratingModal, { backgroundColor: colors.background }]}>
             <Text style={[s.ratingTitle, { color: colors.text }]}>{t(lang, 'thankYou')}</Text>
@@ -1158,7 +1330,7 @@ export default function HomeScreen() {
             <View style={s.ratingActions}>
               <TouchableOpacity
                 style={[s.ratingSkipBtn, { borderColor: colors.border }]}
-                onPress={() => { setRatingModalVisible(false); resetOrder(); }}
+                onPress={async () => { setRatingModalVisible(false); resetOrder(); try { const { data } = await orderAPI.getHistory(); const t2 = (data.orders||[]).filter(o=>o.status==='completed').slice(0,10); setRecentTrips(t2); recentTripsRef.current = t2; } catch {} }}
               >
                 <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>{t(lang, 'skip')}</Text>
               </TouchableOpacity>
@@ -1175,6 +1347,7 @@ export default function HomeScreen() {
                   }
                   setRatingModalVisible(false);
                   resetOrder();
+                  try { const { data } = await orderAPI.getHistory(); const t2 = (data.orders||[]).filter(o=>o.status==='completed').slice(0,10); setRecentTrips(t2); recentTripsRef.current = t2; } catch {}
                 }}
               >
                 <Text style={{ color: '#000', fontWeight: '800' }}>{t(lang, 'send')}</Text>
@@ -1335,10 +1508,11 @@ function makeStyles(colors) {
     // Rating modal
     ratingOverlay: {
       flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
-      justifyContent: 'center', alignItems: 'center',
+      justifyContent: 'flex-end',
     },
     ratingModal: {
-      width: '88%', borderRadius: 20, padding: 24,
+      width: '100%', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      padding: 24, paddingBottom: 36,
       elevation: 20, shadowOpacity: 0.3, shadowRadius: 10, shadowColor: '#000',
       alignItems: 'center',
     },

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,12 +42,14 @@ type RegisterPassengerRequest struct {
 }
 
 type RegisterDriverRequest struct {
-	FirstName string `json:"first_name" binding:"required"`
-	LastName  string `json:"last_name" binding:"required"`
-	Phone     string `json:"phone" binding:"required"`
-	Password  string `json:"password" binding:"required,min=8"`
-	ConfirmPw string `json:"confirm_password" binding:"required"`
-	CarNumber string `json:"car_number" binding:"required"`
+	FirstName   string `json:"first_name" binding:"required"`
+	LastName    string `json:"last_name" binding:"required"`
+	Phone       string `json:"phone" binding:"required"`
+	Password    string `json:"password" binding:"required,min=8"`
+	ConfirmPw   string `json:"confirm_password" binding:"required"`
+	CarNumber   string `json:"car_number" binding:"required"`
+	PINFL       string `json:"pinfl"`
+	ReferredBy  string `json:"referred_by"`
 }
 
 type LoginRequest struct {
@@ -150,9 +154,30 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		return
 	}
 
+	refCode, err := generateUniqueReferralCode(context.Background(), h.db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate referral code"})
+		return
+	}
+
+	// Validate referred_by code if provided
+	var referredBy *string
+	if req.ReferredBy != "" {
+		var exists bool
+		tx.QueryRow(context.Background(),
+			`SELECT EXISTS(SELECT 1 FROM drivers WHERE referral_code = $1)`,
+			req.ReferredBy,
+		).Scan(&exists)
+		if exists {
+			referredBy = &req.ReferredBy
+		}
+	}
+
+	pinfl := strings.TrimSpace(req.PINFL)
+
 	_, err = tx.Exec(context.Background(),
-		`INSERT INTO drivers (user_id, car_number) VALUES ($1, $2)`,
-		userID, normalizedCarNumber,
+		`INSERT INTO drivers (user_id, car_number, pinfl, referral_code, referred_by) VALUES ($1, $2, $3, $4, $5)`,
+		userID, normalizedCarNumber, pinfl, refCode, referredBy,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})
@@ -169,7 +194,63 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"token": token, "user_id": userID, "role": "driver"})
+	c.JSON(http.StatusCreated, gin.H{"token": token, "user_id": userID, "role": "driver", "referral_code": refCode})
+}
+
+// ApplyReferral lets a driver choose a referral benefit after entering a referral code.
+func (h *AuthHandler) ApplyReferral(c *gin.Context) {
+	userID := c.GetString("user_id")
+	var req struct {
+		ReferralCode string `json:"referral_code" binding:"required"`
+		BenefitType  string `json:"benefit_type" binding:"required"` // "commission" or "bonus"
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.BenefitType != "commission" && req.BenefitType != "bonus" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "benefit_type must be 'commission' or 'bonus'"})
+		return
+	}
+
+	// Make sure the referral code exists and does not belong to the same driver
+	var referrerDriverID string
+	err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE referral_code = $1`, req.ReferralCode,
+	).Scan(&referrerDriverID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Referral code not found"})
+		return
+	}
+
+	// Get the current driver's ID
+	var driverID string
+	var currentReferred *string
+	err = h.db.QueryRow(context.Background(),
+		`SELECT id, referred_by FROM drivers WHERE user_id = $1`, userID,
+	).Scan(&driverID, &currentReferred)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver profile not found"})
+		return
+	}
+	if driverID == referrerDriverID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot use your own referral code"})
+		return
+	}
+	if currentReferred != nil && *currentReferred != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "Referral already applied"})
+		return
+	}
+
+	_, err = h.db.Exec(context.Background(),
+		`UPDATE drivers SET referred_by = $1, referral_benefit_type = $2 WHERE user_id = $3`,
+		req.ReferralCode, req.BenefitType, userID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to apply referral"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Referral applied", "benefit_type": req.BenefitType})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -227,11 +308,26 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 
 	if role == "driver" {
 		var driver models.Driver
+		var referralCode, referredBy, referralBenefitType *string
 		err = h.db.QueryRow(context.Background(),
-			`SELECT id, car_number, is_available, current_lat, current_lng, current_heading, last_seen FROM drivers WHERE user_id = $1`,
+			`SELECT id, car_number, COALESCE(pinfl,''), is_available, current_lat, current_lng, current_heading, last_seen,
+			 COALESCE(referral_code,''), COALESCE(referred_by,''), COALESCE(referral_benefit_type,''),
+			 COALESCE(balance,0)
+			 FROM drivers WHERE user_id = $1`,
 			userID,
-		).Scan(&driver.ID, &driver.CarNumber, &driver.IsAvailable, &driver.CurrentLat, &driver.CurrentLng, &driver.CurrentHeading, &driver.LastSeen)
+		).Scan(&driver.ID, &driver.CarNumber, &driver.PINFL, &driver.IsAvailable,
+			&driver.CurrentLat, &driver.CurrentLng, &driver.CurrentHeading, &driver.LastSeen,
+			&referralCode, &referredBy, &referralBenefitType, &driver.Balance)
 		if err == nil {
+			if referralCode != nil {
+				driver.ReferralCode = *referralCode
+			}
+			if referredBy != nil {
+				driver.ReferredBy = *referredBy
+			}
+			if referralBenefitType != nil {
+				driver.ReferralBenefitType = *referralBenefitType
+			}
 			c.JSON(http.StatusOK, gin.H{"user": user, "driver": driver})
 			return
 		}
@@ -351,6 +447,23 @@ func (h *AuthHandler) SavePushToken(c *gin.Context) {
 		req.PushToken, userID,
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Push token registered"})
+}
+
+// generateUniqueReferralCode creates a random 7-digit numeric string unique in the drivers table.
+func generateUniqueReferralCode(ctx context.Context, db *pgxpool.Pool) (string, error) {
+	for i := 0; i < 20; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(9000000))
+		if err != nil {
+			return "", err
+		}
+		code := fmt.Sprintf("%07d", n.Int64()+1000000)
+		var exists bool
+		db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM drivers WHERE referral_code = $1)`, code).Scan(&exists)
+		if !exists {
+			return code, nil
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique referral code after 20 attempts")
 }
 
 func generateUserToken(userID, role, secret string) (string, error) {

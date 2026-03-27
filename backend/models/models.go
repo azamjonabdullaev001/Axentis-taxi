@@ -24,18 +24,39 @@ type User struct {
 }
 
 type Driver struct {
-	ID             string     `json:"id"`
-	UserID         string     `json:"user_id"`
-	CarNumber      string     `json:"car_number"`
-	IsAvailable    bool       `json:"is_available"`
-	CurrentLat     *float64   `json:"current_lat"`
-	CurrentLng     *float64   `json:"current_lng"`
-	CurrentHeading *float64   `json:"current_heading,omitempty"`
-	AverageRating  float64    `json:"average_rating"`
-	RatingCount    int        `json:"rating_count"`
-	LastSeen       time.Time  `json:"last_seen"`
-	CreatedAt      time.Time  `json:"created_at"`
-	User           *User      `json:"user,omitempty"`
+	ID                  string     `json:"id"`
+	UserID              string     `json:"user_id"`
+	CarNumber           string     `json:"car_number"`
+	PINFL               string     `json:"pinfl,omitempty"`
+	IsAvailable         bool       `json:"is_available"`
+	CurrentLat          *float64   `json:"current_lat"`
+	CurrentLng          *float64   `json:"current_lng"`
+	CurrentHeading      *float64   `json:"current_heading,omitempty"`
+	AverageRating       float64    `json:"average_rating"`
+	RatingCount         int        `json:"rating_count"`
+	LastSeen            time.Time  `json:"last_seen"`
+	CreatedAt           time.Time  `json:"created_at"`
+	User                *User      `json:"user,omitempty"`
+	ReferralCode        string     `json:"referral_code,omitempty"`
+	ReferredBy          string     `json:"referred_by,omitempty"`
+	ReferralBenefitType string     `json:"referral_benefit_type,omitempty"`
+	Balance             float64    `json:"balance"`
+}
+
+type ReferralSettings struct {
+	ID                   int       `json:"id"`
+	DefaultCommissionPct float64   `json:"default_commission_pct"`
+	ReducedCommissionPct float64   `json:"reduced_commission_pct"`
+	WeeklyBonusAmount    float64   `json:"weekly_bonus_amount"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type ReferralBonus struct {
+	ID        string    `json:"id"`
+	DriverID  string    `json:"driver_id"`
+	WeekStart string    `json:"week_start"`
+	Amount    float64   `json:"amount"`
+	PaidAt    time.Time `json:"paid_at"`
 }
 
 type Rating struct {

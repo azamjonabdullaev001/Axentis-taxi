@@ -8,6 +8,8 @@ import Pricing from '../views/Pricing.vue'
 import Admins from '../views/Admins.vue'
 import Users from '../views/Users.vue'
 import Dispatcher from '../views/Dispatcher.vue'
+import Referrals from '../views/Referrals.vue'
+import DriverDetail from '../views/DriverDetail.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
@@ -24,7 +26,8 @@ const routes = [
       { path: 'admins', component: Admins },
       { path: 'users', component: Users },
       { path: 'dispatcher', component: Dispatcher },
-
+      { path: 'referrals', component: Referrals },
+      { path: 'drivers/:id', component: DriverDetail },
     ]
   },
   { path: '/:pathMatch(.*)*', redirect: '/' }

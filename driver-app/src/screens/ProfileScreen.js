@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
   Image, Switch, Alert, ActivityIndicator, Modal, FlatList,
+  TextInput, Clipboard,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -29,6 +30,12 @@ export default function ProfileScreen() {
   const [orders, setOrders] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
+
+  // Referral
+  const [referralExpanded, setReferralExpanded] = useState(false);
+  const [referralInput, setReferralInput] = useState('');
+  const [referralStep, setReferralStep] = useState('input'); // 'input' | 'choose'
+  const [applyingReferral, setApplyingReferral] = useState(false);
 
   useEffect(() => {
     driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
@@ -170,6 +177,132 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* ── Referral section ── */}
+      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <TouchableOpacity style={s.row} onPress={() => setReferralExpanded((v) => !v)}>
+          <Text style={[s.rowLabel, { color: colors.text }]}>🎁 Рефералка</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 18 }}>{referralExpanded ? '▾' : '›'}</Text>
+        </TouchableOpacity>
+
+        {referralExpanded && (
+          <View style={{ paddingHorizontal: 4, paddingBottom: 12 }}>
+
+            {/* My unique referral code */}
+            {driver?.referral_code ? (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 4 }}>Мой реферальный код</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    Clipboard.setString(driver.referral_code);
+                    Alert.alert('Скопировано', `Код ${driver.referral_code} скопирован в буфер обмена`);
+                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: colors.primary }}
+                >
+                  <Text style={{ color: colors.primary, fontSize: 22, fontWeight: '900', letterSpacing: 4, flex: 1 }}>{driver.referral_code}</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>📋 Копировать</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            {/* Applied benefit display */}
+            {driver?.referral_benefit_type ? (
+              <View style={{ backgroundColor: '#E8F5E9', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                <Text style={{ color: '#2E7D32', fontWeight: '700', fontSize: 14 }}>
+                  {driver.referral_benefit_type === 'commission'
+                    ? '✅ Применено: сниженная комиссия'
+                    : '✅ Применено: еженедельный бонус'}
+                </Text>
+                {driver.referred_by ? (
+                  <Text style={{ color: '#388E3C', fontSize: 12, marginTop: 4 }}>Реферал от: {driver.referred_by}</Text>
+                ) : null}
+              </View>
+            ) : (
+              /* Input + benefit selector */
+              <>
+                {referralStep === 'input' && (
+                  <View>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6 }}>Введите реферальный код друга</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TextInput
+                        style={[s.referralInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background, flex: 1 }]}
+                        value={referralInput}
+                        onChangeText={(v) => setReferralInput(v.replace(/\D/g, '').slice(0, 7))}
+                        keyboardType="numeric"
+                        maxLength={7}
+                        placeholder="7-значный код"
+                        placeholderTextColor={colors.textSecondary}
+                      />
+                      <TouchableOpacity
+                        style={[s.referralBtn, { backgroundColor: referralInput.length === 7 ? colors.primary : colors.border }]}
+                        disabled={referralInput.length !== 7}
+                        onPress={() => setReferralStep('choose')}
+                      >
+                        <Text style={{ color: '#000', fontWeight: '700' }}>Далее</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                {referralStep === 'choose' && (
+                  <View>
+                    <Text style={{ color: colors.text, fontWeight: '700', marginBottom: 10 }}>Выберите тип бонуса</Text>
+
+                    <TouchableOpacity
+                      style={[s.benefitCard, { borderColor: colors.primary }]}
+                      disabled={applyingReferral}
+                      onPress={async () => {
+                        setApplyingReferral(true);
+                        try {
+                          await driverAPI.applyReferral(referralInput, 'commission');
+                          const profile = await authAPI.getProfile();
+                          setUser(profile.data.user);
+                          // Refresh driver data
+                          Alert.alert('Готово', 'Сниженная комиссия активирована!');
+                          setReferralStep('input');
+                        } catch (e) {
+                          Alert.alert('Ошибка', e?.response?.data?.error || 'Не удалось применить');
+                        } finally {
+                          setApplyingReferral(false);
+                        }
+                      }}
+                    >
+                      <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 15 }}>💸 Сниженная комиссия</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>Ваш % с поездок уменьшится (вместо стандартных 8% — всего 6%)</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[s.benefitCard, { borderColor: '#43A047', marginTop: 10 }]}
+                      disabled={applyingReferral}
+                      onPress={async () => {
+                        setApplyingReferral(true);
+                        try {
+                          await driverAPI.applyReferral(referralInput, 'bonus');
+                          Alert.alert('Готово', 'Еженедельный бонус активирован!');
+                          setReferralStep('input');
+                        } catch (e) {
+                          Alert.alert('Ошибка', e?.response?.data?.error || 'Не удалось применить');
+                        } finally {
+                          setApplyingReferral(false);
+                        }
+                      }}
+                    >
+                      <Text style={{ color: '#43A047', fontWeight: '800', fontSize: 15 }}>🎁 Еженедельный бонус</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>Получайте фиксированный бонус каждую неделю на баланс</Text>
+                    </TouchableOpacity>
+
+                    {applyingReferral && <ActivityIndicator color={colors.primary} style={{ marginTop: 12 }} />}
+
+                    <TouchableOpacity onPress={() => setReferralStep('input')} style={{ marginTop: 10, alignItems: 'center' }}>
+                      <Text style={{ color: colors.textSecondary, fontSize: 13 }}>← Изменить код</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        )}
+      </View>
+
       {/* History modal */}
       <Modal visible={historyModalVisible} animationType="slide" onRequestClose={() => setHistoryModalVisible(false)}>
         <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
@@ -275,5 +408,16 @@ function makeStyles(colors) {
     modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 20 },
     langOption: { flexDirection: 'row', justifyContent: 'space-between', padding: 14 },
     langLabel: { fontSize: 16 },
+    referralInput: {
+      borderWidth: 1.5, borderRadius: 10, padding: 12,
+      fontSize: 18, fontWeight: '700', letterSpacing: 4, textAlign: 'center',
+    },
+    referralBtn: {
+      borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    benefitCard: {
+      borderWidth: 2, borderRadius: 14, padding: 14,
+    },
   });
 }

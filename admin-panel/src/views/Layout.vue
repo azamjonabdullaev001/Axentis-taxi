@@ -24,6 +24,9 @@
         <router-link to="/users" class="nav-item">
           <span class="icon">👥</span> Пользователи
         </router-link>
+        <router-link to="/referrals" class="nav-item">
+          <span class="icon">🎁</span> Рефералдар / Бонусы
+        </router-link>
 
       </nav>
       <button class="logout-btn" @click="logout">🚪 Выйти</button>

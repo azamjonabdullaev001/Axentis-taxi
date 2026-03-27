@@ -28,6 +28,7 @@ export default function RegisterScreen({ navigation }) {
     first_name: '', last_name: '', phone: '',
     password: '', confirm_password: '',
     car_region: '01', car_number_suffix: '',
+    pinfl: '',
   });
   const [loading, setLoading] = useState(false);
   const [regionModal, setRegionModal] = useState(false);
@@ -63,6 +64,7 @@ export default function RegisterScreen({ navigation }) {
         password: form.password,
         confirm_password: form.confirm_password,
         car_number: buildCarNumber(),
+        pinfl: form.pinfl.trim(),
       });
     } catch (e) {
       Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Ошибка регистрации'));
@@ -161,6 +163,20 @@ export default function RegisterScreen({ navigation }) {
           Номер: {buildCarNumber() || '—'}
         </Text>
         <Text style={[s.carHint, { color: colors.textSecondary }]}>После кода региона вводите номер слитно: например A123BC, AB123C или ABC123</Text>
+
+        {/* PINFL / JSHSHIR */}
+        <View style={{ marginBottom: 14 }}>
+          <Text style={s.label}>ПИНФЛ (ЖШШИР) — 14 цифр</Text>
+          <TextInput
+            style={[s.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
+            value={form.pinfl}
+            onChangeText={(v) => setField('pinfl', v.replace(/\D/g, '').slice(0, 14))}
+            keyboardType="numeric"
+            maxLength={14}
+            placeholder="14-значный ПИНФЛ"
+            placeholderTextColor={colors.textSecondary}
+          />
+        </View>
 
         <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={handleRegister} disabled={loading}>
           {loading ? <ActivityIndicator color="#000" /> : <Text style={s.btnText}>{t(lang,'register')}</Text>}
