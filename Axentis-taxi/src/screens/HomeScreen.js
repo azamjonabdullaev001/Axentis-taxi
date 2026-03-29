@@ -139,26 +139,47 @@ function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, z
   );
 }
 
-// Center pin with subtle bouncing animation during map selection
+// Center pin with bouncing animation + ground shadow during map selection
 function BouncingCenterPin({ source }) {
   const bounce = React.useRef(new Animated.Value(0)).current;
   React.useEffect(() => {
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(bounce, { toValue: -3, duration: 500, useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: -6, duration: 500, useNativeDriver: true }),
         Animated.timing(bounce, { toValue: 0, duration: 500, useNativeDriver: true }),
       ]),
     );
     anim.start();
     return () => anim.stop();
   }, [bounce]);
+  const shadowOpacity = bounce.interpolate({
+    inputRange: [-6, 0],
+    outputRange: [0.06, 0.2],
+    extrapolate: 'clamp',
+  });
+  const shadowScaleX = bounce.interpolate({
+    inputRange: [-6, 0],
+    outputRange: [0.5, 1],
+    extrapolate: 'clamp',
+  });
   return (
     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }} pointerEvents="none">
-      <Animated.Image
-        source={source}
-        style={{ width: 48, height: 48, marginTop: -24, transform: [{ translateY: bounce }] }}
-        resizeMode="contain"
-      />
+      <View style={{ alignItems: 'center', transform: [{ translateY: -18 }] }}>
+        <Animated.Image
+          source={source}
+          style={{ width: 48, height: 48, transform: [{ translateY: bounce }] }}
+          resizeMode="contain"
+        />
+        <Animated.View
+          style={{
+            width: 18, height: 5, borderRadius: 9,
+            backgroundColor: '#000',
+            marginTop: 2,
+            opacity: shadowOpacity,
+            transform: [{ scaleX: shadowScaleX }],
+          }}
+        />
+      </View>
     </View>
   );
 }
@@ -915,21 +936,51 @@ export default function HomeScreen() {
           />
         )}
 
-        {/* Последняя миля: сплошная линия от конца OSRM-маршрута до финишного пина */}
+        {/* Первая миля: пунктир от пина отправления до начала дороги (если точка вне улицы) */}
+        {routePreviewCoords.length >= 2 && pickupCoords && !mapMode && (() => {
+          const firstPt = routePreviewCoords[0];
+          const dist = Math.abs(firstPt.latitude - pickupCoords.latitude) +
+                       Math.abs(firstPt.longitude - pickupCoords.longitude);
+          if (dist < 0.00005) return null;
+          return (
+            <>
+              <Polyline
+                coordinates={[pickupCoords, firstPt]}
+                strokeColor="#FFCC00"
+                strokeWidth={4}
+                lineDashPattern={[10, 8]}
+                geodesic
+                lineCap="round"
+                lineJoin="round"
+              />
+              <Marker coordinate={firstPt} anchor={{ x: 0.5, y: 0.5 }} flat>
+                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FFCC00', borderWidth: 2, borderColor: '#fff' }} />
+              </Marker>
+            </>
+          );
+        })()}
+
+        {/* Последняя миля: пунктир от конца дороги до финишного пина (если точка вне улицы) */}
         {routePreviewCoords.length >= 2 && destCoords && !mapMode && (() => {
           const lastPt = routePreviewCoords[routePreviewCoords.length - 1];
           const dist = Math.abs(lastPt.latitude - destCoords.latitude) +
                        Math.abs(lastPt.longitude - destCoords.longitude);
           if (dist < 0.00005) return null;
           return (
-            <Polyline
-              coordinates={[lastPt, destCoords]}
-              strokeColor="#FFCC00"
-              strokeWidth={4}
-              geodesic
-              lineCap="round"
-              lineJoin="round"
-            />
+            <>
+              <Polyline
+                coordinates={[lastPt, destCoords]}
+                strokeColor="#FFCC00"
+                strokeWidth={4}
+                lineDashPattern={[10, 8]}
+                geodesic
+                lineCap="round"
+                lineJoin="round"
+              />
+              <Marker coordinate={lastPt} anchor={{ x: 0.5, y: 0.5 }} flat>
+                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FFCC00', borderWidth: 2, borderColor: '#fff' }} />
+              </Marker>
+            </>
           );
         })()}
 
