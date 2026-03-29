@@ -969,3 +969,159 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		"daily":                 daily,
 	})
 }
+
+// ── Get Online Drivers (for dispatcher map) ─────────────────────────────────
+
+func (h *AdminHandler) GetOnlineDrivers(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT d.id, d.user_id, u.first_name, u.last_name, u.phone, COALESCE(u.avatar_url,''),
+		        d.car_number, d.is_available, d.current_lat, d.current_lng,
+		        COALESCE(d.current_heading, 0), d.last_seen
+		 FROM drivers d
+		 JOIN users u ON d.user_id = u.id
+		 WHERE d.current_lat IS NOT NULL
+		   AND d.current_lng IS NOT NULL
+		   AND d.last_seen > NOW() - INTERVAL '30 minutes'
+		 ORDER BY d.last_seen DESC`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch drivers"})
+		return
+	}
+	defer rows.Close()
+
+	type OnlineDriver struct {
+		DriverID     string   `json:"driver_id"`
+		UserID       string   `json:"user_id"`
+		FirstName    string   `json:"first_name"`
+		LastName     string   `json:"last_name"`
+		Phone        string   `json:"phone"`
+		AvatarURL    string   `json:"avatar_url"`
+		CarNumber    string   `json:"car_number"`
+		IsAvailable  bool     `json:"is_available"`
+		Lat          float64  `json:"lat"`
+		Lng          float64  `json:"lng"`
+		Heading      float64  `json:"heading"`
+		LastSeen     string   `json:"last_seen"`
+		// Active order info (filled below)
+		HasOrder          bool    `json:"has_order"`
+		OrderID           string  `json:"order_id,omitempty"`
+		OrderStatus       string  `json:"order_status,omitempty"`
+		PassengerPhone    string  `json:"passenger_phone,omitempty"`
+		PickupLat         float64 `json:"pickup_lat,omitempty"`
+		PickupLng         float64 `json:"pickup_lng,omitempty"`
+		PickupAddress     string  `json:"pickup_address,omitempty"`
+		DestinationLat    float64 `json:"destination_lat,omitempty"`
+		DestinationLng    float64 `json:"destination_lng,omitempty"`
+		DestinationAddress string `json:"destination_address,omitempty"`
+	}
+
+	var drivers []OnlineDriver
+	for rows.Next() {
+		var d OnlineDriver
+		var lastSeen time.Time
+		if err := rows.Scan(&d.DriverID, &d.UserID, &d.FirstName, &d.LastName, &d.Phone,
+			&d.AvatarURL, &d.CarNumber, &d.IsAvailable, &d.Lat, &d.Lng, &d.Heading, &lastSeen); err != nil {
+			continue
+		}
+		d.LastSeen = lastSeen.Format(time.RFC3339)
+		drivers = append(drivers, d)
+	}
+
+	// Fetch active orders for all online drivers in one query
+	orderRows, err := h.db.Query(context.Background(),
+		`SELECT d.id, o.id, o.status,
+		        COALESCE(u.phone, o.passenger_phone, ''),
+		        o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''),
+		        COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(o.destination_address,'')
+		 FROM orders o
+		 JOIN drivers d ON o.driver_id = d.id
+		 LEFT JOIN users u ON o.passenger_id = u.id
+		 WHERE o.status IN ('accepted', 'arrived', 'in_progress')`)
+	if err == nil {
+		defer orderRows.Close()
+		orderMap := make(map[string]OnlineDriver)
+		for orderRows.Next() {
+			var driverID, orderID, status, passPhone, pickAddr, destAddr string
+			var pickLat, pickLng, destLat, destLng float64
+			if err := orderRows.Scan(&driverID, &orderID, &status, &passPhone,
+				&pickLat, &pickLng, &pickAddr, &destLat, &destLng, &destAddr); err != nil {
+				continue
+			}
+			orderMap[driverID] = OnlineDriver{
+				HasOrder:           true,
+				OrderID:            orderID,
+				OrderStatus:        status,
+				PassengerPhone:     passPhone,
+				PickupLat:          pickLat,
+				PickupLng:          pickLng,
+				PickupAddress:      pickAddr,
+				DestinationLat:     destLat,
+				DestinationLng:     destLng,
+				DestinationAddress: destAddr,
+			}
+		}
+		for i, d := range drivers {
+			if info, ok := orderMap[d.DriverID]; ok {
+				drivers[i].HasOrder = true
+				drivers[i].OrderID = info.OrderID
+				drivers[i].OrderStatus = info.OrderStatus
+				drivers[i].PassengerPhone = info.PassengerPhone
+				drivers[i].PickupLat = info.PickupLat
+				drivers[i].PickupLng = info.PickupLng
+				drivers[i].PickupAddress = info.PickupAddress
+				drivers[i].DestinationLat = info.DestinationLat
+				drivers[i].DestinationLng = info.DestinationLng
+				drivers[i].DestinationAddress = info.DestinationAddress
+			}
+		}
+	}
+
+	if drivers == nil {
+		drivers = []OnlineDriver{}
+	}
+	c.JSON(http.StatusOK, gin.H{"drivers": drivers})
+}
+
+// ── Phone address history (last used addresses by phone number) ─────────────
+
+func (h *AdminHandler) GetPhoneHistory(c *gin.Context) {
+	phone := strings.TrimSpace(c.Query("phone"))
+	if phone == "" {
+		c.JSON(http.StatusOK, gin.H{"addresses": []string{}})
+		return
+	}
+
+	rows, err := h.db.Query(context.Background(),
+		`SELECT DISTINCT ON (pickup_address) pickup_address, pickup_lat, pickup_lng, created_at
+		 FROM orders
+		 WHERE (passenger_phone = $1 OR passenger_phone = $2)
+		   AND pickup_address IS NOT NULL AND pickup_address != ''
+		 ORDER BY pickup_address, created_at DESC`,
+		phone, strings.TrimPrefix(phone, "+"),
+	)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"addresses": []string{}})
+		return
+	}
+	defer rows.Close()
+
+	type AddrHistory struct {
+		Address string  `json:"address"`
+		Lat     float64 `json:"lat"`
+		Lng     float64 `json:"lng"`
+	}
+	var addresses []AddrHistory
+	for rows.Next() {
+		var addr string
+		var lat, lng float64
+		var t time.Time
+		if err := rows.Scan(&addr, &lat, &lng, &t); err != nil {
+			continue
+		}
+		addresses = append(addresses, AddrHistory{Address: addr, Lat: lat, Lng: lng})
+	}
+	if addresses == nil {
+		addresses = []AddrHistory{}
+	}
+	c.JSON(http.StatusOK, gin.H{"addresses": addresses})
+}

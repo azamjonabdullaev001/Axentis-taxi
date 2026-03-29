@@ -117,8 +117,12 @@ func main() {
 			adminAPI.POST("/call-orders", adminHandler.CreateCallOrder)
 
 			// Driver management
+			adminAPI.GET("/drivers/online", adminHandler.GetOnlineDrivers)
 			adminAPI.POST("/drivers", adminHandler.CreateDriver)
 			adminAPI.GET("/drivers/:id/analytics", adminHandler.GetDriverAnalytics)
+
+			// Dispatcher helpers
+			adminAPI.GET("/phone-history", adminHandler.GetPhoneHistory)
 
 			// Referral program
 			adminAPI.GET("/referral-settings", adminHandler.GetReferralSettings)

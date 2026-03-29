@@ -45,6 +45,8 @@ export const adminAPI = {
   createDriver: (d) => api.post('/admin/drivers', d),
   getDriverAnalytics: (id, params) => api.get(`/admin/drivers/${id}/analytics`, { params }),
   getDriversWithDetails: () => api.get('/admin/users', { params: { role: 'driver' } }),
+  getOnlineDrivers: () => api.get('/admin/drivers/online'),
+  getPhoneHistory: (phone) => api.get('/admin/phone-history', { params: { phone } }),
   // Referral program
   getReferralSettings: () => api.get('/admin/referral-settings'),
   updateReferralSettings: (d) => api.put('/admin/referral-settings', d),
