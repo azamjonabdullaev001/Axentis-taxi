@@ -95,7 +95,7 @@ async function fetchRoadRoute(pickup, dest) {
   const c1 = new AbortController();
   const t1 = setTimeout(() => c1.abort(), 6000);
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true&annotations=true`;
     const res = await fetch(url, { signal: c1.signal });
     clearTimeout(t1);
     const json = await res.json();
@@ -278,11 +278,11 @@ export default function HomeScreen() {
   const [completedPrice, setCompletedPrice] = useState(null);
   const [selectedRating, setSelectedRating] = useState(0);
 
-  // Анимация пунктира "последней мили
+  // Анимация пунктира "последней мили" — точки плавно текут от пина к дороге
   useEffect(() => {
     const timer = setInterval(() => {
-      setDashPhase((prev) => (prev + 1.5) % 22);
-    }, 40);
+      setDashPhase((prev) => (prev + 2) % 18);
+    }, 50);
     return () => clearInterval(timer);
   }, []);
 
@@ -943,20 +943,17 @@ export default function HomeScreen() {
                        Math.abs(firstPt.longitude - pickupCoords.longitude);
           if (dist < 0.00005) return null;
           return (
-            <>
-              <Polyline
-                coordinates={[pickupCoords, firstPt]}
-                strokeColor="#FFCC00"
-                strokeWidth={4}
-                lineDashPattern={[10, 8]}
-                geodesic
-                lineCap="round"
-                lineJoin="round"
-              />
-              <Marker coordinate={firstPt} anchor={{ x: 0.5, y: 0.5 }} flat>
-                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FFCC00', borderWidth: 2, borderColor: '#fff' }} />
-              </Marker>
-            </>
+            <Polyline
+              key={`pickup-dash-${dashPhase}`}
+              coordinates={[pickupCoords, firstPt]}
+              strokeColor="#FFCC00"
+              strokeWidth={4}
+              lineDashPattern={[10, 8]}
+              lineDashPhase={dashPhase}
+              geodesic
+              lineCap="round"
+              lineJoin="round"
+            />
           );
         })()}
 
@@ -967,20 +964,17 @@ export default function HomeScreen() {
                        Math.abs(lastPt.longitude - destCoords.longitude);
           if (dist < 0.00005) return null;
           return (
-            <>
-              <Polyline
-                coordinates={[lastPt, destCoords]}
-                strokeColor="#FFCC00"
-                strokeWidth={4}
-                lineDashPattern={[10, 8]}
-                geodesic
-                lineCap="round"
-                lineJoin="round"
-              />
-              <Marker coordinate={lastPt} anchor={{ x: 0.5, y: 0.5 }} flat>
-                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FFCC00', borderWidth: 2, borderColor: '#fff' }} />
-              </Marker>
-            </>
+            <Polyline
+              key={`dest-dash-${dashPhase}`}
+              coordinates={[lastPt, destCoords]}
+              strokeColor="#FFCC00"
+              strokeWidth={4}
+              lineDashPattern={[10, 8]}
+              lineDashPhase={dashPhase}
+              geodesic
+              lineCap="round"
+              lineJoin="round"
+            />
           );
         })()}
 
