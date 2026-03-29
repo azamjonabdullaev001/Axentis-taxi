@@ -2,10 +2,14 @@
   <div>
     <div class="top-bar">
       <button class="back-btn" @click="$router.back()">← Назад</button>
-      <h2 class="page-title" v-if="info">
-        🚗 {{ info.first_name }} {{ info.last_name }}
-        <small class="sub">{{ info.phone }} · {{ info.car_number }}</small>
-      </h2>
+      <div v-if="info" class="driver-header">
+        <img v-if="info.avatar_url" :src="info.avatar_url" class="driver-avatar" />
+        <span v-else class="driver-avatar-placeholder">{{ ((info.first_name || '?')[0]).toUpperCase() }}</span>
+        <h2 class="page-title">
+          🚗 {{ info.first_name }} {{ info.last_name }}
+          <small class="sub">{{ info.phone }} · {{ info.car_number }}</small>
+        </h2>
+      </div>
     </div>
 
     <!-- Period selector -->
@@ -174,6 +178,13 @@ function fmtDate(d) {
 
 <style scoped>
 .top-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.driver-header { display: flex; align-items: center; gap: 14px; }
+.driver-avatar { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; border: 3px solid #FFCC00; }
+.driver-avatar-placeholder {
+  width: 52px; height: 52px; border-radius: 50%; background: #FFCC00; color: #1a1a1a;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 20px; flex-shrink: 0;
+}
 .back-btn {
   padding: 8px 16px; background: #1a1a1a; color: #FFCC00;
   border: none; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer;

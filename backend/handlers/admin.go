@@ -216,7 +216,8 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 			`SELECT u.id, u.first_name, u.last_name, u.phone, u.role, u.is_active, u.created_at,
 			 COALESCE(d.id::text,'') as driver_id,
 			 COALESCE(d.car_number,'') as car_number,
-			 COALESCE(d.is_available, false) as is_available
+			 COALESCE(d.is_available, false) as is_available,
+			 COALESCE(u.avatar_url,'') as avatar_url
 			 FROM users u
 			 LEFT JOIN drivers d ON d.user_id = u.id
 			 WHERE u.role = 'driver'
@@ -225,13 +226,13 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 	} else if role != "" {
 		rows, err = h.db.Query(context.Background(),
 			`SELECT id, first_name, last_name, phone, role, is_active, created_at,
-			 '', '', false FROM users WHERE role = $1 ORDER BY created_at DESC LIMIT 200`,
+			 '', '', false, COALESCE(avatar_url,'') FROM users WHERE role = $1 ORDER BY created_at DESC LIMIT 200`,
 			role,
 		)
 	} else {
 		rows, err = h.db.Query(context.Background(),
 			`SELECT id, first_name, last_name, phone, role, is_active, created_at,
-			 '', '', false FROM users ORDER BY created_at DESC LIMIT 200`,
+			 '', '', false, COALESCE(avatar_url,'') FROM users ORDER BY created_at DESC LIMIT 200`,
 		)
 	}
 
@@ -243,14 +244,15 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 
 	var users []map[string]interface{}
 	for rows.Next() {
-		var id, firstName, lastName, phone, userRole, driverID, carNum string
+		var id, firstName, lastName, phone, userRole, driverID, carNum, avatarURL string
 		var isActive, isAvailable bool
 		var createdAt time.Time
 		rows.Scan(&id, &firstName, &lastName, &phone, &userRole, &isActive, &createdAt,
-			&driverID, &carNum, &isAvailable)
+			&driverID, &carNum, &isAvailable, &avatarURL)
 		u := map[string]interface{}{
 			"id": id, "first_name": firstName, "last_name": lastName,
 			"phone": phone, "role": userRole, "is_active": isActive, "created_at": createdAt,
+			"avatar_url": avatarURL,
 		}
 		if driverID != "" {
 			u["driver_id"] = driverID
@@ -847,16 +849,17 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 	driverID := c.Param("id")
 
 	// Basic driver info
-	var firstName, lastName, phone, carNum, refCode, referredBy, benefitType string
+	var firstName, lastName, phone, carNum, refCode, referredBy, benefitType, avatarURL string
 	var balance float64
 	var driverCreatedAt time.Time
 	err := h.db.QueryRow(context.Background(),
 		`SELECT u.first_name, u.last_name, u.phone, d.car_number,
 		 COALESCE(d.referral_code,''), COALESCE(d.referred_by,''),
-		 COALESCE(d.referral_benefit_type,''), COALESCE(d.balance,0), d.created_at
+		 COALESCE(d.referral_benefit_type,''), COALESCE(d.balance,0), d.created_at,
+		 COALESCE(u.avatar_url,'')
 		 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
 		driverID,
-	).Scan(&firstName, &lastName, &phone, &carNum, &refCode, &referredBy, &benefitType, &balance, &driverCreatedAt)
+	).Scan(&firstName, &lastName, &phone, &carNum, &refCode, &referredBy, &benefitType, &balance, &driverCreatedAt, &avatarURL)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
 		return
@@ -949,6 +952,7 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		"last_name":    lastName,
 		"phone":        phone,
 		"car_number":   carNum,
+		"avatar_url":            avatarURL,
 		"referral_code":         refCode,
 		"referred_by":           referredBy,
 		"referral_benefit_type": benefitType,

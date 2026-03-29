@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
   Image, Switch, Alert, ActivityIndicator, Modal, FlatList,
-  TextInput, Clipboard,
+  TextInput, Clipboard, Share,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -121,6 +121,37 @@ export default function ProfileScreen() {
           </View>
         )}
       </View>
+
+      {/* ── Referral code card (always visible) ── */}
+      {driver?.referral_code ? (
+        <View style={[s.referralCodeCard, { backgroundColor: colors.card, borderColor: colors.primary }]}>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 4 }}>🎁 Мой реферальный код</Text>
+          <Text style={{ color: colors.primary, fontSize: 26, fontWeight: '900', letterSpacing: 6, textAlign: 'center', marginVertical: 6 }}>
+            {driver.referral_code}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+            <TouchableOpacity
+              style={[s.referralActionBtn, { backgroundColor: colors.primary }]}
+              onPress={() => {
+                Clipboard.setString(driver.referral_code);
+                Alert.alert('Скопировано', `Код ${driver.referral_code} скопирован в буфер обмена`);
+              }}
+            >
+              <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>📋 Копировать</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.referralActionBtn, { backgroundColor: '#1a1a1a' }]}
+              onPress={() => {
+                Share.share({
+                  message: `Присоединяйся к Axentis Taxi! Мой реферальный код: ${driver.referral_code}`,
+                });
+              }}
+            >
+              <Text style={{ color: '#FFCC00', fontWeight: '700', fontSize: 13 }}>📤 Поделиться</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
       <View style={[s.section, { backgroundColor: colors.card }]}>
         <View style={s.row}>
@@ -418,6 +449,12 @@ function makeStyles(colors) {
     },
     benefitCard: {
       borderWidth: 2, borderRadius: 14, padding: 14,
+    },
+    referralCodeCard: {
+      borderWidth: 2, borderRadius: 16, padding: 16, alignItems: 'center', marginBottom: 20,
+    },
+    referralActionBtn: {
+      flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center',
     },
   });
 }

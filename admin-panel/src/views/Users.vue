@@ -33,7 +33,11 @@
         <tbody>
           <tr v-for="u in filtered" :key="u.id">
             <td>
-              <div class="name-cell">{{ (u.first_name || '') + ' ' + (u.last_name || '') || '—' }}</div>
+              <div class="name-cell">
+                <img v-if="u.avatar_url" :src="u.avatar_url" class="user-avatar" />
+                <span v-else class="avatar-placeholder">{{ ((u.first_name || '?')[0]).toUpperCase() }}</span>
+                {{ (u.first_name || '') + ' ' + (u.last_name || '') || '—' }}
+              </div>
             </td>
             <td>{{ u.phone }}</td>
             <td v-if="tab === 'drivers'">
@@ -196,7 +200,13 @@ function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '—' }
 .table th { background: #f5f6fa; padding: 10px 12px; text-align: left; color: #666; font-weight: 600; }
 .table td { padding: 11px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
 .table tr:last-child td { border-bottom: none; }
-.name-cell { font-weight: 600; color: #1a1a1a; }
+.name-cell { font-weight: 600; color: #1a1a1a; display: flex; align-items: center; gap: 10px; }
+.user-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 2px solid #FFCC00; }
+.avatar-placeholder {
+  width: 36px; height: 36px; border-radius: 50%; background: #FFCC00; color: #1a1a1a;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; flex-shrink: 0;
+}
 .car-badge {
   display: inline-block; background: #1a1a1a; color: #FFCC00;
   border-radius: 6px; padding: 2px 8px; font-family: monospace; font-size: 12px;
