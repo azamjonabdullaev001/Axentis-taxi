@@ -115,7 +115,7 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 		 o.waiting_fee, o.service_fee, COALESCE(o.total_price, 0),
 		 o.surge_multiplier, o.created_at, o.completed_at,
 		 COALESCE(o.order_type, 'app'), COALESCE(o.pricing_type, 'yandex'),
-		 COALESCE(o.dispatcher_phone, '')
+		 COALESCE(o.dispatcher_phone, ''), COALESCE(o.additional_info, '')
 		 FROM orders o
 		 LEFT JOIN users u ON o.passenger_id = u.id
 		 LEFT JOIN drivers d ON o.driver_id = d.id
@@ -137,11 +137,11 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 		var distKm, basePrice, waitFee, serviceFee, totalPrice, surgeMultiplier float64
 		var createdAt time.Time
 		var completedAt *time.Time
-		var orderType, pricingType, dispatcherPhone string
+		var orderType, pricingType, dispatcherPhone, additionalInfo string
 
 		rows.Scan(&id, &status, &passName, &passPhone, &driverName, &driverPhone, &carNum,
 			&pickupAddr, &destAddr, &distKm, &basePrice, &waitFee, &serviceFee, &totalPrice,
-			&surgeMultiplier, &createdAt, &completedAt, &orderType, &pricingType, &dispatcherPhone)
+			&surgeMultiplier, &createdAt, &completedAt, &orderType, &pricingType, &dispatcherPhone, &additionalInfo)
 
 		orders = append(orders, map[string]interface{}{
 			"id": id, "status": status,
@@ -154,7 +154,7 @@ func (h *AdminHandler) GetAllOrders(c *gin.Context) {
 			"surge_multiplier": surgeMultiplier,
 			"created_at": createdAt, "completed_at": completedAt,
 			"order_type": orderType, "pricing_type": pricingType,
-			"dispatcher_phone": dispatcherPhone,
+			"dispatcher_phone": dispatcherPhone, "additional_info": additionalInfo,
 		})
 	}
 	if orders == nil {
@@ -582,6 +582,7 @@ type CreateCallOrderRequest struct {
 	DestinationLng     float64 `json:"destination_lng"`
 	DestinationAddress string  `json:"destination_address"`
 	DistanceKm         float64 `json:"distance_km"`
+	AdditionalInfo     string  `json:"additional_info"`
 	Comment            string  `json:"comment"`
 }
 
@@ -632,23 +633,23 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 		 (id, passenger_id, passenger_phone, status, pickup_lat, pickup_lng, pickup_address,
 		  destination_lat, destination_lng, destination_address, distance_km,
 		  base_price, total_price, service_fee, surge_multiplier,
-		  order_type, pricing_type, trip_type, dispatcher_phone, royal_price_per_km, locked_price_per_km)
+		  order_type, pricing_type, trip_type, dispatcher_phone, royal_price_per_km, locked_price_per_km, additional_info)
 		 VALUES
 		 ($1, NULL, $2, 'searching', $3, $4, $5, NULL, NULL, NULL, 0,
-		  0, 0, $6, $7, 'call', 'royal', 'free', $8, $9, $9)`,
+		  0, 0, $6, $7, 'call', 'royal', 'free', $8, $9, $9, $10)`,
 		orderID, phone,
 		req.PickupLat, req.PickupLng, req.PickupAddress,
 		serviceFeeV, surgeV,
-		req.DispatcherPhone, royalPricePerKm,
+		req.DispatcherPhone, royalPricePerKm, req.AdditionalInfo,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create call order"})
 		return
 	}
 
-	// Trigger driver matching in background
+	// Trigger driver matching in background — search only within city radius for call orders
 	if h.matchingService != nil {
-		go h.matchingService.FindAndNotifyDrivers(orderID, req.PickupLat, req.PickupLng)
+		go h.matchingService.FindAndNotifyDriversInRadius(orderID, req.PickupLat, req.PickupLng, 15000)
 	}
 
 	c.JSON(http.StatusCreated, gin.H{

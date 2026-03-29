@@ -394,10 +394,16 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!location || !activeOrder) return;
 
+    // Call orders: no route to pickup (driver finds passenger by phone/address info)
+    if (activeOrder.order_type === 'call' && driverStatus !== DRIVER_STATUS.IN_PROGRESS) {
+      setRouteCoords([]);
+      return;
+    }
+
     let dest;
     if (driverStatus === DRIVER_STATUS.IN_PROGRESS) {
-      // Free mode has no destination — skip routing
-      if (activeOrder.trip_type === 'free') {
+      // Free mode / call orders have no destination — skip routing
+      if (activeOrder.trip_type === 'free' || activeOrder.order_type === 'call') {
         setRouteCoords([]);
         return;
       }
@@ -462,8 +468,8 @@ export default function HomeScreen() {
     clearInterval(countdownRef.current);
     try {
       await driverAPI.acceptOrder(incomingOrder.id);
-      // For free-mode orders, wipe destination coords so no marker/route is ever drawn
-      const orderToStore = incomingOrder.trip_type === 'free'
+      // For free-mode or call orders, wipe destination coords so no marker/route is ever drawn
+      const orderToStore = (incomingOrder.trip_type === 'free' || incomingOrder.order_type === 'call')
         ? { ...incomingOrder, destination_lat: null, destination_lng: null, destination_address: '' }
         : incomingOrder;
       setActiveOrder(orderToStore);
@@ -472,12 +478,19 @@ export default function HomeScreen() {
       setDriverStatus(DRIVER_STATUS.ACCEPTED);
       // Store locked price per km for metering (sent from backend)
       meteredPricePerKm.current = incomingOrder.locked_price_per_km || 3000;
-      mapRef.current?.animateToRegion({
-        latitude: incomingOrder.pickup_lat,
-        longitude: incomingOrder.pickup_lng,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      });
+      // For call orders: no exact pickup pin — don't animate to pickup, just stay on driver location
+      if (incomingOrder.order_type !== 'call') {
+        mapRef.current?.animateToRegion({
+          latitude: incomingOrder.pickup_lat,
+          longitude: incomingOrder.pickup_lng,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        });
+      }
+      // For call orders: clear route since driver has no destination to navigate to
+      if (incomingOrder.order_type === 'call') {
+        setRouteCoords([]);
+      }
     } catch (e) {
       Alert.alert(t(lang,'error'), t(lang,'orderBusy'));
       setIncomingOrder(null);
@@ -619,7 +632,7 @@ export default function HomeScreen() {
             <Image source={CAR_ICON} style={s.carIcon} resizeMode="contain" />
           </Marker>
         )}
-        {activeOrder && driverStatus !== DRIVER_STATUS.IN_PROGRESS && (
+        {activeOrder && driverStatus !== DRIVER_STATUS.IN_PROGRESS && activeOrder.order_type !== 'call' && (
           <Marker
             coordinate={{ latitude: activeOrder.pickup_lat, longitude: activeOrder.pickup_lng }}
             title="Точка подачи"
@@ -716,33 +729,61 @@ export default function HomeScreen() {
 
         {driverStatus === DRIVER_STATUS.ACCEPTED && activeOrder && (
           <View>
-            <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'goingToPassenger')}</Text>
-            {activeOrder.passenger_phone ? (
-              <Text style={[s.addressText, { color: colors.primary, fontWeight: '600' }]}>
-                👤 {activeOrder.passenger_name || ''} &nbsp; 📱 {activeOrder.passenger_phone}
-              </Text>
-            ) : null}
-            <Text style={[s.addressText, { color: colors.textSecondary }]}>
-              📍 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
-            </Text>
-            {activeOrder.trip_type !== 'free' && activeOrder.destination_address ? (
-              <Text style={[s.addressText, { color: colors.textSecondary }]}>
-                🎯 {activeOrder.destination_address}
-              </Text>
-            ) : null}
-            <Text style={[s.priceText, { color: colors.primary }]}>
-              {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
-            </Text>
-            <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
-              {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
-            </Text>
-            <TouchableOpacity
-              style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
-              onPress={handleArrived}
-              disabled={isProcessing}
-            >
-              <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
-            </TouchableOpacity>
+            {activeOrder.order_type === 'call' ? (
+              <>
+                <Text style={[s.actionTitle, { color: colors.text }]}>📞 Звонковый заказ</Text>
+                <Text style={[s.addressText, { color: colors.textSecondary }]}>
+                  📍 {activeOrder.pickup_address || ''}
+                </Text>
+                {activeOrder.additional_info ? (
+                  <Text style={[s.addressText, { color: colors.text, fontWeight: '600', fontSize: 15 }]}>
+                    🏠 {activeOrder.additional_info}
+                  </Text>
+                ) : null}
+                {activeOrder.passenger_phone ? (
+                  <Text style={[s.addressText, { color: colors.primary, fontWeight: '600', fontSize: 16, textAlign: 'center', marginVertical: 8 }]}>
+                    📱 {activeOrder.passenger_phone}
+                  </Text>
+                ) : null}
+                <TouchableOpacity
+                  style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
+                  onPress={handleArrived}
+                  disabled={isProcessing}
+                >
+                  <Text style={s.actionBtnText}>✅ Я на месте</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'goingToPassenger')}</Text>
+                {activeOrder.passenger_phone ? (
+                  <Text style={[s.addressText, { color: colors.primary, fontWeight: '600' }]}>
+                    👤 {activeOrder.passenger_name || ''} &nbsp; 📱 {activeOrder.passenger_phone}
+                  </Text>
+                ) : null}
+                <Text style={[s.addressText, { color: colors.textSecondary }]}>
+                  📍 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
+                </Text>
+                {activeOrder.trip_type !== 'free' && activeOrder.destination_address ? (
+                  <Text style={[s.addressText, { color: colors.textSecondary }]}>
+                    🎯 {activeOrder.destination_address}
+                  </Text>
+                ) : null}
+                <Text style={[s.priceText, { color: colors.primary }]}>
+                  {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
+                </Text>
+                <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
+                  {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
+                </Text>
+                <TouchableOpacity
+                  style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
+                  onPress={handleArrived}
+                  disabled={isProcessing}
+                >
+                  <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         )}
 
@@ -844,18 +885,33 @@ export default function HomeScreen() {
                     <Text style={s.callBadgeText}>📞 Звонковый заказ</Text>
                   </View>
                 )}
-                <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                  📍 {incomingOrder.pickup_address || t(lang,'from')}
-                </Text>
-                {incomingOrder.trip_type !== 'free' && incomingOrder.destination_address ? (
-                  <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                    🎯 {incomingOrder.destination_address}
-                  </Text>
-                ) : incomingOrder.trip_type === 'free' ? (
-                  <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                    🔄 {t(lang,'free')}
-                  </Text>
-                ) : null}
+                {incomingOrder.order_type === 'call' ? (
+                  <>
+                    <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
+                      📍 {incomingOrder.pickup_address || ''}
+                    </Text>
+                    {incomingOrder.additional_info ? (
+                      <Text style={[s.orderDetail, { color: colors.text, fontWeight: '600' }]}>
+                        🏠 {incomingOrder.additional_info}
+                      </Text>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
+                      📍 {incomingOrder.pickup_address || t(lang,'from')}
+                    </Text>
+                    {incomingOrder.trip_type !== 'free' && incomingOrder.destination_address ? (
+                      <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
+                        🎯 {incomingOrder.destination_address}
+                      </Text>
+                    ) : incomingOrder.trip_type === 'free' ? (
+                      <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
+                        🔄 {t(lang,'free')}
+                      </Text>
+                    ) : null}
+                  </>
+                )}
                 {incomingOrder.trip_type !== 'free' && (
                   <>
                     <Text style={[s.orderPrice, { color: colors.primary }]}>

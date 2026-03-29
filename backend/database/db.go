@@ -241,4 +241,7 @@ CREATE TABLE IF NOT EXISTS referral_bonuses (
     paid_at    TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_bonuses_driver_week ON referral_bonuses (driver_id, week_start);
+
+-- Additional info for call orders (landmarks, street details)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS additional_info TEXT DEFAULT '';
 `

@@ -64,6 +64,10 @@
             📍 {{ geocodeResult }}
           </div>
         </div>
+        <div class="form-group">
+          <label>Доп. информация (ориентир)</label>
+          <input v-model="form.additional_info" placeholder="возле магазина Аббас, ул. Амуртимур 12..." />
+        </div>
       </div>
 
       <div v-if="error" class="error-msg">{{ error }}</div>
@@ -112,6 +116,7 @@
           <tr>
             <th>Клиент</th>
             <th>Адрес</th>
+            <th>Доп. инфо</th>
             <th>Статус</th>
             <th>Водитель</th>
             <th>Время</th>
@@ -121,6 +126,7 @@
           <tr v-for="order in callOrders" :key="order.id">
             <td><span class="phone">{{ order.passenger_phone }}</span></td>
             <td>{{ order.pickup_address || '—' }}</td>
+            <td>{{ order.additional_info || '—' }}</td>
             <td><span :class="['status-badge', order.status]">{{ statusLabel(order.status) }}</span></td>
             <td>{{ order.driver_name || '—' }}</td>
             <td>{{ formatTime(order.created_at) }}</td>
@@ -147,7 +153,7 @@ const callOrders = ref([])
 const resolvedLat = ref(null)
 const resolvedLng = ref(null)
 
-const form = ref({ passenger_phone: '', pickup_address: '' })
+const form = ref({ passenger_phone: '', pickup_address: '', additional_info: '' })
 
 /* autocomplete */
 const suggestions = ref([])
@@ -370,9 +376,10 @@ async function createOrder() {
       destination_lng: 0,
       destination_address: '',
       distance_km: 0,
+      additional_info: form.value.additional_info.trim(),
     })
     successMsg.value = `✅ Заказ создан. Ищем водителя рядом с «${form.value.pickup_address}»...`
-    form.value = { passenger_phone: '', pickup_address: '' }
+    form.value = { passenger_phone: '', pickup_address: '', additional_info: '' }
     resolvedLat.value = null
     resolvedLng.value = null
     geocodeResult.value = ''

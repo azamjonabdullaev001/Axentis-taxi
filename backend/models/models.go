@@ -103,6 +103,7 @@ type Order struct {
 	PassengerPhone      string     `json:"passenger_phone"`
 	RoyalPricePerKm     float64    `json:"royal_price_per_km"`
 	LockedPricePerKm    float64    `json:"locked_price_per_km"`
+	AdditionalInfo      string     `json:"additional_info"`
 	CreatedAt           time.Time  `json:"created_at"`
 	AcceptedAt          *time.Time `json:"accepted_at"`
 	ArrivedAt           *time.Time `json:"arrived_at"`

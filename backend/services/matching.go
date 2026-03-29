@@ -54,6 +54,44 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 	}()
 }
 
+// FindAndNotifyDriversInRadius — same as FindAndNotifyDrivers but only
+// considers drivers within the given radius (meters) from the pickup point.
+// Used for call orders to limit search to the city area.
+func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat, pickupLng float64, radiusMeters float64) {
+	all, err := s.findNearbyDrivers(pickupLat, pickupLng)
+	if err != nil {
+		s.notifyPassengerNoDrivers(orderID)
+		return
+	}
+
+	var candidates []DriverCandidate
+	for _, c := range all {
+		if c.Distance <= radiusMeters {
+			candidates = append(candidates, c)
+		}
+	}
+	if len(candidates) == 0 {
+		s.updateOrderStatus(orderID, "cancelled")
+		s.notifyPassengerNoDrivers(orderID)
+		return
+	}
+
+	go func() {
+		for _, candidate := range candidates {
+			if s.isOrderAccepted(orderID) {
+				return
+			}
+			s.notifyDriver(candidate.UserID, orderID)
+			timer := time.NewTimer(10 * time.Second)
+			<-timer.C
+		}
+		if !s.isOrderAccepted(orderID) {
+			s.updateOrderStatus(orderID, "cancelled")
+			s.notifyPassengerNoDrivers(orderID)
+		}
+	}()
+}
+
 func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate, error) {
 	rows, err := s.db.Query(context.Background(),
 		`SELECT d.id, d.user_id, d.current_lat, d.current_lng
@@ -107,6 +145,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		OrderType          string   `json:"order_type"`
 		TripType           string   `json:"trip_type"`
 		ServiceFee         float64  `json:"service_fee"`
+		AdditionalInfo     string   `json:"additional_info"`
 	}
 
 	err := s.db.QueryRow(context.Background(),
@@ -115,14 +154,15 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), COALESCE(o.locked_price_per_km,0),
 		 COALESCE(u.phone, o.passenger_phone, ''), COALESCE(u.first_name || ' ' || u.last_name, 'Клиент'),
 		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app'), COALESCE(o.trip_type,'standard'),
-		 COALESCE(o.service_fee,2000)
+		 COALESCE(o.service_fee,2000), COALESCE(o.additional_info,'')
 		 FROM orders o LEFT JOIN users u ON o.passenger_id = u.id
 		 WHERE o.id = $1`, orderID,
 	).Scan(&orderData.ID, &orderData.PickupLat, &orderData.PickupLng, &orderData.PickupAddress,
 		&orderData.DestinationLat, &orderData.DestinationLng, &orderData.DestinationAddress,
 		&orderData.DistanceKm, &orderData.EstimatedPrice, &orderData.LockedPricePerKm,
 		&orderData.PassengerPhone, &orderData.PassengerName,
-		&orderData.PassengerPhoto, &orderData.OrderType, &orderData.TripType, &orderData.ServiceFee)
+		&orderData.PassengerPhoto, &orderData.OrderType, &orderData.TripType, &orderData.ServiceFee,
+		&orderData.AdditionalInfo)
 	if err != nil {
 		log.Printf("Failed to get order data: %v", err)
 		return
