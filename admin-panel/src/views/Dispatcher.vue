@@ -249,9 +249,8 @@ const mapLat = ref(null)
 const mapLng = ref(null)
 let addrPickerMap = null
 let addrPickerMarker = null
-let addrGeocoder = null
 
-/* drivers map – Google Maps */
+/* drivers map – Leaflet + OSM (free, no key) */
 const driversMapContainer = ref(null)
 let driversMap = null
 let driverMarkers = {}
@@ -259,22 +258,25 @@ let routePolyline = null
 let routeMarkers = []
 let driversMapFitted = false
 
-/* Google Maps single-load promise */
-let gmapsPromise = null
-function loadGoogleMaps() {
-  if (window.google?.maps) return Promise.resolve()
-  if (gmapsPromise) return gmapsPromise
-  const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
-  gmapsPromise = new Promise((resolve, reject) => {
-    const cb = '_gmReady_' + Date.now()
-    window[cb] = () => { delete window[cb]; resolve() }
+/* Leaflet single-load (CSS + JS) */
+let leafletPromise = null
+function loadLeaflet() {
+  if (window.L) return Promise.resolve()
+  if (leafletPromise) return leafletPromise
+  leafletPromise = new Promise((resolve, reject) => {
+    if (!document.querySelector('link[data-leaflet]')) {
+      const link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+      link.setAttribute('data-leaflet', '1')
+      document.head.appendChild(link)
+    }
     const s = document.createElement('script')
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&callback=${cb}`
-    s.async = true; s.defer = true
-    s.onerror = () => reject(new Error('Google Maps failed to load'))
+    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+    s.onload = resolve; s.onerror = reject
     document.head.appendChild(s)
   })
-  return gmapsPromise
+  return leafletPromise
 }
 
 /* auto-refresh */
@@ -387,64 +389,59 @@ function showExisting() {
   if (suggestions.value.length || regionHits.value.length) suggestionsVisible.value = true
 }
 
-/* ── Google Maps (address picker) ── */
+/* ── Leaflet address picker ── */
 async function openMap() {
   mapOpen.value = true
   mapAddress.value = ''
   mapLat.value = resolvedLat.value
   mapLng.value = resolvedLng.value
-  await loadGoogleMaps()
+  await loadLeaflet()
   await nextTick()
   setTimeout(initAddressMap, 80)
 }
 
 function initAddressMap() {
-  if (!mapContainer.value || !window.google?.maps) return
-  const G = window.google.maps
-  const center = (mapLat.value && mapLng.value)
-    ? { lat: mapLat.value, lng: mapLng.value }
-    : { lat: 40.78, lng: 72.34 }
-  addrPickerMap = new G.Map(mapContainer.value, {
-    center, zoom: 14,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: false,
-  })
-  addrGeocoder = new G.Geocoder()
+  if (!mapContainer.value || !window.L) return
+  const L = window.L
+  const center = (mapLat.value && mapLng.value) ? [mapLat.value, mapLng.value] : [40.78, 72.34]
+  addrPickerMap = L.map(mapContainer.value).setView(center, 14)
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a>', maxZoom: 19,
+  }).addTo(addrPickerMap)
   if (mapLat.value && mapLng.value) {
-    addrPickerMarker = new G.Marker({ map: addrPickerMap, position: center, draggable: true })
-    reverseGeocodeAddr(mapLat.value, mapLng.value)
-    addrPickerMarker.addListener('dragend', (e) => {
-      mapLat.value = e.latLng.lat()
-      mapLng.value = e.latLng.lng()
-      reverseGeocodeAddr(mapLat.value, mapLng.value)
+    addrPickerMarker = L.marker(center, { draggable: true }).addTo(addrPickerMap)
+    addrPickerMarker.on('dragend', (e) => {
+      const { lat, lng } = e.target.getLatLng()
+      mapLat.value = lat; mapLng.value = lng
+      reverseGeocodeAddr(lat, lng)
     })
+    reverseGeocodeAddr(mapLat.value, mapLng.value)
   }
-  addrPickerMap.addListener('click', (e) => {
-    const lat = e.latLng.lat()
-    const lng = e.latLng.lng()
+  addrPickerMap.on('click', (e) => {
+    const { lat, lng } = e.latlng
     mapLat.value = lat; mapLng.value = lng
-    if (addrPickerMarker) {
-      addrPickerMarker.setPosition(e.latLng)
-    } else {
-      addrPickerMarker = new G.Marker({ map: addrPickerMap, position: e.latLng, draggable: true })
-      addrPickerMarker.addListener('dragend', (ev) => {
-        mapLat.value = ev.latLng.lat()
-        mapLng.value = ev.latLng.lng()
-        reverseGeocodeAddr(mapLat.value, mapLng.value)
+    if (addrPickerMarker) addrPickerMarker.setLatLng([lat, lng])
+    else {
+      addrPickerMarker = L.marker([lat, lng], { draggable: true }).addTo(addrPickerMap)
+      addrPickerMarker.on('dragend', (ev) => {
+        const ll = ev.target.getLatLng()
+        mapLat.value = ll.lat; mapLng.value = ll.lng
+        reverseGeocodeAddr(ll.lat, ll.lng)
       })
     }
     reverseGeocodeAddr(lat, lng)
   })
 }
 
-function reverseGeocodeAddr(lat, lng) {
-  if (!addrGeocoder) { mapAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`; return }
-  addrGeocoder.geocode({ location: { lat, lng }, language: 'ru' }, (results, status) => {
-    mapAddress.value = (status === 'OK' && results[0])
-      ? results[0].formatted_address
-      : `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-  })
+async function reverseGeocodeAddr(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=ru`
+    const res = await fetch(url, { headers: { 'User-Agent': 'AxentisTaxiAdmin/1.0' } })
+    const data = await res.json()
+    mapAddress.value = data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+  } catch {
+    mapAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+  }
 }
 
 function confirmMapSelection() {
@@ -457,7 +454,7 @@ function confirmMapSelection() {
 
 function closeMap() {
   mapOpen.value = false
-  addrPickerMap = null; addrPickerMarker = null; addrGeocoder = null
+  if (addrPickerMap) { addrPickerMap.remove(); addrPickerMap = null; addrPickerMarker = null }
 }
 
 /* ── Orders ── */
@@ -538,7 +535,6 @@ async function loadOnlineDrivers(silent = false) {
   try {
     const { data } = await adminAPI.getOnlineDrivers()
     onlineDrivers.value = data.drivers || []
-    // Clear loading before rendering so the container isn't display:none
     loadingDrivers.value = false
     await nextTick()
     await renderDriversMap()
@@ -548,152 +544,148 @@ async function loadOnlineDrivers(silent = false) {
   }
 }
 
-function carIconSvg(isAvailable) {
+/* Top-down car SVG icon — same style as driver-app */
+function carIconHtml(isAvailable) {
   const c = isAvailable ? '#22c55e' : '#f97316'
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 58" width="36" height="58">
-  <ellipse cx="18" cy="54" rx="11" ry="3" fill="rgba(0,0,0,0.18)"/>
-  <rect x="6" y="8" width="24" height="42" rx="9" fill="${c}"/>
-  <rect x="9" y="15" width="18" height="20" rx="5" fill="#111827" opacity="0.88"/>
-  <rect x="10" y="9" width="16" height="9" rx="4" fill="#bfdbfe" opacity="0.95"/>
-  <rect x="10" y="39" width="16" height="8" rx="3" fill="#bfdbfe" opacity="0.8"/>
-  <rect x="3" y="12" width="4" height="10" rx="2" fill="#1f2937"/>
-  <rect x="29" y="12" width="4" height="10" rx="2" fill="#1f2937"/>
-  <rect x="3" y="34" width="4" height="10" rx="2" fill="#1f2937"/>
-  <rect x="29" y="34" width="4" height="10" rx="2" fill="#1f2937"/>
-  <rect x="11" y="18" width="14" height="5" rx="2" fill="#FFCC00"/>
-  <text x="18" y="23" text-anchor="middle" font-size="3.5" font-weight="900" fill="#111" font-family="Arial,sans-serif">TAXI</text>
-</svg>`
+  return `<div style="
+    width:36px;height:54px;position:relative;
+    filter:drop-shadow(0 3px 5px rgba(0,0,0,0.35));
+  ">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 54" width="36" height="54">
+    <ellipse cx="18" cy="51" rx="10" ry="2.5" fill="rgba(0,0,0,0.22)"/>
+    <rect x="6" y="6" width="24" height="42" rx="9" fill="${c}"/>
+    <rect x="9" y="13" width="18" height="20" rx="5" fill="#0f172a" opacity="0.9"/>
+    <rect x="10" y="7"  width="16" height="9"  rx="4" fill="#bfdbfe" opacity="0.95"/>
+    <rect x="10" y="37" width="16" height="8"  rx="3" fill="#bfdbfe" opacity="0.8"/>
+    <rect x="2"  y="12" width="5"  height="11" rx="2.5" fill="#1e293b"/>
+    <rect x="29" y="12" width="5"  height="11" rx="2.5" fill="#1e293b"/>
+    <rect x="2"  y="33" width="5"  height="11" rx="2.5" fill="#1e293b"/>
+    <rect x="29" y="33" width="5"  height="11" rx="2.5" fill="#1e293b"/>
+    <rect x="10" y="17" width="16" height="6"  rx="2" fill="#FFCC00"/>
+    <text x="18" y="22" text-anchor="middle" font-size="4" font-weight="900"
+          fill="#111" font-family="Arial,sans-serif">TAXI</text>
+  </svg></div>`
 }
 
 async function renderDriversMap() {
   if (!driversMapContainer.value) return
-  await loadGoogleMaps()
-  if (!window.google?.maps) return
-  const G = window.google.maps
+  await loadLeaflet()
+  const L = window.L
+  if (!L) return
 
+  /* Init map once */
   if (!driversMap) {
-    driversMap = new G.Map(driversMapContainer.value, {
-      center: { lat: 40.78, lng: 72.34 },
-      zoom: 7,
-      mapTypeControl: false,
-      streetViewControl: false,
-      fullscreenControl: true,
-      zoomControl: true,
-    })
+    driversMap = L.map(driversMapContainer.value, { zoomControl: true }).setView([40.78, 72.34], 7)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(driversMap)
   }
 
   const currentIds = new Set(onlineDrivers.value.map(d => String(d.user_id)))
 
-  // Remove stale markers
+  /* Remove stale markers */
   for (const id of Object.keys(driverMarkers)) {
     if (!currentIds.has(id)) {
-      driverMarkers[id].setMap(null)
+      driversMap.removeLayer(driverMarkers[id])
       delete driverMarkers[id]
     }
   }
 
-  const bounds = new G.LatLngBounds()
-  let hasBounds = false
-
+  const bounds = []
   onlineDrivers.value.forEach(d => {
     const id = String(d.user_id)
-    const pos = { lat: d.lat, lng: d.lng }
-    const svgIcon = {
-      url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(carIconSvg(d.is_available)),
-      scaledSize: new G.Size(36, 58),
-      anchor: new G.Point(18, 29),
-    }
+    const icon = L.divIcon({
+      className: '',
+      html: carIconHtml(d.is_available),
+      iconSize: [36, 54],
+      iconAnchor: [18, 27],
+      tooltipAnchor: [0, -30],
+    })
     if (driverMarkers[id]) {
-      driverMarkers[id].setPosition(pos)
-      driverMarkers[id].setIcon(svgIcon)
+      /* Update in-place — zero flicker */
+      driverMarkers[id].setLatLng([d.lat, d.lng])
+      driverMarkers[id].setIcon(icon)
       driverMarkers[id]._driverData = d
     } else {
-      const marker = new G.Marker({
-        map: driversMap, position: pos, icon: svgIcon,
-        title: `${d.first_name} ${d.last_name}`,
-      })
+      const marker = L.marker([d.lat, d.lng], { icon })
+        .addTo(driversMap)
+        .bindTooltip(`${d.first_name} ${d.last_name} · ${d.car_number}`,
+          { direction: 'top', offset: [0, -32], className: 'driver-tooltip' })
       marker._driverData = d
-      marker.addListener('click', () => {
+      marker.on('click', () => {
         activeDriver.value = marker._driverData
-        driversMap.panTo(marker.getPosition())
+        driversMap.panTo([d.lat, d.lng])
       })
       driverMarkers[id] = marker
     }
-    bounds.extend(pos)
-    hasBounds = true
+    bounds.push([d.lat, d.lng])
   })
 
-  if (hasBounds && !driversMapFitted) {
-    driversMap.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 })
+  /* Auto-fit only on very first render */
+  if (bounds.length > 0 && !driversMapFitted) {
+    driversMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 })
     driversMapFitted = true
   }
 }
 
 function clearRouteOverlays() {
-  if (routePolyline) { routePolyline.setMap(null); routePolyline = null }
-  routeMarkers.forEach(m => m.setMap(null))
+  if (routePolyline) { driversMap.removeLayer(routePolyline); routePolyline = null }
+  routeMarkers.forEach(m => driversMap.removeLayer(m))
   routeMarkers = []
   routeActive.value = false
 }
 
+function pinIcon(color, letter) {
+  const L = window.L
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 42" width="30" height="42">
+    <path d="M15 0C8.37 0 3 5.37 3 12c0 9 12 30 12 30s12-21 12-30C27 5.37 21.63 0 15 0z"
+          fill="${color}" stroke="#fff" stroke-width="1.5"/>
+    <circle cx="15" cy="12" r="6" fill="#fff"/>
+    <text x="15" y="16" text-anchor="middle" font-size="8" font-weight="900"
+          fill="${color}" font-family="Arial">${letter}</text>
+  </svg>`
+  return L.divIcon({
+    className: '', html: svg,
+    iconSize: [30, 42], iconAnchor: [15, 42], tooltipAnchor: [0, -44],
+  })
+}
+
 function showRouteOnMap(driver) {
-  if (!driversMap || !window.google?.maps) return
-  const G = window.google.maps
+  if (!driversMap || !window.L) return
   clearRouteOverlays()
-
-  const pinSvg = (color, letter) =>
-    'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 42" width="30" height="42">
-        <path d="M15 0C8.37 0 3 5.37 3 12c0 9 12 30 12 30s12-21 12-30C27 5.37 21.63 0 15 0z" fill="${color}" stroke="#fff" stroke-width="1.5"/>
-        <circle cx="15" cy="12" r="6" fill="#fff"/>
-        <text x="15" y="16" text-anchor="middle" font-size="8" font-weight="900" fill="${color}" font-family="Arial">${letter}</text>
-      </svg>`
-    )
-
-  const pathPoints = []
+  const L = window.L
+  const points = []
 
   if (driver.pickup_lat && driver.pickup_lng) {
-    const startPos = { lat: driver.pickup_lat, lng: driver.pickup_lng }
-    pathPoints.push(startPos)
-    const sm = new G.Marker({
-      map: driversMap, position: startPos,
-      icon: { url: pinSvg('#16a34a', 'A'), scaledSize: new G.Size(30, 42), anchor: new G.Point(15, 42) },
-      title: 'Старт: ' + (driver.pickup_address || ''),
-    })
-    routeMarkers.push(sm)
+    const pos = [driver.pickup_lat, driver.pickup_lng]
+    points.push(pos)
+    const m = L.marker(pos, { icon: pinIcon('#16a34a', 'A') })
+      .addTo(driversMap)
+      .bindTooltip('Старт: ' + (driver.pickup_address || ''), { direction: 'top' })
+    routeMarkers.push(m)
   }
 
-  // Driver’s current position (middle point)
-  pathPoints.push({ lat: driver.lat, lng: driver.lng })
+  /* Driver current position as midpoint */
+  points.push([driver.lat, driver.lng])
 
   if (driver.destination_lat && driver.destination_lng &&
       driver.destination_lat !== 0 && driver.order_status === 'in_progress') {
-    const endPos = { lat: driver.destination_lat, lng: driver.destination_lng }
-    pathPoints.push(endPos)
-    const em = new G.Marker({
-      map: driversMap, position: endPos,
-      icon: { url: pinSvg('#dc2626', 'B'), scaledSize: new G.Size(30, 42), anchor: new G.Point(15, 42) },
-      title: 'Финиш: ' + (driver.destination_address || ''),
-    })
-    routeMarkers.push(em)
+    const pos = [driver.destination_lat, driver.destination_lng]
+    points.push(pos)
+    const m = L.marker(pos, { icon: pinIcon('#dc2626', 'B') })
+      .addTo(driversMap)
+      .bindTooltip('Финиш: ' + (driver.destination_address || ''), { direction: 'top' })
+    routeMarkers.push(m)
   }
 
-  if (pathPoints.length >= 2) {
-    routePolyline = new G.Polyline({
-      map: driversMap,
-      path: pathPoints,
-      strokeColor: '#1d4ed8',
-      strokeOpacity: 0.9,
-      strokeWeight: 5,
-      icons: [{
-        icon: { path: G.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3.5, strokeColor: '#fff', fillColor: '#1d4ed8', fillOpacity: 1 },
-        offset: '100%', repeat: '80px',
-      }],
-    })
+  if (points.length >= 2) {
+    routePolyline = L.polyline(points, {
+      color: '#1d4ed8', weight: 5, opacity: 0.9,
+      dashArray: null,
+    }).addTo(driversMap)
     routeActive.value = true
-    const rb = new G.LatLngBounds()
-    pathPoints.forEach(p => rb.extend(p))
-    driversMap.fitBounds(rb, { top: 60, right: 60, bottom: 60, left: 60 })
+    driversMap.fitBounds(points, { padding: [50, 50] })
   }
   activeDriver.value = null
 }
@@ -733,8 +725,8 @@ onBeforeUnmount(() => {
   clearTimeout(phoneDebounce)
   clearInterval(ordersInterval)
   clearInterval(driversInterval)
-  clearRouteOverlays()
-  // Google Maps instances are cleaned up automatically by the browser
+  if (driversMap) { driversMap.remove(); driversMap = null }
+  if (addrPickerMap) { addrPickerMap.remove(); addrPickerMap = null }
 })
 </script>
 
@@ -944,6 +936,14 @@ onBeforeUnmount(() => {
 /* Popup animation */
 .popup-slide-enter-active, .popup-slide-leave-active { transition: all .2s ease; }
 .popup-slide-enter-from, .popup-slide-leave-to { opacity: 0; transform: translateY(10px); }
+
+/* Leaflet driver tooltip */
+:global(.driver-tooltip) {
+  background: #1a1a1a; color: #fff; border: none;
+  font-size: 12px; font-weight: 600; border-radius: 6px;
+  padding: 4px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+:global(.driver-tooltip::before) { border-top-color: #1a1a1a; }
 
 /* ── Orders table ── */
 .orders-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
