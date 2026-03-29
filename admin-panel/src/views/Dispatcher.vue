@@ -28,11 +28,27 @@
                 @blur="hideSuggestionsDelayed"
                 @focus="showExisting"
               />
-              <ul v-if="suggestions.length > 0 && suggestionsVisible" class="suggestions">
+              <ul v-if="(regionHits.length > 0 || suggestions.length > 0) && suggestionsVisible" class="suggestions">
+                <!-- Локальные совпадения по регионам Узбекистана -->
+                <li v-if="regionHits.length" class="sug-group-label">🇺🇿 Регионы Узбекистана</li>
+                <li
+                  v-for="(r, ri) in regionHits"
+                  :key="'r'+ri"
+                  :class="{ highlighted: ri === highlightIdx }"
+                  @mousedown.prevent="selectRegionHit(r)"
+                >
+                  <span class="sug-icon">📌</span>
+                  <span class="sug-text">
+                    <strong>{{ r.name }}</strong>
+                    <span class="sug-path">{{ r.region }} → {{ r.district }}</span>
+                  </span>
+                </li>
+                <!-- Nominatim (OpenStreetMap) результаты -->
+                <li v-if="suggestions.length" class="sug-group-label">🌍 OpenStreetMap</li>
                 <li
                   v-for="(s, i) in suggestions"
-                  :key="i"
-                  :class="{ highlighted: i === highlightIdx }"
+                  :key="'n'+i"
+                  :class="{ highlighted: (regionHits.length + i) === highlightIdx }"
                   @mousedown.prevent="selectSuggestion(s)"
                 >
                   <span class="sug-icon">📍</span>
@@ -118,6 +134,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { adminAPI } from '../services/api'
+import { searchLocations } from '../data/uzbekistan-regions'
 
 /* ── state ── */
 const loading = ref(false)
@@ -134,6 +151,7 @@ const form = ref({ passenger_phone: '', pickup_address: '' })
 
 /* autocomplete */
 const suggestions = ref([])
+const regionHits = ref([])
 const suggestionsVisible = ref(false)
 const highlightIdx = ref(-1)
 const addrInput = ref(null)
@@ -153,8 +171,19 @@ let leafletLoaded = false
 function onAddressInput() {
   clearTimeout(debounceTimer)
   const q = form.value.pickup_address.trim()
-  if (q.length < 2) { suggestions.value = []; return }
-  debounceTimer = setTimeout(() => searchAddress(q), 350)
+  if (q.length < 1) { suggestions.value = []; regionHits.value = []; return }
+  // Мгновенный поиск по локальной базе регионов
+  regionHits.value = searchLocations(q, 8)
+  if (regionHits.value.length > 0) {
+    suggestionsVisible.value = true
+    highlightIdx.value = -1
+  }
+  // Nominatim — с задержкой
+  if (q.length >= 2) {
+    debounceTimer = setTimeout(() => searchAddress(q), 350)
+  } else {
+    suggestions.value = []
+  }
 }
 
 async function searchAddress(q) {
@@ -170,31 +199,47 @@ async function searchAddress(q) {
   }
 }
 
+function selectRegionHit(r) {
+  form.value.pickup_address = r.fullPath
+  resolvedLat.value = r.lat
+  resolvedLng.value = r.lng
+  geocodeResult.value = r.fullPath
+  regionHits.value = []
+  suggestions.value = []
+  suggestionsVisible.value = false
+}
+
 function selectSuggestion(s) {
   form.value.pickup_address = s.display_name
   resolvedLat.value = parseFloat(s.lat)
   resolvedLng.value = parseFloat(s.lon)
   geocodeResult.value = s.display_name
+  regionHits.value = []
   suggestions.value = []
   suggestionsVisible.value = false
 }
 
 function highlightNext() {
-  if (highlightIdx.value < suggestions.value.length - 1) highlightIdx.value++
+  const total = regionHits.value.length + suggestions.value.length
+  if (highlightIdx.value < total - 1) highlightIdx.value++
 }
 function highlightPrev() {
   if (highlightIdx.value > 0) highlightIdx.value--
 }
 function selectHighlighted() {
-  if (highlightIdx.value >= 0 && suggestions.value[highlightIdx.value]) {
-    selectSuggestion(suggestions.value[highlightIdx.value])
+  const rLen = regionHits.value.length
+  if (highlightIdx.value >= 0 && highlightIdx.value < rLen) {
+    selectRegionHit(regionHits.value[highlightIdx.value])
+  } else if (highlightIdx.value >= rLen) {
+    const ni = highlightIdx.value - rLen
+    if (suggestions.value[ni]) selectSuggestion(suggestions.value[ni])
   }
 }
 function hideSuggestionsDelayed() {
   setTimeout(() => { suggestionsVisible.value = false }, 200)
 }
 function showExisting() {
-  if (suggestions.value.length) suggestionsVisible.value = true
+  if (suggestions.value.length || regionHits.value.length) suggestionsVisible.value = true
 }
 
 /* ── Leaflet map ── */
@@ -395,7 +440,7 @@ onBeforeUnmount(() => { clearTimeout(debounceTimer); if (leafletMap) leafletMap.
 .suggestions {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
   background: #fff; border: 1px solid #e0e0e0; border-radius: 0 0 10px 10px;
-  max-height: 240px; overflow-y: auto; list-style: none; margin: 0; padding: 0;
+  max-height: 340px; overflow-y: auto; list-style: none; margin: 0; padding: 0;
   box-shadow: 0 6px 20px rgba(0,0,0,.12);
 }
 .suggestions li {
@@ -405,7 +450,13 @@ onBeforeUnmount(() => { clearTimeout(debounceTimer); if (leafletMap) leafletMap.
 }
 .suggestions li:hover, .suggestions li.highlighted { background: #fff9e0; }
 .sug-icon { flex-shrink: 0; }
-.sug-text { line-height: 1.4; }
+.sug-text { line-height: 1.4; display: flex; flex-direction: column; }
+.sug-path { font-size: 11px; color: #888; margin-top: 2px; }
+.sug-group-label {
+  font-size: 11px; font-weight: 700; color: #999; padding: 6px 14px;
+  background: #fafafa; cursor: default; border-bottom: 1px solid #f0f0f0;
+  pointer-events: none;
+}
 
 .map-btn {
   padding: 10px 14px; border-radius: 10px;
