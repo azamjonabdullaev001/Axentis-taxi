@@ -32,11 +32,14 @@ type DriverCandidate struct {
 // 2. Notify the closest driver
 // 3. If no response in 10 seconds or declined, try the next driver
 func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickupLng float64) {
+	log.Printf("[ORDER %s] Starting driver search: pickup=(%.6f, %.6f)", orderID, pickupLat, pickupLng)
 	candidates, err := s.findNearbyDrivers(pickupLat, pickupLng)
 	if err != nil || len(candidates) == 0 {
+		log.Printf("[ORDER %s] No candidates found (err=%v, count=%d)", orderID, err, len(candidates))
 		s.notifyPassengerNoDrivers(orderID)
 		return
 	}
+	log.Printf("[ORDER %s] Found %d candidates, starting sequential notifications", orderID, len(candidates))
 
 	go func() {
 		for _, candidate := range candidates {
@@ -57,11 +60,22 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 // FindAndNotifyDriversInRadius — same as FindAndNotifyDrivers but only
 // considers drivers within the given radius (meters) from the pickup point.
 // Used for call orders to limit search to the city area.
+// Falls back to ALL available drivers if none found within the radius.
 func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat, pickupLng float64, radiusMeters float64) {
+	log.Printf("[CALL-ORDER %s] Starting driver search: pickup=(%.6f, %.6f), radius=%.0fm",
+		orderID, pickupLat, pickupLng, radiusMeters)
+
 	all, err := s.findNearbyDrivers(pickupLat, pickupLng)
 	if err != nil {
+		log.Printf("[CALL-ORDER %s] findNearbyDrivers error: %v", orderID, err)
+		s.updateOrderStatus(orderID, "cancelled")
 		s.notifyPassengerNoDrivers(orderID)
 		return
+	}
+
+	log.Printf("[CALL-ORDER %s] Total available drivers found: %d", orderID, len(all))
+	for i, c := range all {
+		log.Printf("[CALL-ORDER %s]   driver[%d] user=%s dist=%.0fm", orderID, i, c.UserID, c.Distance)
 	}
 
 	var candidates []DriverCandidate
@@ -70,22 +84,34 @@ func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat
 			candidates = append(candidates, c)
 		}
 	}
+	log.Printf("[CALL-ORDER %s] Drivers within %.0fm radius: %d", orderID, radiusMeters, len(candidates))
+
+	// Fallback: if no drivers within radius, use ALL available drivers
+	if len(candidates) == 0 && len(all) > 0 {
+		log.Printf("[CALL-ORDER %s] No drivers in radius, falling back to all %d available drivers", orderID, len(all))
+		candidates = all
+	}
+
 	if len(candidates) == 0 {
+		log.Printf("[CALL-ORDER %s] No available drivers at all — cancelling order", orderID)
 		s.updateOrderStatus(orderID, "cancelled")
 		s.notifyPassengerNoDrivers(orderID)
 		return
 	}
 
 	go func() {
-		for _, candidate := range candidates {
+		for i, candidate := range candidates {
 			if s.isOrderAccepted(orderID) {
+				log.Printf("[CALL-ORDER %s] Order accepted, stopping search", orderID)
 				return
 			}
+			log.Printf("[CALL-ORDER %s] Notifying driver %d/%d: user=%s", orderID, i+1, len(candidates), candidate.UserID)
 			s.notifyDriver(candidate.UserID, orderID)
 			timer := time.NewTimer(10 * time.Second)
 			<-timer.C
 		}
 		if !s.isOrderAccepted(orderID) {
+			log.Printf("[CALL-ORDER %s] All drivers notified, none accepted — cancelling", orderID)
 			s.updateOrderStatus(orderID, "cancelled")
 			s.notifyPassengerNoDrivers(orderID)
 		}
@@ -99,9 +125,10 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		 WHERE d.is_available = true
 		   AND d.current_lat IS NOT NULL
 		   AND d.current_lng IS NOT NULL
-		   AND d.last_seen > NOW() - INTERVAL '5 minutes'`,
+		   AND d.last_seen > NOW() - INTERVAL '30 minutes'`,
 	)
 	if err != nil {
+		log.Printf("[MATCHING] findNearbyDrivers query error: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -111,6 +138,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		var driverID, userID string
 		var dLat, dLng float64
 		if err := rows.Scan(&driverID, &userID, &dLat, &dLng); err != nil {
+			log.Printf("[MATCHING] scan error: %v", err)
 			continue
 		}
 		dist := haversine(lat, lng, dLat, dLng)
@@ -121,6 +149,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		})
 	}
 
+	log.Printf("[MATCHING] findNearbyDrivers: found %d available drivers (last_seen < 30min)", len(candidates))
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Distance < candidates[j].Distance
 	})
@@ -164,7 +193,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		&orderData.PassengerPhoto, &orderData.OrderType, &orderData.TripType, &orderData.ServiceFee,
 		&orderData.AdditionalInfo)
 	if err != nil {
-		log.Printf("Failed to get order data: %v", err)
+		log.Printf("[NOTIFY] Failed to get order data for order %s: %v", orderID, err)
 		return
 	}
 
@@ -173,6 +202,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		"order": orderData,
 	}
 	data, _ := json.Marshal(msg)
+	log.Printf("[NOTIFY] Sending new_order to user %s for order %s", userID, orderID)
 	s.hub.SendToUser(userID, data)
 	// Also send Expo push notification so the driver is alerted even if the app is killed
 	go s.push.SendNewOrderPush(userID, orderData.PickupAddress, orderData.DestinationAddress, orderData.ID)

@@ -243,6 +243,7 @@ export default function HomeScreen() {
   const driverDisplayRef = useRef(null);
   const smoothTimerRef = useRef(null);
   const routeDriverTargetRef = useRef(null); // last driver pos used for OSRM fetch (30m throttle)
+  const lastDriverLocSetRef = useRef(0); // throttle setDriverLocation for OSRM (max every 2s)
   const [driverDisplayLocation, setDriverDisplayLocation] = useState(null);
   const [driverInfo, setDriverInfo] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
@@ -457,15 +458,15 @@ export default function HomeScreen() {
       const prevH = display.heading ?? 0;
       const targetH = target.heading ?? 0;
       let hDiff = ((targetH - prevH) % 360 + 540) % 360 - 180;
-      const nextHeading = (prevH + hDiff * 0.25 + 360) % 360;
+      const nextHeading = (prevH + hDiff * 0.35 + 360) % 360;
       const next = {
-        latitude:  lerp(display.latitude,  target.latitude,  0.5),
-        longitude: lerp(display.longitude, target.longitude, 0.5),
+        latitude:  lerp(display.latitude,  target.latitude,  0.18),
+        longitude: lerp(display.longitude, target.longitude, 0.18),
         heading:   nextHeading,
       };
       driverDisplayRef.current = next;
       setDriverDisplayLocation({ ...next });
-    }, 20);
+    }, 16);
 
     return () => clearInterval(smoothTimerRef.current);
   }, [orderStatus]);
@@ -595,7 +596,12 @@ export default function HomeScreen() {
     socket.on('driver_location', (data) => {
       const pos = { latitude: data.lat, longitude: data.lng, heading: data.heading ?? 0 };
       driverTargetRef.current = pos;
-      setDriverLocation(pos);
+      // Throttle state update to max once per 2s — only used for OSRM route refetch
+      const now = Date.now();
+      if (now - lastDriverLocSetRef.current > 2000) {
+        lastDriverLocSetRef.current = now;
+        setDriverLocation(pos);
+      }
       // Для свободного тарифа накапливаем пройденные км во время поездки
       if (orderStatusRef.current === ORDER_STATUS.IN_PROGRESS && tariffTypeRef.current === 'free') {
         if (prevFreeDriverPosRef.current) {
