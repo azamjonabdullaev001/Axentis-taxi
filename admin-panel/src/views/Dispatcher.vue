@@ -106,41 +106,44 @@
       </div>
 
       <div v-if="loadingDrivers" class="loading">Загрузка водителей...</div>
-      <div v-else-if="onlineDrivers.length === 0" class="empty">Нет онлайн водителей</div>
 
-      <template v-else>
+      <!-- Map is always rendered once (v-show keeps DOM alive so Leaflet is not destroyed) -->
+      <div v-show="!loadingDrivers" class="drivers-map-wrap">
         <div ref="driversMapContainer" class="drivers-map-container"></div>
+        <div v-if="!loadingDrivers && onlineDrivers.length === 0" class="map-empty-overlay">
+          🚕 Нет онлайн водителей
+        </div>
+      </div>
 
-        <!-- Driver list below map -->
-        <div class="drivers-list">
-          <div
-            v-for="d in onlineDrivers"
-            :key="d.user_id"
-            class="driver-card"
-            :class="{ active: selectedDriver?.user_id === d.user_id }"
-            @click="selectDriver(d)"
-          >
-            <div class="driver-avatar-wrap">
-              <img
-                v-if="d.avatar_url"
-                :src="avatarSrc(d.avatar_url)"
-                class="driver-avatar"
-                @error="$event.target.style.display='none'"
-              />
-              <div v-else class="driver-avatar-placeholder">{{ d.first_name?.charAt(0) || '?' }}</div>
-              <span class="driver-status-dot" :class="d.is_available ? 'available' : 'busy'"></span>
+      <!-- Driver list below map -->
+      <div v-if="!loadingDrivers && onlineDrivers.length > 0" class="drivers-list">
+        <div
+          v-for="d in onlineDrivers"
+          :key="d.user_id"
+          class="driver-card"
+          :class="{ active: selectedDriver?.user_id === d.user_id }"
+          @click="selectDriver(d)"
+        >
+          <div class="driver-avatar-wrap">
+            <img
+              v-if="d.avatar_url"
+              :src="avatarSrc(d.avatar_url)"
+              class="driver-avatar"
+              @error="$event.target.style.display='none'"
+            />
+            <div v-else class="driver-avatar-placeholder">{{ d.first_name?.charAt(0) || '?' }}</div>
+            <span class="driver-status-dot" :class="d.is_available ? 'available' : 'busy'"></span>
+          </div>
+          <div class="driver-info">
+            <div class="driver-name">{{ d.first_name }} {{ d.last_name }}</div>
+            <div class="driver-meta">{{ d.car_number }} · {{ d.phone }}</div>
+            <div v-if="d.has_order" class="driver-order-badge">
+              🚖 {{ orderStatusLabel(d.order_status) }}
             </div>
-            <div class="driver-info">
-              <div class="driver-name">{{ d.first_name }} {{ d.last_name }}</div>
-              <div class="driver-meta">{{ d.car_number }} · {{ d.phone }}</div>
-              <div v-if="d.has_order" class="driver-order-badge">
-                🚖 {{ orderStatusLabel(d.order_status) }}
-              </div>
-              <div v-else class="driver-free-badge">✅ Свободен</div>
-            </div>
+            <div v-else class="driver-free-badge">✅ Свободен</div>
           </div>
         </div>
-      </template>
+      </div>
 
       <!-- Selected driver detail modal -->
       <div v-if="selectedDriver" class="driver-detail-overlay" @click.self="selectedDriver = null">
@@ -296,6 +299,7 @@ let driversMap = null
 let driverMarkers = {}
 let routeLayer = null
 let routeMarkers = []
+let driversMapFitted = false
 
 /* auto-refresh */
 let ordersInterval = null
@@ -485,15 +489,15 @@ function closeMap() {
 }
 
 /* ── Orders ── */
-async function loadOrders() {
-  loadingOrders.value = true
+async function loadOrders(silent = false) {
+  if (!silent) loadingOrders.value = true
   try {
     const { data } = await adminAPI.getOrders()
     callOrders.value = (data.orders || []).filter((o) => o.order_type === 'call')
   } catch {
-    callOrders.value = []
+    if (!silent) callOrders.value = []
   } finally {
-    loadingOrders.value = false
+    if (!silent) loadingOrders.value = false
   }
 }
 
@@ -557,26 +561,28 @@ async function searchAndResolveFirst() {
 }
 
 /* ── Online drivers ── */
-async function loadOnlineDrivers() {
-  loadingDrivers.value = true
+async function loadOnlineDrivers(silent = false) {
+  // Only show loading spinner on first load (no map yet)
+  if (!silent && !driversMap) loadingDrivers.value = true
   try {
     const { data } = await adminAPI.getOnlineDrivers()
     onlineDrivers.value = data.drivers || []
     await nextTick()
-    renderDriversMap()
+    await renderDriversMap()
   } catch {
-    onlineDrivers.value = []
+    if (!silent) onlineDrivers.value = []
   } finally {
     loadingDrivers.value = false
   }
 }
 
 async function renderDriversMap() {
-  if (!driversMapContainer.value || onlineDrivers.value.length === 0) return
+  if (!driversMapContainer.value) return
   await loadLeaflet()
   const L = window.L
   if (!L) return
 
+  // Initialize map once
   if (!driversMap) {
     driversMap = L.map(driversMapContainer.value).setView([40.78, 72.34], 7)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -584,36 +590,45 @@ async function renderDriversMap() {
     }).addTo(driversMap)
   }
 
-  // Clear existing markers
-  Object.values(driverMarkers).forEach(m => driversMap.removeLayer(m))
-  driverMarkers = {}
-  clearRouteOverlays()
+  const currentIds = new Set(onlineDrivers.value.map(d => String(d.user_id)))
+
+  // Remove markers for drivers no longer online
+  for (const id of Object.keys(driverMarkers)) {
+    if (!currentIds.has(id)) {
+      driversMap.removeLayer(driverMarkers[id])
+      delete driverMarkers[id]
+    }
+  }
 
   const bounds = []
   onlineDrivers.value.forEach(d => {
+    const id = String(d.user_id)
     const color = d.is_available ? '#2e7d32' : '#e65100'
     const icon = L.divIcon({
       className: 'driver-map-icon',
-      html: `<div style="
-        width:32px;height:32px;border-radius:50%;
-        background:${color};color:#fff;
-        display:flex;align-items:center;justify-content:center;
-        font-size:16px;font-weight:bold;
-        border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3);
-      ">🚕</div>`,
+      html: `<div style="width:32px;height:32px;border-radius:50%;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:bold;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3);">🚕</div>`,
       iconSize: [32, 32],
       iconAnchor: [16, 16],
     })
-    const marker = L.marker([d.lat, d.lng], { icon })
-      .addTo(driversMap)
-      .bindTooltip(`${d.first_name} ${d.last_name} · ${d.car_number}`, { direction: 'top', offset: [0, -20] })
-      .on('click', () => selectDriver(d))
-    driverMarkers[d.user_id] = marker
+    if (driverMarkers[id]) {
+      // Update existing marker in place (no flicker)
+      driverMarkers[id].setLatLng([d.lat, d.lng])
+      driverMarkers[id].setIcon(icon)
+    } else {
+      // Add new marker
+      const marker = L.marker([d.lat, d.lng], { icon })
+        .addTo(driversMap)
+        .bindTooltip(`${d.first_name} ${d.last_name} · ${d.car_number}`, { direction: 'top', offset: [0, -20] })
+        .on('click', () => selectDriver(d))
+      driverMarkers[id] = marker
+    }
     bounds.push([d.lat, d.lng])
   })
 
-  if (bounds.length > 0) {
+  // Auto-fit bounds only on first render with drivers
+  if (bounds.length > 0 && !driversMapFitted) {
     driversMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 })
+    driversMapFitted = true
   }
 }
 
@@ -694,8 +709,8 @@ function formatTime(iso) {
 onMounted(() => {
   loadOrders()
   loadOnlineDrivers()
-  ordersInterval = setInterval(loadOrders, 10000)
-  driversInterval = setInterval(loadOnlineDrivers, 15000)
+  ordersInterval = setInterval(() => loadOrders(true), 10000)
+  driversInterval = setInterval(() => loadOnlineDrivers(true), 15000)
 })
 onBeforeUnmount(() => {
   clearTimeout(debounceTimer)
@@ -845,7 +860,15 @@ onBeforeUnmount(() => {
 /* ── Drivers map ── */
 .drivers-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .driver-count { font-size: 14px; font-weight: 400; color: #888; }
-.drivers-map-container { height: 400px; width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
+.drivers-map-wrap { position: relative; margin-bottom: 16px; }
+.drivers-map-container { height: 400px; width: 100%; border-radius: 12px; overflow: hidden; }
+.map-empty-overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.72); color: #888;
+  font-size: 15px; font-weight: 500; border-radius: 12px;
+  pointer-events: none;
+}
 
 .drivers-list {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
