@@ -217,7 +217,7 @@ export default function HomeScreen() {
   const panelTranslateY    = useRef(new Animated.Value(0)).current;
   const panelFullHeightRef = useRef(300);  // total panel height (updated by onLayout)
   const panelHandleHeightRef = useRef(48); // handle bar height only
-  const PANEL_PEEK_HEIGHT = 60;            // minimum visible height when collapsed (handle + safe margin)
+  const PANEL_PEEK_HEIGHT = 36;            // minimum visible height when collapsed (handle only)
   const dragStartYRef      = useRef(0);
   const historyDragStartRef = useRef(0);   // history panel height at gesture start
   const [dashPhase, setDashPhase] = useState(0);
@@ -743,6 +743,9 @@ export default function HomeScreen() {
         const maxSlide = Math.max(0, panelFullHeightRef.current - PANEL_PEEK_HEIGHT);
         const next = Math.max(0, Math.min(maxSlide, dragStartYRef.current + dy));
         panelTranslateY.setValue(next);
+        // GPS button follows panel during drag
+        const visiblePanel = panelFullHeightRef.current - next;
+        gpsBtnBottomAnim.setValue(visiblePanel + 12);
       },
 
       onPanResponderRelease: (_, { dy, vy }) => {
@@ -867,13 +870,13 @@ export default function HomeScreen() {
           />
         ))}
 
-        {/* Пин отправления */}
-        {pickupCoords && !mapMode && (
+        {/* Пин отправления — виден всегда если установлен (в т.ч. при выборе назначения) */}
+        {pickupCoords && (!mapMode || mapMode === 'dest') && (
           <PinMarker coordinate={pickupCoords} source={PICKUP_ICON} size={40} anchor={{ x: 0.5, y: 1 }} onLongPress={() => enterMapMode('pickup')} />
         )}
-        {/* Пин назначения */}
+        {/* Пин назначения — иконка финишного флага: шест слева, anchor по нижней точке шеста */}
         {destCoords && !mapMode && (
-          <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.5, y: 1 }} onLongPress={() => enterMapMode('dest')} />
+          <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.15, y: 0.95 }} onLongPress={() => enterMapMode('dest')} />
         )}
 
         {/* Машина активного водителя — плавно интерполируется из WS обновлений.
@@ -962,10 +965,12 @@ export default function HomeScreen() {
         <View style={s.centerPinContainer} pointerEvents="none">
           <Image
             source={mapMode === 'pickup' ? PICKUP_ICON : DEST_ICON}
-            style={{ width: 48, height: 48, marginTop: -24 }}
+            style={mapMode === 'dest'
+              ? { width: 48, height: 48, marginTop: -24, marginLeft: -17 }
+              : { width: 48, height: 48, marginTop: -24 }
+            }
             resizeMode="contain"
           />
-
         </View>
       )}
 
@@ -1080,17 +1085,7 @@ export default function HomeScreen() {
             </View>
           )}
 
-          {/* Rate info for free tariff */}
-          {tariffType === 'free' && (
-            <View style={{ alignItems: 'center', marginBottom: 8, backgroundColor: colors.card, borderRadius: 12, padding: 10 }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                {t(lang, 'serviceFee')}: {(Number(pricingSettings.service_fee) || 2000).toLocaleString()} {t(lang, 'sum')}
-              </Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
-                {t(lang, 'perKmRate')}: {(Number(pricingSettings.price_per_km) || 2000).toLocaleString()} {t(lang, 'sum')}/{t(lang, 'km')}
-              </Text>
-            </View>
-          )}
+
 
           {/* Кнопка заказа */}
           {((tariffType === 'standard' && destCoords) || (tariffType === 'free' && pickupCoords)) && (

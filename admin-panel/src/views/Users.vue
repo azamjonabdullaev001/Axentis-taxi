@@ -34,7 +34,7 @@
           <tr v-for="u in filtered" :key="u.id">
             <td>
               <div class="name-cell">
-                <img v-if="u.avatar_url" :src="u.avatar_url" class="user-avatar" />
+                <img v-if="u.avatar_url && u.avatar_url.startsWith('/')" :src="u.avatar_url" class="user-avatar" />
                 <span v-else class="avatar-placeholder">{{ ((u.first_name || '?')[0]).toUpperCase() }}</span>
                 {{ (u.first_name || '') + ' ' + (u.last_name || '') || '—' }}
               </div>

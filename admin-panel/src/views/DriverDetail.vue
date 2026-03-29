@@ -3,7 +3,7 @@
     <div class="top-bar">
       <button class="back-btn" @click="$router.back()">← Назад</button>
       <div v-if="info" class="driver-header">
-        <img v-if="info.avatar_url" :src="info.avatar_url" class="driver-avatar" />
+        <img v-if="info.avatar_url && info.avatar_url.startsWith('/')" :src="info.avatar_url" class="driver-avatar" />
         <span v-else class="driver-avatar-placeholder">{{ ((info.first_name || '?')[0]).toUpperCase() }}</span>
         <h2 class="page-title">
           🚗 {{ info.first_name }} {{ info.last_name }}
