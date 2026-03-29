@@ -153,7 +153,7 @@ function BouncingCenterPin({ source }) {
     return () => anim.stop();
   }, [bounce]);
   return (
-    <View style={s.centerPinContainer} pointerEvents="none">
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }} pointerEvents="none">
       <Animated.Image
         source={source}
         style={{ width: 48, height: 48, marginTop: -24, transform: [{ translateY: bounce }] }}
