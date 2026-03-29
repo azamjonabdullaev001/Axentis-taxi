@@ -18,7 +18,6 @@ import { initializeNotifications, getExpoPushToken } from '../services/notificat
 
 const CAR_ICON    = require('../../assets/car-photo.png');
 const PICKUP_ICON = require('../../assets/location-pin.png');
-const DEST_ICON   = require('../../assets/icons8-finish-96.png');
 const USER_ICON   = require('../../assets/user-location.png');
 
 // Обратное геокодирование: улица + номер дома + город (без районов)
@@ -140,6 +139,30 @@ function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, z
   );
 }
 
+// Center pin with subtle bouncing animation during map selection
+function BouncingCenterPin({ source }) {
+  const bounce = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bounce, { toValue: -3, duration: 500, useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [bounce]);
+  return (
+    <View style={s.centerPinContainer} pointerEvents="none">
+      <Animated.Image
+        source={source}
+        style={{ width: 48, height: 48, marginTop: -24, transform: [{ translateY: bounce }] }}
+        resizeMode="contain"
+      />
+    </View>
+  );
+}
+
 const ORDER_STATUS = {
   IDLE: 'idle',
   SEARCHING: 'searching',
@@ -207,8 +230,6 @@ export default function HomeScreen() {
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [recentTrips, setRecentTrips] = useState([]);
   const recentTripsRef = useRef([]); // ref so PanResponder closure can read it
-  // gpsBtnBottomAnim replaces panelHeight state — setValue() skips React re-renders
-  const gpsBtnBottomAnim = useRef(new Animated.Value(202)).current;
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const panelCollapsedRef = useRef(false);
@@ -217,7 +238,7 @@ export default function HomeScreen() {
   const panelTranslateY    = useRef(new Animated.Value(0)).current;
   const panelFullHeightRef = useRef(300);  // total panel height (updated by onLayout)
   const panelHandleHeightRef = useRef(48); // handle bar height only
-  const PANEL_PEEK_HEIGHT = 36;            // minimum visible height when collapsed (handle only)
+  const PANEL_PEEK_HEIGHT = 42;            // minimum visible height when collapsed (handle + small peek)
   const dragStartYRef      = useRef(0);
   const historyDragStartRef = useRef(0);   // history panel height at gesture start
   const [dashPhase, setDashPhase] = useState(0);
@@ -743,9 +764,6 @@ export default function HomeScreen() {
         const maxSlide = Math.max(0, panelFullHeightRef.current - PANEL_PEEK_HEIGHT);
         const next = Math.max(0, Math.min(maxSlide, dragStartYRef.current + dy));
         panelTranslateY.setValue(next);
-        // GPS button follows panel during drag
-        const visiblePanel = panelFullHeightRef.current - next;
-        gpsBtnBottomAnim.setValue(visiblePanel + 12);
       },
 
       onPanResponderRelease: (_, { dy, vy }) => {
@@ -764,14 +782,6 @@ export default function HomeScreen() {
             friction: 24,
             overshootClamping: true,
           }).start(onDone);
-          Animated.spring(gpsBtnBottomAnim, {
-            toValue: toValue === 0
-              ? (panelFullHeightRef.current + 12)
-              : (PANEL_PEEK_HEIGHT + 12),
-            useNativeDriver: false,
-            tension: 280,
-            friction: 24,
-          }).start();
         };
 
         // 2× faster history panel spring
@@ -874,9 +884,9 @@ export default function HomeScreen() {
         {pickupCoords && (!mapMode || mapMode === 'dest') && (
           <PinMarker coordinate={pickupCoords} source={PICKUP_ICON} size={40} anchor={{ x: 0.5, y: 1 }} onLongPress={() => enterMapMode('pickup')} />
         )}
-        {/* Пин назначения — иконка финишного флага: шест слева, anchor по нижней точке шеста */}
+        {/* Пин назначения — та же иконка что и старт для точности */}
         {destCoords && !mapMode && (
-          <PinMarker coordinate={destCoords} source={DEST_ICON} size={40} anchor={{ x: 0.15, y: 0.95 }} onLongPress={() => enterMapMode('dest')} />
+          <PinMarker coordinate={destCoords} source={PICKUP_ICON} size={40} anchor={{ x: 0.5, y: 1 }} onLongPress={() => enterMapMode('dest')} />
         )}
 
         {/* Машина активного водителя — плавно интерполируется из WS обновлений.
@@ -936,43 +946,8 @@ export default function HomeScreen() {
         )}
       </MapView>
 
-      {/* Floating GPS button — always visible */}
-      <Animated.View
-        pointerEvents="box-none"
-        style={[s.floatingGpsBtn, { backgroundColor: colors.card, bottom: gpsBtnBottomAnim }]}
-      >
-      <TouchableOpacity
-        style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
-        onPress={async () => {
-          let loc = userLocation;
-          if (!loc) {
-            try {
-              const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-              loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-              setUserLocation(loc);
-            } catch { return; }
-          }
-          mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 400);
-        }}
-        activeOpacity={0.7}
-      >
-        <Ionicons name="navigate" size={22} color={colors.primary} />
-      </TouchableOpacity>
-      </Animated.View>
-
-      {/* Center crosshair during map selection — PNG иконка, острый кончик в центре экрана */}
-      {mapMode && (
-        <View style={s.centerPinContainer} pointerEvents="none">
-          <Image
-            source={mapMode === 'pickup' ? PICKUP_ICON : DEST_ICON}
-            style={mapMode === 'dest'
-              ? { width: 48, height: 48, marginTop: -24, marginLeft: -17 }
-              : { width: 48, height: 48, marginTop: -24 }
-            }
-            resizeMode="contain"
-          />
-        </View>
-      )}
+      {/* Center crosshair during map selection — PNG иконка с анимацией покачивания */}
+      {mapMode && <BouncingCenterPin source={PICKUP_ICON} />}
 
 
 
@@ -983,17 +958,32 @@ export default function HomeScreen() {
             backgroundColor: colors.background,
             bottom: 0,
             paddingBottom: 16,
+            overflow: 'visible',
             transform: [{ translateY: panelTranslateY }],
           }]}
           onLayout={(e) => {
             const h = e.nativeEvent.layout.height;
             panelFullHeightRef.current = h;
-            // Only drive GPS button when panel is visible (not mid-collapse)
-            if (!panelCollapsedRef.current) {
-              gpsBtnBottomAnim.setValue(h + 12);
-            }
           }}
         >
+          {/* GPS navigate button — inside panel so it moves 1:1 with drag */}
+          <TouchableOpacity
+            style={[s.floatingGpsBtn, { backgroundColor: colors.card, position: 'absolute', top: -56, right: 14 }]}
+            onPress={async () => {
+              let loc = userLocation;
+              if (!loc) {
+                try {
+                  const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                  loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+                  setUserLocation(loc);
+                } catch { return; }
+              }
+              mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 400);
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="navigate" size={22} color={colors.primary} />
+          </TouchableOpacity>
           <View
             {...handlePanResponder.panHandlers}
             style={s.handleWrap}
@@ -1165,8 +1155,7 @@ export default function HomeScreen() {
 
       {/* ── Map selection confirm bar ── */}
       {orderStatus === ORDER_STATUS.IDLE && mapMode && (
-        <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
+        <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
           {/* Заголовок текущего режима */}
           <Text style={[s.mapModeLabel, { color: colors.textSecondary }]}>
             {mapMode === 'pickup' ? t(lang,'selectPickupPoint') : t(lang,'selectDestination')}
@@ -1202,8 +1191,7 @@ export default function HomeScreen() {
 
       {/* ── SEARCHING panel ── */}
       {orderStatus === ORDER_STATUS.SEARCHING && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 8 }} />
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'searching')}</Text>
@@ -1215,8 +1203,7 @@ export default function HomeScreen() {
 
       {/* ── ACCEPTED / ARRIVED panel ── */}
       {(orderStatus === ORDER_STATUS.ACCEPTED || orderStatus === ORDER_STATUS.ARRIVED) && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>
             {orderStatus === ORDER_STATUS.ACCEPTED ? t(lang, 'driverFound') : t(lang, 'driverArrived')}
@@ -1257,8 +1244,7 @@ export default function HomeScreen() {
 
       {/* ── IN_PROGRESS panel ── */}
       {orderStatus === ORDER_STATUS.IN_PROGRESS && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}
-          onLayout={(e) => gpsBtnBottomAnim.setValue(e.nativeEvent.layout.height + 12)}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'tripInProgress')}</Text>
           {driverInfo && (
