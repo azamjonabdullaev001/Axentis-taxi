@@ -544,27 +544,21 @@ async function loadOnlineDrivers(silent = false) {
   }
 }
 
-/* Top-down car SVG icon — same style as driver-app */
+/* Top-down car icon using car-photo.png with status dot */
 function carIconHtml(isAvailable) {
-  const c = isAvailable ? '#22c55e' : '#f97316'
+  const dot = isAvailable ? '#22c55e' : '#f97316'
   return `<div style="
-    width:36px;height:54px;position:relative;
-    filter:drop-shadow(0 3px 5px rgba(0,0,0,0.35));
+    position:relative;width:44px;height:44px;
+    filter:drop-shadow(0 3px 6px rgba(0,0,0,0.4));
   ">
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 54" width="36" height="54">
-    <ellipse cx="18" cy="51" rx="10" ry="2.5" fill="rgba(0,0,0,0.22)"/>
-    <rect x="6" y="6" width="24" height="42" rx="9" fill="${c}"/>
-    <rect x="9" y="13" width="18" height="20" rx="5" fill="#0f172a" opacity="0.9"/>
-    <rect x="10" y="7"  width="16" height="9"  rx="4" fill="#bfdbfe" opacity="0.95"/>
-    <rect x="10" y="37" width="16" height="8"  rx="3" fill="#bfdbfe" opacity="0.8"/>
-    <rect x="2"  y="12" width="5"  height="11" rx="2.5" fill="#1e293b"/>
-    <rect x="29" y="12" width="5"  height="11" rx="2.5" fill="#1e293b"/>
-    <rect x="2"  y="33" width="5"  height="11" rx="2.5" fill="#1e293b"/>
-    <rect x="29" y="33" width="5"  height="11" rx="2.5" fill="#1e293b"/>
-    <rect x="10" y="17" width="16" height="6"  rx="2" fill="#FFCC00"/>
-    <text x="18" y="22" text-anchor="middle" font-size="4" font-weight="900"
-          fill="#111" font-family="Arial,sans-serif">TAXI</text>
-  </svg></div>`
+    <img src="/car-photo.png" style="width:44px;height:44px;object-fit:contain;display:block;" />
+    <span style="
+      position:absolute;bottom:0;right:0;
+      width:13px;height:13px;border-radius:50%;
+      background:${dot};border:2.5px solid #fff;
+      box-shadow:0 1px 3px rgba(0,0,0,0.35);
+    "></span>
+  </div>`
 }
 
 async function renderDriversMap() {
@@ -598,9 +592,9 @@ async function renderDriversMap() {
     const icon = L.divIcon({
       className: '',
       html: carIconHtml(d.is_available),
-      iconSize: [36, 54],
-      iconAnchor: [18, 27],
-      tooltipAnchor: [0, -30],
+      iconSize: [44, 44],
+      iconAnchor: [22, 22],
+      tooltipAnchor: [0, -26],
     })
     if (driverMarkers[id]) {
       /* Update in-place — zero flicker */
@@ -868,7 +862,7 @@ onBeforeUnmount(() => {
 /* ── Drivers map ── */
 .drivers-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .driver-count { font-size: 14px; font-weight: 400; color: #888; }
-.drivers-map-wrap { position: relative; margin-bottom: 4px; }
+.drivers-map-wrap { position: relative; margin-bottom: 4px; isolation: isolate; }
 .drivers-map-container { height: 480px; width: 100%; border-radius: 12px; overflow: hidden; }
 .map-empty-overlay {
   position: absolute; inset: 0;
@@ -880,7 +874,7 @@ onBeforeUnmount(() => {
 
 /* ── Driver info popup (floats over map) ── */
 .driver-popup {
-  position: absolute; bottom: 16px; left: 16px; z-index: 10;
+  position: absolute; bottom: 16px; left: 16px; z-index: 1000;
   width: 300px; background: #fff; border-radius: 16px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.18); overflow: hidden;
 }
