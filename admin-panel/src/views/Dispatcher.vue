@@ -101,93 +101,50 @@
     <!-- ═══════ 2. Online drivers map ═══════ -->
     <div class="card">
       <div class="drivers-header">
-        <h2>🗺️ Онлайн водители <span v-if="onlineDrivers.length" class="driver-count">({{ onlineDrivers.length }})</span></h2>
-        <button class="refresh-btn" @click="loadOnlineDrivers">🔄 Обновить</button>
+        <h2>� Онлайн водители <span v-if="onlineDrivers.length" class="driver-count">({{ onlineDrivers.length }})</span></h2>
+        <button class="refresh-btn" @click="loadOnlineDrivers()">🔄 Обновить</button>
       </div>
 
-      <div v-if="loadingDrivers" class="loading">Загрузка водителей...</div>
+      <div v-if="loadingDrivers" class="loading">Загрузка карты...</div>
 
-      <!-- Map is always rendered once (v-show keeps DOM alive so Leaflet is not destroyed) -->
       <div v-show="!loadingDrivers" class="drivers-map-wrap">
         <div ref="driversMapContainer" class="drivers-map-container"></div>
+
+        <!-- No drivers overlay -->
         <div v-if="!loadingDrivers && onlineDrivers.length === 0" class="map-empty-overlay">
           🚕 Нет онлайн водителей
         </div>
-      </div>
 
-      <!-- Driver list below map -->
-      <div v-if="!loadingDrivers && onlineDrivers.length > 0" class="drivers-list">
-        <div
-          v-for="d in onlineDrivers"
-          :key="d.user_id"
-          class="driver-card"
-          :class="{ active: selectedDriver?.user_id === d.user_id }"
-          @click="selectDriver(d)"
-        >
-          <div class="driver-avatar-wrap">
-            <img
-              v-if="d.avatar_url"
-              :src="avatarSrc(d.avatar_url)"
-              class="driver-avatar"
-              @error="$event.target.style.display='none'"
-            />
-            <div v-else class="driver-avatar-placeholder">{{ d.first_name?.charAt(0) || '?' }}</div>
-            <span class="driver-status-dot" :class="d.is_available ? 'available' : 'busy'"></span>
-          </div>
-          <div class="driver-info">
-            <div class="driver-name">{{ d.first_name }} {{ d.last_name }}</div>
-            <div class="driver-meta">{{ d.car_number }} · {{ d.phone }}</div>
-            <div v-if="d.has_order" class="driver-order-badge">
-              🚖 {{ orderStatusLabel(d.order_status) }}
-            </div>
-            <div v-else class="driver-free-badge">✅ Свободен</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Selected driver detail modal -->
-      <div v-if="selectedDriver" class="driver-detail-overlay" @click.self="selectedDriver = null">
-        <div class="driver-detail-modal">
-          <div class="detail-header">
-            <div class="detail-avatar-wrap">
-              <img
-                v-if="selectedDriver.avatar_url"
-                :src="avatarSrc(selectedDriver.avatar_url)"
-                class="detail-avatar"
-                @error="$event.target.style.display='none'"
-              />
-              <div v-else class="detail-avatar-placeholder">
-                {{ selectedDriver.first_name?.charAt(0) || '?' }}
+        <!-- Driver info popup (floats over map, bottom-left) -->
+        <transition name="popup-slide">
+          <div v-if="activeDriver" class="driver-popup">
+            <div class="driver-popup-header">
+              <div class="drv-popup-avatar">
+                <img v-if="activeDriver.avatar_url" :src="avatarSrc(activeDriver.avatar_url)" @error="$event.target.style.display='none'" />
+                <div v-else class="drv-popup-avatar-ph">{{ activeDriver.first_name?.charAt(0) || '?' }}</div>
               </div>
+              <div class="drv-popup-info">
+                <div class="drv-popup-name">{{ activeDriver.first_name }} {{ activeDriver.last_name }}</div>
+                <div class="drv-popup-meta">🚗 {{ activeDriver.car_number }} · {{ activeDriver.phone }}</div>
+                <span :class="['drv-popup-status', activeDriver.is_available ? 'free' : 'busy']">
+                  {{ activeDriver.is_available ? '✅ Свободен' : '🚖 Занят' }}
+                </span>
+              </div>
+              <button class="drv-popup-close" @click="activeDriver = null">✕</button>
             </div>
-            <div>
-              <h3>{{ selectedDriver.first_name }} {{ selectedDriver.last_name }}</h3>
-              <p>{{ selectedDriver.phone }} · {{ selectedDriver.car_number }}</p>
-              <span :class="['status-badge', selectedDriver.is_available ? 'accepted' : 'in_progress']">
-                {{ selectedDriver.is_available ? '✅ Свободен' : '🚖 Занят' }}
-              </span>
+            <div v-if="activeDriver.has_order" class="drv-popup-order">
+              <div class="drv-prow"><b>Статус:</b> {{ orderStatusLabel(activeDriver.order_status) }}</div>
+              <div class="drv-prow"><b>Пассажир:</b> {{ activeDriver.passenger_phone }}</div>
+              <div v-if="activeDriver.pickup_address" class="drv-prow"><b>Откуда:</b> {{ activeDriver.pickup_address }}</div>
+              <div v-if="activeDriver.destination_address" class="drv-prow"><b>Куда:</b> {{ activeDriver.destination_address }}</div>
+              <button class="drv-route-btn" @click="showRouteOnMap(activeDriver)">🗺️ Показать маршрут</button>
             </div>
-            <button class="close-modal-btn" @click="selectedDriver = null">✕</button>
+            <div v-else class="drv-popup-free">Водитель свободен, заказа нет.</div>
           </div>
+        </transition>
 
-          <div v-if="selectedDriver.has_order" class="detail-order">
-            <h4>Текущий заказ</h4>
-            <div class="detail-row"><strong>Статус:</strong> {{ orderStatusLabel(selectedDriver.order_status) }}</div>
-            <div class="detail-row"><strong>Пассажир:</strong> {{ selectedDriver.passenger_phone }}</div>
-            <div v-if="selectedDriver.pickup_address" class="detail-row">
-              <strong>Откуда:</strong> {{ selectedDriver.pickup_address }}
-            </div>
-            <div v-if="selectedDriver.destination_address" class="detail-row">
-              <strong>Куда:</strong> {{ selectedDriver.destination_address }}
-            </div>
-            <button class="show-route-btn" @click="showDriverRoute(selectedDriver)">
-              🗺️ Показать маршрут на карте
-            </button>
-          </div>
-          <div v-else class="detail-order">
-            <p style="color:#888">Водитель свободен, заказа нет.</p>
-          </div>
-        </div>
+        <!-- Route clear button -->
+        <button v-if="routeActive" class="route-clear-btn" @click="clearRouteOverlays">✕ Скрыть маршрут</button>
       </div>
     </div>
 
@@ -264,7 +221,8 @@ const successMsg = ref('')
 const geocodeResult = ref('')
 const callOrders = ref([])
 const onlineDrivers = ref([])
-const selectedDriver = ref(null)
+const activeDriver = ref(null)
+const routeActive = ref(false)
 
 const resolvedLat = ref(null)
 const resolvedLng = ref(null)
@@ -283,23 +241,41 @@ const highlightIdx = ref(-1)
 const addrInput = ref(null)
 let debounceTimer = null
 
-/* map modal */
+/* map modal (address picker) */
 const mapOpen = ref(false)
 const mapContainer = ref(null)
 const mapAddress = ref('')
 const mapLat = ref(null)
 const mapLng = ref(null)
-let leafletMap = null
-let leafletMarker = null
-let leafletLoaded = false
+let addrPickerMap = null
+let addrPickerMarker = null
+let addrGeocoder = null
 
-/* drivers map */
+/* drivers map – Google Maps */
 const driversMapContainer = ref(null)
 let driversMap = null
 let driverMarkers = {}
-let routeLayer = null
+let routePolyline = null
 let routeMarkers = []
 let driversMapFitted = false
+
+/* Google Maps single-load promise */
+let gmapsPromise = null
+function loadGoogleMaps() {
+  if (window.google?.maps) return Promise.resolve()
+  if (gmapsPromise) return gmapsPromise
+  const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
+  gmapsPromise = new Promise((resolve, reject) => {
+    const cb = '_gmReady_' + Date.now()
+    window[cb] = () => { delete window[cb]; resolve() }
+    const s = document.createElement('script')
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&callback=${cb}`
+    s.async = true; s.defer = true
+    s.onerror = () => reject(new Error('Google Maps failed to load'))
+    document.head.appendChild(s)
+  })
+  return gmapsPromise
+}
 
 /* auto-refresh */
 let ordersInterval = null
@@ -411,68 +387,64 @@ function showExisting() {
   if (suggestions.value.length || regionHits.value.length) suggestionsVisible.value = true
 }
 
-/* ── Leaflet map (address picker) ── */
-async function loadLeaflet() {
-  if (leafletLoaded) return
-  if (!document.querySelector('link[href*="leaflet"]')) {
-    const link = document.createElement('link')
-    link.rel = 'stylesheet'
-    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-    document.head.appendChild(link)
-  }
-  if (!window.L) {
-    await new Promise((resolve, reject) => {
-      const script = document.createElement('script')
-      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-      script.onload = resolve
-      script.onerror = reject
-      document.head.appendChild(script)
-    })
-  }
-  leafletLoaded = true
-}
-
+/* ── Google Maps (address picker) ── */
 async function openMap() {
   mapOpen.value = true
   mapAddress.value = ''
   mapLat.value = resolvedLat.value
   mapLng.value = resolvedLng.value
-  await loadLeaflet()
+  await loadGoogleMaps()
   await nextTick()
-  setTimeout(initMap, 100)
+  setTimeout(initAddressMap, 80)
 }
 
-function initMap() {
-  if (!mapContainer.value || !window.L) return
-  const L = window.L
-  const center = (mapLat.value && mapLng.value) ? [mapLat.value, mapLng.value] : [40.78, 72.34]
-  leafletMap = L.map(mapContainer.value).setView(center, 13)
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OSM', maxZoom: 19,
-  }).addTo(leafletMap)
+function initAddressMap() {
+  if (!mapContainer.value || !window.google?.maps) return
+  const G = window.google.maps
+  const center = (mapLat.value && mapLng.value)
+    ? { lat: mapLat.value, lng: mapLng.value }
+    : { lat: 40.78, lng: 72.34 }
+  addrPickerMap = new G.Map(mapContainer.value, {
+    center, zoom: 14,
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: false,
+  })
+  addrGeocoder = new G.Geocoder()
   if (mapLat.value && mapLng.value) {
-    leafletMarker = L.marker([mapLat.value, mapLng.value]).addTo(leafletMap)
-    reverseGeocode(mapLat.value, mapLng.value)
+    addrPickerMarker = new G.Marker({ map: addrPickerMap, position: center, draggable: true })
+    reverseGeocodeAddr(mapLat.value, mapLng.value)
+    addrPickerMarker.addListener('dragend', (e) => {
+      mapLat.value = e.latLng.lat()
+      mapLng.value = e.latLng.lng()
+      reverseGeocodeAddr(mapLat.value, mapLng.value)
+    })
   }
-  leafletMap.on('click', (e) => {
-    const { lat, lng } = e.latlng
-    mapLat.value = lat
-    mapLng.value = lng
-    if (leafletMarker) leafletMarker.setLatLng([lat, lng])
-    else leafletMarker = L.marker([lat, lng]).addTo(leafletMap)
-    reverseGeocode(lat, lng)
+  addrPickerMap.addListener('click', (e) => {
+    const lat = e.latLng.lat()
+    const lng = e.latLng.lng()
+    mapLat.value = lat; mapLng.value = lng
+    if (addrPickerMarker) {
+      addrPickerMarker.setPosition(e.latLng)
+    } else {
+      addrPickerMarker = new G.Marker({ map: addrPickerMap, position: e.latLng, draggable: true })
+      addrPickerMarker.addListener('dragend', (ev) => {
+        mapLat.value = ev.latLng.lat()
+        mapLng.value = ev.latLng.lng()
+        reverseGeocodeAddr(mapLat.value, mapLng.value)
+      })
+    }
+    reverseGeocodeAddr(lat, lng)
   })
 }
 
-async function reverseGeocode(lat, lng) {
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=ru`
-    const res = await fetch(url, { headers: { 'User-Agent': 'AxentisTaxiAdmin/1.0' } })
-    const data = await res.json()
-    mapAddress.value = data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-  } catch {
-    mapAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-  }
+function reverseGeocodeAddr(lat, lng) {
+  if (!addrGeocoder) { mapAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`; return }
+  addrGeocoder.geocode({ location: { lat, lng }, language: 'ru' }, (results, status) => {
+    mapAddress.value = (status === 'OK' && results[0])
+      ? results[0].formatted_address
+      : `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+  })
 }
 
 function confirmMapSelection() {
@@ -485,7 +457,7 @@ function confirmMapSelection() {
 
 function closeMap() {
   mapOpen.value = false
-  if (leafletMap) { leafletMap.remove(); leafletMap = null; leafletMarker = null }
+  addrPickerMap = null; addrPickerMarker = null; addrGeocoder = null
 }
 
 /* ── Orders ── */
@@ -562,124 +534,168 @@ async function searchAndResolveFirst() {
 
 /* ── Online drivers ── */
 async function loadOnlineDrivers(silent = false) {
-  // Only show loading spinner on first load (no map yet)
   if (!silent && !driversMap) loadingDrivers.value = true
   try {
     const { data } = await adminAPI.getOnlineDrivers()
     onlineDrivers.value = data.drivers || []
+    // Clear loading before rendering so the container isn't display:none
+    loadingDrivers.value = false
     await nextTick()
     await renderDriversMap()
   } catch {
     if (!silent) onlineDrivers.value = []
-  } finally {
     loadingDrivers.value = false
   }
 }
 
+function carIconSvg(isAvailable) {
+  const c = isAvailable ? '#22c55e' : '#f97316'
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 58" width="36" height="58">
+  <ellipse cx="18" cy="54" rx="11" ry="3" fill="rgba(0,0,0,0.18)"/>
+  <rect x="6" y="8" width="24" height="42" rx="9" fill="${c}"/>
+  <rect x="9" y="15" width="18" height="20" rx="5" fill="#111827" opacity="0.88"/>
+  <rect x="10" y="9" width="16" height="9" rx="4" fill="#bfdbfe" opacity="0.95"/>
+  <rect x="10" y="39" width="16" height="8" rx="3" fill="#bfdbfe" opacity="0.8"/>
+  <rect x="3" y="12" width="4" height="10" rx="2" fill="#1f2937"/>
+  <rect x="29" y="12" width="4" height="10" rx="2" fill="#1f2937"/>
+  <rect x="3" y="34" width="4" height="10" rx="2" fill="#1f2937"/>
+  <rect x="29" y="34" width="4" height="10" rx="2" fill="#1f2937"/>
+  <rect x="11" y="18" width="14" height="5" rx="2" fill="#FFCC00"/>
+  <text x="18" y="23" text-anchor="middle" font-size="3.5" font-weight="900" fill="#111" font-family="Arial,sans-serif">TAXI</text>
+</svg>`
+}
+
 async function renderDriversMap() {
   if (!driversMapContainer.value) return
-  await loadLeaflet()
-  const L = window.L
-  if (!L) return
+  await loadGoogleMaps()
+  if (!window.google?.maps) return
+  const G = window.google.maps
 
-  // Initialize map once
   if (!driversMap) {
-    driversMap = L.map(driversMapContainer.value).setView([40.78, 72.34], 7)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OSM', maxZoom: 19,
-    }).addTo(driversMap)
+    driversMap = new G.Map(driversMapContainer.value, {
+      center: { lat: 40.78, lng: 72.34 },
+      zoom: 7,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: true,
+      zoomControl: true,
+    })
   }
 
   const currentIds = new Set(onlineDrivers.value.map(d => String(d.user_id)))
 
-  // Remove markers for drivers no longer online
+  // Remove stale markers
   for (const id of Object.keys(driverMarkers)) {
     if (!currentIds.has(id)) {
-      driversMap.removeLayer(driverMarkers[id])
+      driverMarkers[id].setMap(null)
       delete driverMarkers[id]
     }
   }
 
-  const bounds = []
+  const bounds = new G.LatLngBounds()
+  let hasBounds = false
+
   onlineDrivers.value.forEach(d => {
     const id = String(d.user_id)
-    const color = d.is_available ? '#2e7d32' : '#e65100'
-    const icon = L.divIcon({
-      className: 'driver-map-icon',
-      html: `<div style="width:32px;height:32px;border-radius:50%;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:bold;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3);">🚕</div>`,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16],
-    })
+    const pos = { lat: d.lat, lng: d.lng }
+    const svgIcon = {
+      url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(carIconSvg(d.is_available)),
+      scaledSize: new G.Size(36, 58),
+      anchor: new G.Point(18, 29),
+    }
     if (driverMarkers[id]) {
-      // Update existing marker in place (no flicker)
-      driverMarkers[id].setLatLng([d.lat, d.lng])
-      driverMarkers[id].setIcon(icon)
+      driverMarkers[id].setPosition(pos)
+      driverMarkers[id].setIcon(svgIcon)
+      driverMarkers[id]._driverData = d
     } else {
-      // Add new marker
-      const marker = L.marker([d.lat, d.lng], { icon })
-        .addTo(driversMap)
-        .bindTooltip(`${d.first_name} ${d.last_name} · ${d.car_number}`, { direction: 'top', offset: [0, -20] })
-        .on('click', () => selectDriver(d))
+      const marker = new G.Marker({
+        map: driversMap, position: pos, icon: svgIcon,
+        title: `${d.first_name} ${d.last_name}`,
+      })
+      marker._driverData = d
+      marker.addListener('click', () => {
+        activeDriver.value = marker._driverData
+        driversMap.panTo(marker.getPosition())
+      })
       driverMarkers[id] = marker
     }
-    bounds.push([d.lat, d.lng])
+    bounds.extend(pos)
+    hasBounds = true
   })
 
-  // Auto-fit bounds only on first render with drivers
-  if (bounds.length > 0 && !driversMapFitted) {
-    driversMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 })
+  if (hasBounds && !driversMapFitted) {
+    driversMap.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 })
     driversMapFitted = true
   }
 }
 
 function clearRouteOverlays() {
-  if (routeLayer && driversMap) { driversMap.removeLayer(routeLayer); routeLayer = null }
-  routeMarkers.forEach(m => { if (driversMap) driversMap.removeLayer(m) })
+  if (routePolyline) { routePolyline.setMap(null); routePolyline = null }
+  routeMarkers.forEach(m => m.setMap(null))
   routeMarkers = []
+  routeActive.value = false
 }
 
-function selectDriver(d) {
-  selectedDriver.value = d
-  if (driversMap && driverMarkers[d.user_id]) {
-    driversMap.setView([d.lat, d.lng], 14)
-  }
-}
-
-function showDriverRoute(d) {
-  if (!driversMap || !window.L) return
-  const L = window.L
+function showRouteOnMap(driver) {
+  if (!driversMap || !window.google?.maps) return
+  const G = window.google.maps
   clearRouteOverlays()
 
-  const points = []
-  if (d.pickup_lat && d.pickup_lng) {
-    points.push([d.pickup_lat, d.pickup_lng])
-    const m = L.marker([d.pickup_lat, d.pickup_lng], {
-      icon: L.divIcon({
-        className: 'route-icon',
-        html: '<div style="font-size:24px">🟢</div>',
-        iconSize: [24, 24], iconAnchor: [12, 12],
-      }),
-    }).addTo(driversMap).bindTooltip('Старт: ' + (d.pickup_address || ''), { direction: 'top' })
-    routeMarkers.push(m)
-  }
-  if (d.destination_lat && d.destination_lng && (d.destination_lat !== 0 || d.destination_lng !== 0)) {
-    points.push([d.destination_lat, d.destination_lng])
-    const m = L.marker([d.destination_lat, d.destination_lng], {
-      icon: L.divIcon({
-        className: 'route-icon',
-        html: '<div style="font-size:24px">🔴</div>',
-        iconSize: [24, 24], iconAnchor: [12, 12],
-      }),
-    }).addTo(driversMap).bindTooltip('Финиш: ' + (d.destination_address || ''), { direction: 'top' })
-    routeMarkers.push(m)
-  }
-  points.push([d.lat, d.lng])
+  const pinSvg = (color, letter) =>
+    'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 42" width="30" height="42">
+        <path d="M15 0C8.37 0 3 5.37 3 12c0 9 12 30 12 30s12-21 12-30C27 5.37 21.63 0 15 0z" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+        <circle cx="15" cy="12" r="6" fill="#fff"/>
+        <text x="15" y="16" text-anchor="middle" font-size="8" font-weight="900" fill="${color}" font-family="Arial">${letter}</text>
+      </svg>`
+    )
 
-  if (points.length >= 2) {
-    routeLayer = L.polyline(points, { color: '#1565c0', weight: 4, opacity: 0.8, dashArray: '8 6' }).addTo(driversMap)
-    driversMap.fitBounds(points, { padding: [40, 40] })
+  const pathPoints = []
+
+  if (driver.pickup_lat && driver.pickup_lng) {
+    const startPos = { lat: driver.pickup_lat, lng: driver.pickup_lng }
+    pathPoints.push(startPos)
+    const sm = new G.Marker({
+      map: driversMap, position: startPos,
+      icon: { url: pinSvg('#16a34a', 'A'), scaledSize: new G.Size(30, 42), anchor: new G.Point(15, 42) },
+      title: 'Старт: ' + (driver.pickup_address || ''),
+    })
+    routeMarkers.push(sm)
   }
-  selectedDriver.value = null
+
+  // Driver’s current position (middle point)
+  pathPoints.push({ lat: driver.lat, lng: driver.lng })
+
+  if (driver.destination_lat && driver.destination_lng &&
+      driver.destination_lat !== 0 && driver.order_status === 'in_progress') {
+    const endPos = { lat: driver.destination_lat, lng: driver.destination_lng }
+    pathPoints.push(endPos)
+    const em = new G.Marker({
+      map: driversMap, position: endPos,
+      icon: { url: pinSvg('#dc2626', 'B'), scaledSize: new G.Size(30, 42), anchor: new G.Point(15, 42) },
+      title: 'Финиш: ' + (driver.destination_address || ''),
+    })
+    routeMarkers.push(em)
+  }
+
+  if (pathPoints.length >= 2) {
+    routePolyline = new G.Polyline({
+      map: driversMap,
+      path: pathPoints,
+      strokeColor: '#1d4ed8',
+      strokeOpacity: 0.9,
+      strokeWeight: 5,
+      icons: [{
+        icon: { path: G.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3.5, strokeColor: '#fff', fillColor: '#1d4ed8', fillOpacity: 1 },
+        offset: '100%', repeat: '80px',
+      }],
+    })
+    routeActive.value = true
+    const rb = new G.LatLngBounds()
+    pathPoints.forEach(p => rb.extend(p))
+    driversMap.fitBounds(rb, { top: 60, right: 60, bottom: 60, left: 60 })
+  }
+  activeDriver.value = null
 }
 
 function avatarSrc(url) {
@@ -710,15 +726,15 @@ onMounted(() => {
   loadOrders()
   loadOnlineDrivers()
   ordersInterval = setInterval(() => loadOrders(true), 10000)
-  driversInterval = setInterval(() => loadOnlineDrivers(true), 15000)
+  driversInterval = setInterval(() => loadOnlineDrivers(true), 20000)
 })
 onBeforeUnmount(() => {
   clearTimeout(debounceTimer)
   clearTimeout(phoneDebounce)
   clearInterval(ordersInterval)
   clearInterval(driversInterval)
-  if (leafletMap) leafletMap.remove()
-  if (driversMap) driversMap.remove()
+  clearRouteOverlays()
+  // Google Maps instances are cleaned up automatically by the browser
 })
 </script>
 
@@ -860,93 +876,74 @@ onBeforeUnmount(() => {
 /* ── Drivers map ── */
 .drivers-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .driver-count { font-size: 14px; font-weight: 400; color: #888; }
-.drivers-map-wrap { position: relative; margin-bottom: 16px; }
-.drivers-map-container { height: 400px; width: 100%; border-radius: 12px; overflow: hidden; }
+.drivers-map-wrap { position: relative; margin-bottom: 4px; }
+.drivers-map-container { height: 480px; width: 100%; border-radius: 12px; overflow: hidden; }
 .map-empty-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(255,255,255,0.72); color: #888;
+  background: rgba(255,255,255,0.75); color: #888;
   font-size: 15px; font-weight: 500; border-radius: 12px;
   pointer-events: none;
 }
 
-.drivers-list {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px; max-height: 320px; overflow-y: auto;
+/* ── Driver info popup (floats over map) ── */
+.driver-popup {
+  position: absolute; bottom: 16px; left: 16px; z-index: 10;
+  width: 300px; background: #fff; border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18); overflow: hidden;
 }
-.driver-card {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px; border-radius: 12px; border: 1.5px solid #eee;
-  cursor: pointer; transition: all .2s;
+.driver-popup-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 14px 10px; border-bottom: 1px solid #f0f0f0; position: relative;
 }
-.driver-card:hover { border-color: #FFCC00; background: #fffde7; }
-.driver-card.active { border-color: #FFCC00; background: #fff9c4; }
-
-.driver-avatar-wrap { position: relative; flex-shrink: 0; }
-.driver-avatar {
-  width: 44px; height: 44px; border-radius: 50%; object-fit: cover;
-  border: 2px solid #eee;
-}
-.driver-avatar-placeholder {
+.drv-popup-avatar { flex-shrink: 0; }
+.drv-popup-avatar img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid #eee; }
+.drv-popup-avatar-ph {
   width: 44px; height: 44px; border-radius: 50%;
   background: #FFCC00; color: #1a1a1a;
   display: flex; align-items: center; justify-content: center;
   font-size: 18px; font-weight: 700;
 }
-.driver-status-dot {
-  position: absolute; bottom: 0; right: 0;
-  width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid #fff;
-}
-.driver-status-dot.available { background: #2e7d32; }
-.driver-status-dot.busy { background: #e65100; }
-
-.driver-info { flex: 1; min-width: 0; }
-.driver-name { font-size: 14px; font-weight: 600; }
-.driver-meta { font-size: 12px; color: #888; margin-top: 2px; }
-.driver-order-badge {
+.drv-popup-info { flex: 1; min-width: 0; }
+.drv-popup-name { font-size: 14px; font-weight: 700; line-height: 1.2; }
+.drv-popup-meta { font-size: 12px; color: #666; margin-top: 2px; }
+.drv-popup-status {
   display: inline-block; margin-top: 4px;
-  font-size: 11px; font-weight: 600; padding: 2px 8px;
-  border-radius: 10px; background: #fff8e1; color: #e65100;
+  font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px;
 }
-.driver-free-badge {
-  display: inline-block; margin-top: 4px;
-  font-size: 11px; font-weight: 600; padding: 2px 8px;
-  border-radius: 10px; background: #e8f5e9; color: #2e7d32;
-}
-
-/* ── Driver detail modal ── */
-.driver-detail-overlay {
-  position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,.45); display: flex; justify-content: center; align-items: center;
-}
-.driver-detail-modal {
-  width: 440px; max-width: 94vw; background: #fff; border-radius: 16px;
-  overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,.2);
-}
-.detail-header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 20px; border-bottom: 1px solid #eee; position: relative;
-}
-.detail-header .close-modal-btn { position: absolute; top: 12px; right: 12px; }
-.detail-avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 2px solid #eee; }
-.detail-avatar-placeholder {
-  width: 56px; height: 56px; border-radius: 50%;
-  background: #FFCC00; color: #1a1a1a;
+.drv-popup-status.free { background: #dcfce7; color: #166534; }
+.drv-popup-status.busy { background: #fff7ed; color: #c2410c; }
+.drv-popup-close {
+  position: absolute; top: 8px; right: 8px;
+  background: #f5f5f5; border: none; border-radius: 50%;
+  width: 26px; height: 26px; cursor: pointer; font-size: 13px; color: #555;
   display: flex; align-items: center; justify-content: center;
-  font-size: 22px; font-weight: 700;
 }
-.detail-header h3 { margin: 0; font-size: 17px; font-weight: 700; }
-.detail-header p { margin: 4px 0 6px; font-size: 13px; color: #666; }
-.detail-order { padding: 20px; }
-.detail-order h4 { margin: 0 0 10px; font-size: 14px; font-weight: 700; }
-.detail-row { font-size: 13px; margin-bottom: 6px; }
-.show-route-btn {
-  margin-top: 14px; padding: 10px 18px; border-radius: 10px; border: none;
-  background: #1565c0; color: #fff; font-size: 13px; font-weight: 600;
+.drv-popup-close:hover { background: #eee; }
+.drv-popup-order { padding: 12px 14px 14px; }
+.drv-prow { font-size: 12px; margin-bottom: 5px; color: #444; }
+.drv-prow b { color: #111; }
+.drv-route-btn {
+  margin-top: 10px; width: 100%; padding: 10px; border-radius: 10px; border: none;
+  background: #1d4ed8; color: #fff; font-size: 13px; font-weight: 700;
   cursor: pointer; transition: opacity .2s;
 }
-.show-route-btn:hover { opacity: 0.85; }
+.drv-route-btn:hover { opacity: 0.87; }
+.drv-popup-free { padding: 12px 14px; font-size: 13px; color: #888; }
+
+/* Route clear button */
+.route-clear-btn {
+  position: absolute; top: 12px; right: 12px; z-index: 10;
+  padding: 8px 16px; border-radius: 20px; border: none;
+  background: rgba(255,255,255,0.96); color: #dc2626;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15); transition: background .2s;
+}
+.route-clear-btn:hover { background: #fff5f5; }
+
+/* Popup animation */
+.popup-slide-enter-active, .popup-slide-leave-active { transition: all .2s ease; }
+.popup-slide-enter-from, .popup-slide-leave-to { opacity: 0; transform: translateY(10px); }
 
 /* ── Orders table ── */
 .orders-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
