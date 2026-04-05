@@ -829,7 +829,7 @@ export default function HomeScreen() {
                     const rate = meteredPricePerKm.current || 3000;
                     const m = meteredKm * 1000;
                     const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
-                    return Math.ceil((sf + rKm * rate) / 200) * 200;
+                    return Math.ceil((sf + rKm * rate) / 100) * 100;
                   })().toLocaleString()} {t(lang,'sum')}
                 </Text>
                 <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
@@ -937,25 +937,26 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      {/* Trip completion popup — slides up from bottom */}
-      <Modal visible={!!completionModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={[s.orderModal, { backgroundColor: colors.background }]}>
-            <Text style={[s.newOrderTitle, { color: colors.text }]}>{t(lang,'tripCompleted')}</Text>
-            {completionModal && (
-              <Text style={[s.orderPrice, { color: colors.primary }]}>
-                {t(lang,'total')}: {completionModal.price.toLocaleString()} {t(lang,'sum')}
-              </Text>
-            )}
-            <TouchableOpacity
-              style={[s.acceptBtn, { backgroundColor: colors.primary, marginTop: 16, alignSelf: 'stretch' }]}
-              onPress={() => { setCompletionModal(null); resetToAvailable(); }}
-            >
-              <Text style={{ color: '#000', fontWeight: '800', fontSize: 16 }}>OK</Text>
-            </TouchableOpacity>
+      {/* Trip completion — bottom sheet (no dark overlay, map stays visible) */}
+      {!!completionModal && (
+        <View style={[s.bottomPanel, { backgroundColor: colors.background }]}>
+          <View style={s.handleWrap}>
+            <View style={[s.handle, { backgroundColor: colors.border }]} />
           </View>
+          <Text style={[s.newOrderTitle, { color: colors.text, textAlign: 'center' }]}>
+            🏁 {t(lang,'tripCompleted')}
+          </Text>
+          <Text style={[s.orderPrice, { color: colors.primary, textAlign: 'center', marginVertical: 12 }]}>
+            {t(lang,'total')}: {(completionModal?.price ?? 0).toLocaleString()} {t(lang,'sum')}
+          </Text>
+          <TouchableOpacity
+            style={[s.actionBtn, { backgroundColor: colors.primary, marginTop: 8 }]}
+            onPress={() => { setCompletionModal(null); resetToAvailable(); }}
+          >
+            <Text style={s.actionBtnText}>✅ {t(lang,'backToWork')}</Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      )}
     </View>
   );
 }
@@ -1007,6 +1008,8 @@ function makeStyles(colors) {
     priceText: { fontSize: 22, fontWeight: '800', textAlign: 'center', marginVertical: 8 },
     actionBtn: { borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 12 },
     actionBtnText: { fontWeight: '800', fontSize: 16, color: '#000' },
+    handleWrap: { alignItems: 'center', paddingTop: 10, paddingBottom: 6 },
+    handle: { width: 44, height: 4, borderRadius: 2 },
     timerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, marginVertical: 8 },
     timerLabel: { fontSize: 13, textAlign: 'center' },
     destMarker: { backgroundColor: '#E53935', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },

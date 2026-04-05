@@ -83,6 +83,7 @@ export const translations = {
     tripHistory: 'История поездок',
     back: 'Назад',
     free: 'Свободный режим',
+    backToWork: 'Готово — жду следующего заказа',
   },
   uz: {
     register: "Ro'yxatdan o'tish",
@@ -152,6 +153,7 @@ export const translations = {
     noGallery: "Galereya ruxsati yo'q",
     uploadPhoto: 'Rasm yuklash',
     selectLanguage: "Tilni tanlang",
+    backToWork: "Tayyor — keyingi buyurtmani kutaman",
   },
 };
 

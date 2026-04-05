@@ -470,15 +470,34 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 
 	waitFee = h.pricingService.CalculateWaitFee(waitStarted, 2)
 	var totalPrice float64
-	if tripType == "free" && lockedPerKm > 0 {
-		// Free tariff: round driven_km to nearest 100m (1m→100m, 101m→200m, etc.)
+	if tripType == "free" {
+		// Free tariff: always recalculate with CURRENT admin panel pricing so price changes
+		// take effect immediately (locked_price_per_km was set before distance was known).
+		ps, psErr := h.pricingService.GetSettings()
+		var effectivePerKm, effectiveServiceFee float64
+		if psErr == nil {
+			surge := ps.SurgeMultiplier
+			if surge <= 0 {
+				surge = 1.0
+			}
+			effectivePerKm = ps.PricePerKm * surge
+			effectiveServiceFee = ps.ServiceFee
+		} else if lockedPerKm > 0 {
+			effectivePerKm = lockedPerKm
+			effectiveServiceFee = serviceFee
+		} else {
+			effectivePerKm = 3000
+			effectiveServiceFee = 2000
+		}
+		// Round driven distance to nearest 100m block (minimum 100m)
 		distMeters := distKm * 1000
 		if distMeters < 1 {
-			distMeters = 100 // минимум 1 блок = 100 м
+			distMeters = 100
 		}
 		roundedKm := math.Ceil(distMeters/100) * 100 / 1000
-		raw := serviceFee + roundedKm*lockedPerKm + waitFee
-		totalPrice = math.Ceil(raw/200) * 200
+		raw := effectiveServiceFee + roundedKm*effectivePerKm + waitFee
+		// Round to nearest 100 sum (more precise than 200)
+		totalPrice = math.Ceil(raw/100) * 100
 	} else {
 		// Standard tariff: use total_price locked at order creation (includes service_fee + surge).
 		// Only add wait_fee on top — never recalculate, never lose service_fee or surge.
