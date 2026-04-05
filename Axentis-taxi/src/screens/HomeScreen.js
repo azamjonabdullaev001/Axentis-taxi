@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert, Image, Animated, ScrollView, Modal, PanResponder, Vibration,
+  ActivityIndicator, Alert, Image, Animated, ScrollView, PanResponder, Vibration,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -1378,54 +1378,52 @@ export default function HomeScreen() {
       )}
 
       {/* ── Rating modal — slides up from bottom after trip completion ── */}
-      <Modal visible={ratingModalVisible} transparent animationType="slide">
-        <View style={s.ratingOverlay}>
-          <View style={[s.ratingModal, { backgroundColor: colors.background }]}>
-            <Text style={[s.ratingTitle, { color: colors.text }]}>{t(lang, 'thankYou')}</Text>
-            {completedPrice != null && (
-              <Text style={[s.ratingPrice, { color: colors.primary }]}>
-                {t(lang, 'total')}: {completedPrice.toLocaleString()} {t(lang,'sum')}
-              </Text>
-            )}
-            <Text style={[s.ratingSubtitle, { color: colors.textSecondary }]}>
-              {t(lang, 'rateDriver')}
+      {ratingModalVisible && (
+        <View style={[s.ratingModal, { backgroundColor: colors.background, position: 'absolute', left: 0, right: 0, bottom: 0 }]}>
+          <Text style={[s.ratingTitle, { color: colors.text }]}>{t(lang, 'thankYou')}</Text>
+          {completedPrice != null && (
+            <Text style={[s.ratingPrice, { color: colors.primary }]}>
+              {t(lang, 'total')}: {completedPrice.toLocaleString()} {t(lang,'sum')}
             </Text>
-            <View style={s.starsRow}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <TouchableOpacity key={star} onPress={() => setSelectedRating(star)} activeOpacity={0.7} style={s.starBtn}>
-                  <Text style={[s.starIcon, { color: star <= selectedRating ? '#FFC107' : colors.border }]}>★</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={s.ratingActions}>
-              <TouchableOpacity
-                style={[s.ratingSkipBtn, { borderColor: colors.border }]}
-                onPress={async () => { setRatingModalVisible(false); resetOrder(); try { const { data } = await orderAPI.getHistory(); const t2 = (data.orders||[]).filter(o=>o.status==='completed').slice(0,10); setRecentTrips(t2); recentTripsRef.current = t2; } catch {} }}
-              >
-                <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>{t(lang, 'skip')}</Text>
+          )}
+          <Text style={[s.ratingSubtitle, { color: colors.textSecondary }]}>
+            {t(lang, 'rateDriver')}
+          </Text>
+          <View style={s.starsRow}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <TouchableOpacity key={star} onPress={() => setSelectedRating(star)} activeOpacity={0.7} style={s.starBtn}>
+                <Text style={[s.starIcon, { color: star <= selectedRating ? '#FFC107' : colors.border }]}>★</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.ratingSubmitBtn, { backgroundColor: selectedRating > 0 ? colors.primary : colors.border }]}
-                disabled={selectedRating === 0}
-                onPress={async () => {
-                  if (completedOrderId && selectedRating > 0) {
-                    try {
-                      await orderAPI.rateDriver(completedOrderId, selectedRating);
-                    } catch (e) {
-                      Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Rating failed');
-                    }
+            ))}
+          </View>
+          <View style={s.ratingActions}>
+            <TouchableOpacity
+              style={[s.ratingSkipBtn, { borderColor: colors.border }]}
+              onPress={async () => { setRatingModalVisible(false); resetOrder(); try { const { data } = await orderAPI.getHistory(); const t2 = (data.orders||[]).filter(o=>o.status==='completed').slice(0,10); setRecentTrips(t2); recentTripsRef.current = t2; } catch {} }}
+            >
+              <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>{t(lang, 'skip')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.ratingSubmitBtn, { backgroundColor: selectedRating > 0 ? colors.primary : colors.border }]}
+              disabled={selectedRating === 0}
+              onPress={async () => {
+                if (completedOrderId && selectedRating > 0) {
+                  try {
+                    await orderAPI.rateDriver(completedOrderId, selectedRating);
+                  } catch (e) {
+                    Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Rating failed');
                   }
-                  setRatingModalVisible(false);
-                  resetOrder();
-                  try { const { data } = await orderAPI.getHistory(); const t2 = (data.orders||[]).filter(o=>o.status==='completed').slice(0,10); setRecentTrips(t2); recentTripsRef.current = t2; } catch {}
-                }}
-              >
-                <Text style={{ color: '#000', fontWeight: '800' }}>{t(lang, 'send')}</Text>
-              </TouchableOpacity>
-            </View>
+                }
+                setRatingModalVisible(false);
+                resetOrder();
+                try { const { data } = await orderAPI.getHistory(); const t2 = (data.orders||[]).filter(o=>o.status==='completed').slice(0,10); setRecentTrips(t2); recentTripsRef.current = t2; } catch {}
+              }}
+            >
+              <Text style={{ color: '#000', fontWeight: '800' }}>{t(lang, 'send')}</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      )}
     </View>
   );
 }
@@ -1575,13 +1573,9 @@ function makeStyles(colors) {
       shadowColor: '#4285F4', shadowOpacity: 0.6, shadowRadius: 4, elevation: 5,
     },
 
-    // Rating modal
-    ratingOverlay: {
-      flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
-      justifyContent: 'flex-end',
-    },
+    // Rating modal (bottom sheet)
     ratingModal: {
-      width: '100%', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      borderTopLeftRadius: 24, borderTopRightRadius: 24,
       padding: 24, paddingBottom: 36,
       elevation: 20, shadowOpacity: 0.3, shadowRadius: 10, shadowColor: '#000',
       alignItems: 'center',

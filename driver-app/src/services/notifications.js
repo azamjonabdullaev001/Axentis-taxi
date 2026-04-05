@@ -1,6 +1,9 @@
-import { Platform } from 'react-native';
+import { Platform, Vibration } from 'react-native';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
+
+/* ── Repeating alarm state ── */
+let alarmIntervalId = null;
 
 // In Expo Go, setNotificationHandler may throw — wrap to prevent module crash
 try {
@@ -67,4 +70,40 @@ export async function showIncomingOrderNotification(order) {
     },
     trigger: null,
   });
+}
+
+/**
+ * Start a repeating alarm: vibration loop + notification sound every 2 seconds.
+ * Call stopOrderAlarm() when the driver accepts, declines, or the countdown expires.
+ */
+export function startOrderAlarm(order) {
+  // Haptic: 400ms on, 300ms off — repeating until stopOrderAlarm()
+  Vibration.vibrate([0, 400, 300], true);
+
+  // Fire first notification immediately (sound)
+  showIncomingOrderNotification(order).catch(() => {});
+
+  // Re-fire notification sound every 2 seconds
+  clearInterval(alarmIntervalId);
+  alarmIntervalId = setInterval(() => {
+    Notifications.scheduleNotificationAsync({
+      content: {
+        title: '🚕 Новый заказ!',
+        body: order?.pickup_address || 'Нажмите чтобы принять',
+        sound: 'default',
+        channelId: 'orders',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+      },
+      trigger: null,
+    }).catch(() => {});
+  }, 2000);
+}
+
+/**
+ * Stop the repeating order alarm (vibration + notification loop).
+ */
+export function stopOrderAlarm() {
+  Vibration.cancel();
+  clearInterval(alarmIntervalId);
+  alarmIntervalId = null;
 }

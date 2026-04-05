@@ -16,7 +16,8 @@ import { t } from '../i18n';
 import {
   initializeNotifications,
   getExpoPushToken,
-  showIncomingOrderNotification,
+  startOrderAlarm,
+  stopOrderAlarm,
 } from '../services/notifications';
 
 const CAR_ICON = require('../../assets/car-photo.png');
@@ -369,7 +370,7 @@ export default function HomeScreen() {
       setIncomingOrder(data.order);
       setDriverStatus(DRIVER_STATUS.INCOMING);
       startCountdown(data.order);
-      showIncomingOrderNotification(data.order).catch(() => {});
+      startOrderAlarm(data.order);
     });
     socket.on('order_cancelled', () => {
       Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByPassenger'));
@@ -441,6 +442,7 @@ export default function HomeScreen() {
       setAcceptCountdown((n) => {
         if (n <= 1) {
           clearInterval(countdownRef.current);
+          stopOrderAlarm();
           setIncomingOrder(null);
           resetToAvailable();
           return 0;
@@ -464,6 +466,7 @@ export default function HomeScreen() {
 
   async function handleAcceptOrder() {
     if (!incomingOrder || isProcessing) return;
+    stopOrderAlarm();
     Vibration.vibrate(60);
     setIsProcessing(true);
     clearInterval(countdownRef.current);
@@ -502,6 +505,7 @@ export default function HomeScreen() {
   }
 
   async function handleDeclineOrder() {
+    stopOrderAlarm();
     clearInterval(countdownRef.current);
     setIncomingOrder(null);
     resetToAvailable();

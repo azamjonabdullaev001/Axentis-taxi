@@ -981,7 +981,7 @@ func (h *AdminHandler) GetOnlineDrivers(c *gin.Context) {
 		 JOIN users u ON d.user_id = u.id
 		 WHERE d.current_lat IS NOT NULL
 		   AND d.current_lng IS NOT NULL
-		   AND d.last_seen > NOW() - INTERVAL '30 minutes'
+		   AND d.last_seen > NOW() - INTERVAL '1 hour'
 		 ORDER BY d.last_seen DESC`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch drivers"})
