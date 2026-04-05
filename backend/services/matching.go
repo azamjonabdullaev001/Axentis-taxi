@@ -47,7 +47,7 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 				return
 			}
 			s.notifyDriver(candidate.UserID, orderID)
-			timer := time.NewTimer(10 * time.Second)
+			timer := time.NewTimer(20 * time.Second)
 			<-timer.C
 		}
 		if !s.isOrderAccepted(orderID) {
@@ -107,7 +107,7 @@ func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat
 			}
 			log.Printf("[CALL-ORDER %s] Notifying driver %d/%d: user=%s", orderID, i+1, len(candidates), candidate.UserID)
 			s.notifyDriver(candidate.UserID, orderID)
-			timer := time.NewTimer(10 * time.Second)
+			timer := time.NewTimer(20 * time.Second)
 			<-timer.C
 		}
 		if !s.isOrderAccepted(orderID) {

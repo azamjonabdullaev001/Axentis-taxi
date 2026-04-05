@@ -180,6 +180,7 @@ export default function HomeScreen() {
     })();
 
     return () => {
+      stopOrderAlarm();
       locationSubscriptionRef.current?.remove?.();
       compassSubscriptionRef.current?.remove?.();
       clearInterval(locationBroadcastTimerRef.current);
@@ -436,7 +437,7 @@ export default function HomeScreen() {
   }, [activeOrder, driverStatus, location, passengerLiveLocation]);
 
   function startCountdown(order) {
-    setAcceptCountdown(10);
+    setAcceptCountdown(20);
     clearInterval(countdownRef.current);
     countdownRef.current = setInterval(() => {
       setAcceptCountdown((n) => {

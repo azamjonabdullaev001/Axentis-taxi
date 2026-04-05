@@ -73,17 +73,17 @@ export async function showIncomingOrderNotification(order) {
 }
 
 /**
- * Start a repeating alarm: vibration loop + notification sound every 2 seconds.
+ * Start a repeating alarm: vibration loop + notification sound every second.
  * Call stopOrderAlarm() when the driver accepts, declines, or the countdown expires.
  */
 export function startOrderAlarm(order) {
-  // Haptic: 400ms on, 300ms off — repeating until stopOrderAlarm()
-  Vibration.vibrate([0, 400, 300], true);
+  // Haptic: 400ms on, 600ms off — repeating until stopOrderAlarm()
+  Vibration.vibrate([0, 400, 600], true);
 
   // Fire first notification immediately (sound)
   showIncomingOrderNotification(order).catch(() => {});
 
-  // Re-fire notification sound every 2 seconds
+  // Re-fire notification sound every second
   clearInterval(alarmIntervalId);
   alarmIntervalId = setInterval(() => {
     Notifications.scheduleNotificationAsync({
@@ -96,7 +96,7 @@ export function startOrderAlarm(order) {
       },
       trigger: null,
     }).catch(() => {});
-  }, 2000);
+  }, 1000);
 }
 
 /**
