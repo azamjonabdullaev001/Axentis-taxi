@@ -79,8 +79,8 @@ export default function RegisterScreen({ navigation }) {
     <SafeAreaView style={s.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={s.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+        behavior="padding"
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
         <ScrollView contentContainerStyle={[s.scroll, { paddingTop: Math.max(insets.top, 12), paddingBottom: 72 + insets.bottom }]} keyboardShouldPersistTaps="handled">
         <View style={s.header}>

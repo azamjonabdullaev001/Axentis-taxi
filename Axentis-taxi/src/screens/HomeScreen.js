@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert, Image, Animated, ScrollView, Modal, PanResponder,
+  ActivityIndicator, Alert, Image, Animated, ScrollView, Modal, PanResponder, Vibration,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -357,10 +357,21 @@ export default function HomeScreen() {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-        setUserLocation(coords);
-        setRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+        // Instant: use cached position for immediate map centering (no GPS warm-up delay)
+        try {
+          const lastKnown = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+          if (lastKnown) {
+            const c = { latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude };
+            setUserLocation(c);
+            setRegion({ ...c, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+          }
+        } catch {}
+        // Background: get accurate current fix
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).then((loc) => {
+          const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+          setUserLocation(coords);
+          setRegion({ ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+        }).catch(() => {});
       }
       // Always start in pickup selection mode — user confirms their location
       setMapMode('pickup');
@@ -671,11 +682,19 @@ export default function HomeScreen() {
   async function handleLocateMe() {
     let use = userLocation;
     if (!use) {
+      // Try cached location first — instant, no GPS warm-up
       try {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        use = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-        setUserLocation(use);
-      } catch { return; }
+        const lastKnown = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+        if (lastKnown) use = { latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude };
+      } catch {}
+      // Fall back to fresh GPS fix
+      if (!use) {
+        try {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          use = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+        } catch { return; }
+      }
+      setUserLocation(use);
     }
     pickupLockedRef.current = false;
     setPickupCoords(use);
@@ -727,6 +746,7 @@ export default function HomeScreen() {
       Alert.alert(t(lang, 'error'), t(lang, 'selectDestHint'));
       return;
     }
+    Vibration.vibrate(50);
     setOrderStatus(ORDER_STATUS.SEARCHING);
     freeRideKmRef.current = 0;
     setFreeRideKm(0);
@@ -1207,12 +1227,30 @@ export default function HomeScreen() {
       {/* ── Map selection confirm bar ── */}
       {orderStatus === ORDER_STATUS.IDLE && mapMode && (
         <View style={[s.mapModeBar, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+          {/* GPS navigate button — always visible during map selection */}
+          <TouchableOpacity
+            style={[s.floatingGpsBtn, { backgroundColor: colors.card, position: 'absolute', top: -56, right: 14 }]}
+            onPress={async () => {
+              let loc = userLocation;
+              if (!loc) {
+                try {
+                  const lastKnown = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+                  if (lastKnown) loc = { latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude };
+                } catch {}
+              }
+              if (!loc) return;
+              mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 400);
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="navigate" size={22} color={colors.primary} />
+          </TouchableOpacity>
           {/* Заголовок текущего режима */}
           <Text style={[s.mapModeLabel, { color: colors.textSecondary }]}>
             {mapMode === 'pickup' ? t(lang,'selectPickupPoint') : t(lang,'selectDestination')}
           </Text>
-          {/* Locate me button — only in pickup mode */}
-          {mapMode === 'pickup' && (
+          {/* Locate me button — in pickup and dest mode */}
+          {(mapMode === 'pickup' || mapMode === 'dest') && (
             <TouchableOpacity style={s.gpsLocateBtn} onPress={handleLocateMe} activeOpacity={0.8}>
               <Ionicons name="locate" size={16} color={colors.primary} />
               <Text style={[s.gpsLocateText, { color: colors.primary }]}>{t(lang, 'myLocation')}</Text>

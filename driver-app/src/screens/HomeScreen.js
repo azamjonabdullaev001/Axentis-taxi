@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Switch,
-  Alert, Animated, Modal, Image,
+  Alert, Animated, Modal, Image, Vibration,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -464,6 +464,7 @@ export default function HomeScreen() {
 
   async function handleAcceptOrder() {
     if (!incomingOrder || isProcessing) return;
+    Vibration.vibrate(60);
     setIsProcessing(true);
     clearInterval(countdownRef.current);
     try {

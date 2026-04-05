@@ -5,14 +5,16 @@ const ThemeContext = createContext(null);
 
 export const COLORS = {
   light: {
-    primary: '#FFCC00', background: '#FFFFFF', card: '#F5F5F5',
-    text: '#1A1A1A', textSecondary: '#666', border: '#E0E0E0',
-    error: '#E53935', success: '#43A047',
+    primary: '#FFCC00', background: '#F2F2F7', card: '#FFFFFF',
+    text: '#1C1C1E', textSecondary: '#6C6C70', border: '#E5E5EA',
+    error: '#FF3B30', success: '#34C759',
+    shadow: 'rgba(0,0,0,0.08)', surface: '#FFFFFF', divider: '#E5E5EA',
   },
   dark: {
-    primary: '#FFCC00', background: '#1A1A1A', card: '#2A2A2A',
-    text: '#FFFFFF', textSecondary: '#AAAAAA', border: '#3A3A3A',
-    error: '#EF5350', success: '#66BB6A',
+    primary: '#FFCC00', background: '#000000', card: '#1C1C1E',
+    text: '#FFFFFF', textSecondary: '#8E8E93', border: '#38383A',
+    error: '#FF453A', success: '#30D158',
+    shadow: 'rgba(0,0,0,0.5)', surface: '#2C2C2E', divider: '#38383A',
   },
 };
 

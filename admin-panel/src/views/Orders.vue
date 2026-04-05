@@ -17,7 +17,17 @@
     </div>
 
     <div class="table-card">
-      <div v-if="loading" class="loading">Загрузка заказов...</div>
+      <template v-if="loading">
+        <div v-for="i in 8" :key="i" class="sk-row">
+          <div class="sk sk-cell-sm"></div>
+          <div class="sk sk-cell-md"></div>
+          <div class="sk sk-cell-md"></div>
+          <div class="sk sk-cell-sm"></div>
+          <div class="sk sk-cell-lg"></div>
+          <div class="sk sk-cell-lg"></div>
+          <div class="sk sk-cell-sm"></div>
+        </div>
+      </template>
       <div v-else-if="filtered.length === 0" class="empty">Нет заказов</div>
       <div v-else class="table-wrap">
         <table class="table">
@@ -126,12 +136,19 @@ function statusLabel(s) {
 }
 .select-input:focus, .text-input:focus { border-color: #FFCC00; }
 .text-input { min-width: 240px; }
-.table-card { background: #fff; border-radius: 18px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,.07); }
+.table-card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 1px 8px rgba(0,0,0,.06); }
 .table-wrap { overflow-x: auto; }
-.loading, .empty { color: #aaa; font-size: 14px; padding: 20px 0; }
+.empty { color: #aaa; font-size: 14px; padding: 20px 0; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
-.table th { background: #f5f6fa; padding: 10px 10px; text-align: left; color: #666; font-weight: 600; }
-.table td { padding: 10px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+.table th { background: #f8f9fb; padding: 10px 10px; text-align: left; color: #666; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
+.table td { padding: 10px; border-bottom: 1px solid #f5f5f5; vertical-align: middle; }
+.table tr:hover td { background: #fafafa; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.sk { background: linear-gradient(90deg, #f0f0f0 25%, #e4e4e4 50%, #f0f0f0 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 6px; }
+.sk-row { display: flex; gap: 16px; padding: 12px 0; border-bottom: 1px solid #f5f5f5; align-items: center; }
+.sk-cell-sm  { height: 13px; width: 60px; }
+.sk-cell-md  { height: 13px; width: 110px; }
+.sk-cell-lg  { height: 13px; width: 160px; }
 .table tr:last-child td { border-bottom: none; }
 .mono { font-family: monospace; color: #999; }
 .user-cell { font-weight: 600; font-size: 13px; color: #1a1a1a; }

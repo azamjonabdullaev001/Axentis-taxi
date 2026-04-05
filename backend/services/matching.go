@@ -124,8 +124,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		 FROM drivers d
 		 WHERE d.is_available = true
 		   AND d.current_lat IS NOT NULL
-		   AND d.current_lng IS NOT NULL
-		   AND d.last_seen > NOW() - INTERVAL '30 minutes'`,
+		   AND d.current_lng IS NOT NULL`,
 	)
 	if err != nil {
 		log.Printf("[MATCHING] findNearbyDrivers query error: %v", err)
@@ -149,7 +148,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		})
 	}
 
-	log.Printf("[MATCHING] findNearbyDrivers: found %d available drivers (last_seen < 30min)", len(candidates))
+	log.Printf("[MATCHING] findNearbyDrivers: found %d available drivers", len(candidates))
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Distance < candidates[j].Distance
 	})

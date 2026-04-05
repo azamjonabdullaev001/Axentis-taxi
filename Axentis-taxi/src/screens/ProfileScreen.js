@@ -4,6 +4,7 @@ import {
   Image, Switch, Alert, ActivityIndicator, Modal, FlatList,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -144,7 +145,7 @@ export default function ProfileScreen() {
               </View>
           }
           <View style={[s.editBadge, { backgroundColor: colors.primary }]}>
-            <Text style={{ fontSize: 12 }}>✏️</Text>
+            <Ionicons name="camera" size={12} color="#000" />
           </View>
         </TouchableOpacity>
         {loading && <ActivityIndicator color={colors.primary} style={{ marginTop: 8 }} />}
@@ -155,8 +156,9 @@ export default function ProfileScreen() {
       </View>
 
       {/* Settings */}
+      <Text style={[s.sectionTitle, { color: colors.textSecondary }]}>НАСТРОЙКИ</Text>
       <View style={[s.section, { backgroundColor: colors.card }]}>
-        <Row label={t(lang,'darkMode')} colors={colors}>
+        <Row label={t(lang,'darkMode')} colors={colors} icon={isDark ? 'sunny-outline' : 'moon-outline'} iconBg="#5E5CE6">
           <Switch
             value={isDark} onValueChange={toggleTheme}
             trackColor={{ true: colors.primary, false: colors.border }}
@@ -164,18 +166,21 @@ export default function ProfileScreen() {
         </Row>
 
         <TouchableOpacity style={s.row} onPress={() => setLangModalVisible(true)}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'language')}</Text>
-          <Text style={{ color: colors.primary, fontWeight: '600' }}>
-            {lang === 'ru' ? '🇷🇺 Русский' : "🇺🇿 O'zbek"}
-          </Text>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#30D15820' }]}>
+              <Ionicons name="language-outline" size={18} color="#30D158" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'language')}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 14 }}>
+              {lang === 'ru' ? 'Русский' : "O'zbek"}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+          </View>
         </TouchableOpacity>
 
-        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang,'support'), SUPPORT_PHONE)}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'support')}</Text>
-          <Text style={{ color: colors.textSecondary }}>📞</Text>
-        </TouchableOpacity>
-
-        <Row label={t(lang, 'shareLocation')} colors={colors}>
+        <Row label={t(lang, 'shareLocation')} colors={colors} icon="location-outline" iconBg="#FF3B3020">
           <Switch
             value={sharingLocation}
             onValueChange={handleToggleLocationSharing}
@@ -184,20 +189,37 @@ export default function ProfileScreen() {
         </Row>
       </View>
 
-      {/* Trip history — opens in full-screen modal */}
+      {/* History & Support */}
+      <Text style={[s.sectionTitle, { color: colors.textSecondary }]}>ПОЕЗДКИ</Text>
       <View style={[s.section, { backgroundColor: colors.card, marginBottom: 20 }]}>
         <TouchableOpacity style={s.row} onPress={() => { loadHistory(); setHistoryModalVisible(true); }}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'tripHistory')}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FFCC0020' }]}>
+              <Ionicons name="time-outline" size={18} color="#FFCC00" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'tripHistory')}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             {loadingHistory
               ? <ActivityIndicator size="small" color={colors.textSecondary} />
               : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
-            <Text style={{ color: colors.textSecondary, fontSize: 18 }}>›</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
           </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang,'support'), SUPPORT_PHONE)}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#34C75920' }]}>
+              <Ionicons name="call-outline" size={18} color="#34C759" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'support')}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>
+        <Ionicons name="log-out-outline" size={18} color={colors.error} />
         <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
       </TouchableOpacity>
 
@@ -280,16 +302,34 @@ export default function ProfileScreen() {
   );
 }
 
-function Row({ label, colors, children }) {
+function Row({ label, colors, children, icon, iconBg, iconColor }) {
   return (
     <View style={rowStyles.row}>
-      <Text style={[rowStyles.label, { color: colors.text }]}>{label}</Text>
+      <View style={rowStyles.left}>
+        {icon && (
+          <View style={[rowStyles.iconWrap, { backgroundColor: iconBg || colors.border + '40' }]}>
+            <Ionicons
+              name={icon}
+              size={18}
+              color={
+                iconColor ||
+                (iconBg
+                  ? iconBg.endsWith('20') ? iconBg.slice(0, -2) : '#FFFFFF'
+                  : colors.textSecondary)
+              }
+            />
+          </View>
+        )}
+        <Text style={[rowStyles.label, { color: colors.text }]}>{label}</Text>
+      </View>
       {children}
     </View>
   );
 }
 const rowStyles = StyleSheet.create({
-  row: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingVertical: 14, paddingHorizontal: 16 },
+  row: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingVertical: 13, paddingHorizontal: 16 },
+  left: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  iconWrap: { width: 32, height: 32, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
   label: { fontSize: 15 },
 });
 
@@ -302,15 +342,22 @@ function makeStyles(colors) {
     avatar: { width: 96, height: 96, borderRadius: 48 },
     avatarPlaceholder: { backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
     avatarInitial: { fontSize: 36, fontWeight: '800', color: '#000' },
-    editBadge: { position: 'absolute', bottom: 0, right: 0, borderRadius: 10, padding: 4 },
+    editBadge: {
+      position: 'absolute', bottom: 0, right: 0, borderRadius: 12,
+      width: 26, height: 26, justifyContent: 'center', alignItems: 'center',
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4,
+    },
     name: { fontSize: 20, fontWeight: '700' },
     phone: { fontSize: 15, marginTop: 4 },
-    section: { borderRadius: 16, marginBottom: 20, overflow: 'hidden' },
+    sectionTitle: { fontSize: 12, fontWeight: '600', letterSpacing: 0.5, marginBottom: 8, marginTop: 4, paddingHorizontal: 4 },
+    section: { borderRadius: 16, marginBottom: 12, overflow: 'hidden' },
     row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
+    rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+    rowIconWrap: { width: 32, height: 32, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
     rowLabel: { fontSize: 15 },
     logoutBtn: {
       borderWidth: 1.5, borderRadius: 14, padding: 14,
-      alignItems: 'center',
+      alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
     },
     sectionHeader: { fontSize: 15, fontWeight: '700', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
     emptyText: { textAlign: 'center', padding: 16, fontSize: 14 },

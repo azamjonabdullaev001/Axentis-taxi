@@ -4,10 +4,12 @@
       <h2 class="page-title">Пользователи</h2>
       <div class="tabs">
         <button :class="['tab', tab === 'passengers' ? 'active' : '']" @click="tab = 'passengers'">
-          👤 Пассажиры ({{ passengers.length }})
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          Пассажиры ({{ passengers.length }})
         </button>
         <button :class="['tab', tab === 'drivers' ? 'active' : '']" @click="tab = 'drivers'">
-          🚖 Водители ({{ drivers.length }})
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>
+          Водители ({{ drivers.length }})
         </button>
       </div>
     </div>
@@ -16,7 +18,14 @@
       <div class="search-row">
         <input v-model="search" class="search-input" placeholder="Поиск по имени или телефону..." />
       </div>
-      <div v-if="loading" class="loading">Загрузка...</div>
+      <template v-if="loading">
+        <div v-for="i in 6" :key="i" class="sk-row">
+          <div class="sk sk-cell-md"></div>
+          <div class="sk sk-cell-sm"></div>
+          <div class="sk sk-cell-sm"></div>
+          <div class="sk sk-cell-sm"></div>
+        </div>
+      </template>
       <div v-else-if="filtered.length === 0" class="empty">Нет пользователей</div>
       <table v-else class="table">
         <thead>
@@ -55,7 +64,10 @@
               </span>
             </td>
             <td v-if="tab === 'drivers'">
-              <router-link v-if="u.driver_id" :to="`/drivers/${u.driver_id}`" class="analytics-btn">📊</router-link>
+              <router-link v-if="u.driver_id" :to="`/drivers/${u.driver_id}`" class="analytics-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                Аналитика
+              </router-link>
             </td>
           </tr>
         </tbody>
@@ -64,7 +76,7 @@
 
     <!-- Create driver form (only in drivers tab) -->
     <div v-if="tab === 'drivers'" class="section-card">
-      <h3>➕ Добавить водителя</h3>
+      <h3>Добавить водителя</h3>
       <div class="create-form">
         <div class="field-row">
           <div class="field">
@@ -97,7 +109,7 @@
         <div v-if="driverError" class="error-msg">{{ driverError }}</div>
         <div class="actions">
           <button class="save-btn" :disabled="savingDriver" @click="createDriver">
-            {{ savingDriver ? 'Создание...' : '➕ Создать водителя' }}
+            {{ savingDriver ? 'Создание...' : 'Создать водителя' }}
           </button>
           <div v-if="driverCreated" class="saved-msg">✅ Водитель создан! Код: <b>{{ driverCreated }}</b></div>
         </div>
@@ -179,15 +191,16 @@ function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '—' }
 .page-title { font-size: 22px; font-weight: 800; color: #1a1a1a; }
 .tabs { display: flex; gap: 8px; }
 .tab {
-  padding: 10px 20px; border: 1.5px solid #e0e0e0; background: #fff;
-  border-radius: 10px; font-size: 14px; cursor: pointer; font-weight: 500;
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 18px; border: 1.5px solid #e0e0e0; background: #fff;
+  border-radius: 10px; font-size: 13.5px; cursor: pointer; font-weight: 500;
   transition: all .15s;
 }
 .tab.active { background: #FFCC00; border-color: #FFCC00; font-weight: 700; }
 .tab:hover:not(.active) { background: #f5f6fa; }
-.table-card { background: #fff; border-radius: 18px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 24px; }
-.section-card { background: #fff; border-radius: 18px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 24px; }
-.section-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 18px; }
+.table-card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 1px 8px rgba(0,0,0,.06); margin-bottom: 24px; }
+.section-card { background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 1px 8px rgba(0,0,0,.06); margin-bottom: 24px; }
+.section-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
 .search-row { margin-bottom: 16px; }
 .search-input {
   width: 100%; max-width: 340px; padding: 10px 14px;
@@ -195,9 +208,14 @@ function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '—' }
   font-size: 14px; outline: none;
 }
 .search-input:focus { border-color: #FFCC00; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.sk { background: linear-gradient(90deg, #f0f0f0 25%, #e4e4e4 50%, #f0f0f0 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 6px; }
+.sk-row { display: flex; gap: 16px; padding: 12px 0; border-bottom: 1px solid #f5f5f5; align-items: center; }
+.sk-cell-sm  { height: 13px; width: 80px; }
+.sk-cell-md  { height: 13px; width: 140px; }
 .loading, .empty { color: #aaa; font-size: 14px; padding: 16px 0; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.table th { background: #f5f6fa; padding: 10px 12px; text-align: left; color: #666; font-weight: 600; }
+.table th { background: #f8f9fb; padding: 10px 12px; text-align: left; color: #666; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
 .table td { padding: 11px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
 .table tr:last-child td { border-bottom: none; }
 .name-cell { font-weight: 600; color: #1a1a1a; display: flex; align-items: center; gap: 10px; }

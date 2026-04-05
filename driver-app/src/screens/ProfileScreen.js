@@ -5,6 +5,7 @@ import {
   TextInput, Clipboard, Share,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -109,7 +110,7 @@ export default function ProfileScreen() {
                 <Text style={s.avatarInitial}>{(user?.first_name?.[0] || '?').toUpperCase()}</Text>
               </View>}
           <View style={[s.editBadge, { backgroundColor: colors.primary }]}>
-            <Text style={{ fontSize: 12 }}>✏️</Text>
+            <Ionicons name="camera" size={12} color="#000" />
           </View>
         </TouchableOpacity>
         {loading && <ActivityIndicator color={colors.primary} style={{ marginTop: 8 }} />}
@@ -160,34 +161,53 @@ export default function ProfileScreen() {
             trackColor={{ true: colors.primary, false: colors.border }} />
         </View>
         <TouchableOpacity style={s.row} onPress={() => setLangModal(true)}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'language')}</Text>
-          <Text style={{ color: colors.primary, fontWeight: '600' }}>
-            {lang === 'ru' ? '🇷🇺 Русский' : "🇺🇿 O'zbek"}
-          </Text>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#30D15820' }]}>
+              <Ionicons name="language-outline" size={18} color="#30D158" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'language')}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 14 }}>
+              {lang === 'ru' ? 'Русский' : "O'zbek"}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+          </View>
         </TouchableOpacity>
         <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang,'support'), SUPPORT_PHONE)}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'support')}</Text>
-          <Text style={{ color: colors.textSecondary }}>📞</Text>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#34C75920' }]}>
+              <Ionicons name="call-outline" size={18} color="#34C759" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'support')}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>
+        <Ionicons name="log-out-outline" size={18} color={colors.error} />
         <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
       </TouchableOpacity>
 
       {/* Ratings section */}
       <View style={[s.section, { backgroundColor: colors.card, marginTop: 20 }]}>
         <View style={s.row}>
-          <View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>⭐ Мои оценки</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
-              {ratingsData.average_rating.toFixed(1)} / 5.0 ({ratingsData.rating_count} оценок)
-            </Text>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FFC10720' }]}>
+              <Ionicons name="star" size={18} color="#FFC107" />
+            </View>
+            <View>
+              <Text style={[s.rowLabel, { color: colors.text }]}>Мои оценки</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+                {ratingsData.average_rating.toFixed(1)} / 5.0 ({ratingsData.rating_count} оценок)
+              </Text>
+            </View>
           </View>
         </View>
         <View style={s.ratingSummaryRow}>
           {[1,2,3,4,5].map((star) => (
-            <Text key={star} style={{ fontSize: 28, color: star <= Math.round(ratingsData.average_rating) ? '#FFC107' : colors.border }}>★</Text>
+            <Ionicons key={star} name={star <= Math.round(ratingsData.average_rating) ? 'star' : 'star-outline'} size={26} color={star <= Math.round(ratingsData.average_rating) ? '#FFC107' : colors.border} />
           ))}
           <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800', marginLeft: 8 }}>
             {ratingsData.average_rating.toFixed(1)}
@@ -198,12 +218,17 @@ export default function ProfileScreen() {
       {/* Trip history */}
       <View style={[s.section, { backgroundColor: colors.card }]}>
         <TouchableOpacity style={s.row} onPress={() => { loadHistory(); setHistoryModalVisible(true); }}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>📋 {t(lang,'tripHistory') || 'История поездок'}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FFCC0020' }]}>
+              <Ionicons name="time-outline" size={18} color="#FFCC00" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'tripHistory') || 'История поездок'}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             {loadingHistory
               ? <ActivityIndicator size="small" color={colors.textSecondary} />
               : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
-            <Text style={{ color: colors.textSecondary, fontSize: 18 }}>›</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
           </View>
         </TouchableOpacity>
       </View>
@@ -211,8 +236,13 @@ export default function ProfileScreen() {
       {/* ── Referral section ── */}
       <View style={[s.section, { backgroundColor: colors.card }]}>
         <TouchableOpacity style={s.row} onPress={() => setReferralExpanded((v) => !v)}>
-          <Text style={[s.rowLabel, { color: colors.text }]}>🎁 Рефералка</Text>
-          <Text style={{ color: colors.textSecondary, fontSize: 18 }}>{referralExpanded ? '▾' : '›'}</Text>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FF9F0A20' }]}>
+              <Ionicons name="gift-outline" size={18} color="#FF9F0A" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>Рефералка</Text>
+          </View>
+          <Ionicons name={referralExpanded ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
         </TouchableOpacity>
 
         {referralExpanded && (
@@ -424,15 +454,21 @@ function makeStyles(colors) {
     avatar: { width: 96, height: 96, borderRadius: 48 },
     avatarPlaceholder: { backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
     avatarInitial: { fontSize: 36, fontWeight: '800', color: '#000' },
-    editBadge: { position: 'absolute', bottom: 0, right: 0, borderRadius: 10, padding: 4 },
+    editBadge: {
+      position: 'absolute', bottom: 0, right: 0, borderRadius: 12,
+      width: 26, height: 26, justifyContent: 'center', alignItems: 'center',
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4,
+    },
     name: { fontSize: 20, fontWeight: '700' },
     phone: { fontSize: 15, marginTop: 4 },
     carBadge: { marginTop: 8, borderWidth: 1.5, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 6 },
-    section: { borderRadius: 16, marginBottom: 20, overflow: 'hidden' },
+    section: { borderRadius: 16, marginBottom: 12, overflow: 'hidden' },
     row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
+    rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+    rowIconWrap: { width: 32, height: 32, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
     rowLabel: { fontSize: 15 },
-    logoutBtn: { borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center' },
-    ratingSummaryRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
+    logoutBtn: { borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+    ratingSummaryRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, gap: 4 },
     ratingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1 },
     modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
     modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
