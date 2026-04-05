@@ -152,3 +152,13 @@ type PeakPeriod struct {
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+type QuizScore struct {
+	ID             string     `json:"id"`
+	UserID         string     `json:"user_id"`
+	OrderID        *string    `json:"order_id"`
+	Score          int        `json:"score"`
+	TotalQuestions int        `json:"total_questions"`
+	CorrectAnswers int        `json:"correct_answers"`
+	PlayedAt       time.Time  `json:"played_at"`
+}

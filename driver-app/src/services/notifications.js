@@ -4,18 +4,32 @@ import * as Notifications from 'expo-notifications';
 
 /* ── Repeating alarm state ── */
 let alarmIntervalId = null;
+let notificationHandlerSet = false;
 
-// In Expo Go, setNotificationHandler may throw — wrap to prevent module crash
-try {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-} catch {}
+/**
+ * Ensure foreground notification handler is registered.
+ * Without this, notifications scheduled while the app is in the foreground
+ * will be delivered silently (no banner, no sound).
+ */
+function ensureNotificationHandler() {
+  if (notificationHandlerSet) return;
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
+    notificationHandlerSet = true;
+  } catch (e) {
+    console.warn('[notifications] setNotificationHandler failed:', e);
+  }
+}
+
+// Try at module load (works in standalone builds)
+ensureNotificationHandler();
 
 export async function initializeNotifications() {
   const permissions = await Notifications.getPermissionsAsync();
@@ -35,6 +49,9 @@ export async function initializeNotifications() {
       sound: 'default',
     });
   }
+
+  // Retry handler setup after permissions & channel are ready
+  ensureNotificationHandler();
 
   return currentStatus === 'granted';
 }
@@ -77,13 +94,18 @@ export async function showIncomingOrderNotification(order) {
  * Call stopOrderAlarm() when the driver accepts, declines, or the countdown expires.
  */
 export function startOrderAlarm(order) {
+  // Ensure handler is registered (covers edge case where module-level call failed)
+  ensureNotificationHandler();
+
   // Haptic: 400ms on, 600ms off — repeating until stopOrderAlarm()
   Vibration.vibrate([0, 400, 600], true);
 
   // Fire first notification immediately (sound)
-  showIncomingOrderNotification(order).catch(() => {});
+  showIncomingOrderNotification(order).catch((e) =>
+    console.warn('[notifications] initial alarm notification failed:', e),
+  );
 
-  // Re-fire notification sound every second
+  // Re-fire notification sound every 2 seconds (less spam than every 1s)
   clearInterval(alarmIntervalId);
   alarmIntervalId = setInterval(() => {
     Notifications.scheduleNotificationAsync({
@@ -95,8 +117,8 @@ export function startOrderAlarm(order) {
         priority: Notifications.AndroidNotificationPriority.MAX,
       },
       trigger: null,
-    }).catch(() => {});
-  }, 1000);
+    }).catch((e) => console.warn('[notifications] repeating alarm failed:', e));
+  }, 2000);
 }
 
 /**

@@ -57,6 +57,7 @@ func main() {
 	orderHandler := handlers.NewOrderHandler(db, hub, pricingService, pushService)
 	adminHandler := handlers.NewAdminHandlerFull(db, cfg, pricingService, hub, pushService)
 	wsHandler := handlers.NewWSHandler(hub, db)
+	quizHandler := handlers.NewQuizHandler(db)
 
 	api := r.Group("/api/v1")
 	{
@@ -96,6 +97,11 @@ func main() {
 
 			// Referral
 			protected.POST("/referral/apply", authHandler.ApplyReferral)
+
+			// Quiz
+			protected.POST("/quiz/submit", quizHandler.SubmitScore)
+			protected.GET("/quiz/my-scores", quizHandler.GetMyScores)
+			protected.GET("/quiz/total-score", quizHandler.GetTotalScore)
 		}
 
 		adminAPI := api.Group("/admin")

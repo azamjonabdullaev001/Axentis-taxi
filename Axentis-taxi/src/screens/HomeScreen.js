@@ -10,11 +10,12 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { authAPI, orderAPI } from '../services/api';
+import { authAPI, orderAPI, quizAPI } from '../services/api';
 import { buildAvatarUrl } from '../services/api';
 import socket from '../services/socket';
 import { t } from '../i18n';
 import { initializeNotifications, getExpoPushToken } from '../services/notifications';
+import PuzzleGame from '../components/PuzzleGame';
 
 const CAR_ICON    = require('../../assets/car-photo.png');
 const PICKUP_ICON = require('../../assets/location-pin.png');
@@ -118,6 +119,24 @@ async function fetchRoadRoute(pickup, dest) {
 // у которых меняется rotation/coordinate после загрузки (например, иконка машины водителя).
 function PinMarker({ coordinate, source, size = 40, anchor = { x: 0.5, y: 1 }, zIndex, flat, rotation, forceTrack = false, onLongPress }) {
   const [trackChanges, setTrackChanges] = React.useState(true);
+  const prevLatRef = React.useRef(coordinate?.latitude);
+  const prevLngRef = React.useRef(coordinate?.longitude);
+
+  // Re-enable tracking when coordinate changes externally (e.g. history selection)
+  // so the marker actually moves to the new position on the map.
+  React.useEffect(() => {
+    if (!coordinate) return;
+    const { latitude, longitude } = coordinate;
+    if (latitude !== prevLatRef.current || longitude !== prevLngRef.current) {
+      prevLatRef.current = latitude;
+      prevLngRef.current = longitude;
+      setTrackChanges(true);
+      const t = setTimeout(() => setTrackChanges(false), 600);
+      return () => clearTimeout(t);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coordinate?.latitude, coordinate?.longitude]);
+
   return (
     <Marker
       coordinate={coordinate}
@@ -278,6 +297,9 @@ export default function HomeScreen() {
   const [completedOrderId, setCompletedOrderId] = useState(null);
   const [completedPrice, setCompletedPrice] = useState(null);
   const [selectedRating, setSelectedRating] = useState(0);
+
+  // Пазл — показывается во время поездки, когда открыта полная панель с данными водителя
+  const [puzzleStarted, setPuzzleStarted] = useState(false);
 
   // Анимация пунктира "последней мили" — точки плавно текут от пина к дороге
   useEffect(() => {
@@ -723,6 +745,7 @@ export default function HomeScreen() {
     prevFreeDriverPosRef.current = null;
     setLockedPricePerKm(0);
     lockedPricePerKmRef.current = 0;
+    setPuzzleStarted(false);
   }
 
   function calcDistanceKm(a, b) {
@@ -1333,8 +1356,9 @@ export default function HomeScreen() {
 
       {/* ── IN_PROGRESS panel ── */}
       {orderStatus === ORDER_STATUS.IN_PROGRESS && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
+        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16, maxHeight: puzzleStarted ? '100%' : undefined }]}>
           <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'tripInProgress')}</Text>
           {driverInfo && (
             <View style={[s.driverCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1374,6 +1398,18 @@ export default function HomeScreen() {
               {estimatedPrice.toLocaleString()} {t(lang, 'sum')}
             </Text>
           ) : null}
+
+          {/* ── Puzzle game — показывается только когда водитель взял заказ (полная панель) ── */}
+          {driverInfo && (
+            <PuzzleGame
+              colors={colors}
+              user={user}
+              onScoreSubmit={(scoreData) => {
+                quizAPI.submitScore(scoreData).catch(() => {});
+              }}
+            />
+          )}
+          </ScrollView>
         </View>
       )}
 
@@ -1595,5 +1631,7 @@ function makeStyles(colors) {
       flex: 1, paddingVertical: 14, borderRadius: 14,
       alignItems: 'center', justifyContent: 'center', minHeight: 48,
     },
+
+
   });
 }

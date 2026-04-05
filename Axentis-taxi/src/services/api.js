@@ -67,4 +67,10 @@ export const orderAPI = {
   getPricingSettings: () => api.get('/pricing/settings'),
 };
 
+export const quizAPI = {
+  submitScore: (data) => api.post('/quiz/submit', data),
+  getMyScores: () => api.get('/quiz/my-scores'),
+  getTotalScore: () => api.get('/quiz/total-score'),
+};
+
 export default api;

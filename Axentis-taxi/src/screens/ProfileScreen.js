@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { authAPI, orderAPI } from '../services/api';
+import { authAPI, orderAPI, quizAPI } from '../services/api';
 import { buildAvatarUrl } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../config';
@@ -43,11 +43,15 @@ export default function ProfileScreen() {
   const { user, logout, updateUser } = useAuth();
   const [langModalVisible, setLangModalVisible] = useState(false);
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
+  const [puzzleModalVisible, setPuzzleModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const insets = useSafeAreaInsets();
   const [sharingLocation, setSharingLocation] = useState(user?.share_live_location !== false);
   const [orders, setOrders] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [puzzleScores, setPuzzleScores] = useState([]);
+  const [puzzleTotal, setPuzzleTotal] = useState(0);
+  const [loadingPuzzle, setLoadingPuzzle] = useState(false);
 
   useEffect(() => {
     setSharingLocation(user?.share_live_location !== false);
@@ -63,6 +67,21 @@ export default function ProfileScreen() {
   }
 
   useEffect(() => { loadHistory(); }, []);
+
+  async function loadPuzzleScores() {
+    setLoadingPuzzle(true);
+    try {
+      const [scoresRes, totalRes] = await Promise.all([
+        quizAPI.getMyScores(),
+        quizAPI.getTotalScore(),
+      ]);
+      setPuzzleScores(scoresRes.data.scores || []);
+      setPuzzleTotal(totalRes.data.total_score || 0);
+    } catch {}
+    setLoadingPuzzle(false);
+  }
+
+  useEffect(() => { loadPuzzleScores(); }, []);
 
   async function handleToggleLocationSharing(value) {
     setSharingLocation(value);
@@ -218,8 +237,51 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>
-        <Ionicons name="log-out-outline" size={18} color={colors.error} />
+      {/* Puzzle game scores section */}
+      <Text style={[s.sectionTitle, { color: colors.textSecondary }]}>ИГРЫ</Text>
+      <View style={[s.section, { backgroundColor: colors.card, marginBottom: 20 }]}>
+        {/* Total score banner */}
+        <View style={[s.puzzleBanner, { backgroundColor: colors.primary + '18' }]}>
+          <Text style={{ fontSize: 28 }}>🧩</Text>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
+              ВСЕГО ОЧКОВ
+            </Text>
+            {loadingPuzzle
+              ? <ActivityIndicator size="small" color={colors.primary} style={{ alignSelf: 'flex-start' }} />
+              : <Text style={{ color: colors.primary, fontSize: 28, fontWeight: '900', lineHeight: 32 }}>
+                  {puzzleTotal.toLocaleString()}
+                </Text>
+            }
+          </View>
+          <View style={[s.puzzleTrophyBadge, { backgroundColor: colors.primary }]}>
+            <Text style={{ color: '#000', fontSize: 11, fontWeight: '800' }}>
+              🏆 {puzzleScores.length}
+            </Text>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={s.row}
+          onPress={() => { loadPuzzleScores(); setPuzzleModalVisible(true); }}
+        >
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FF6B0020' }]}>
+              <Text style={{ fontSize: 16 }}>🎮</Text>
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>История игр</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            {loadingPuzzle
+              ? <ActivityIndicator size="small" color={colors.textSecondary} />
+              : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{puzzleScores.length}</Text>
+            }
+            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>        <Ionicons name="log-out-outline" size={18} color={colors.error} />
         <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
       </TouchableOpacity>
 
@@ -276,9 +338,73 @@ export default function ProfileScreen() {
         </SafeAreaView>
       </Modal>
 
+      {/* Puzzle scores modal */}
+      <Modal visible={puzzleModalVisible} animationType="slide" onRequestClose={() => setPuzzleModalVisible(false)}>
+        <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            <TouchableOpacity onPress={() => setPuzzleModalVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={{ color: colors.primary, fontSize: 16 }}>← Назад</Text>
+            </TouchableOpacity>
+            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1, textAlign: 'center', marginRight: 40 }}>
+              🧩 История игр
+            </Text>
+          </View>
+          {/* Total in modal header */}
+          <View style={[s.puzzleModalTotal, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Всего очков набрано</Text>
+            <Text style={{ color: colors.primary, fontSize: 32, fontWeight: '900' }}>{puzzleTotal.toLocaleString()}</Text>
+          </View>
+
+          {loadingPuzzle
+            ? <ActivityIndicator color={colors.primary} style={{ flex: 1 }} />
+            : <FlatList
+                data={puzzleScores}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+                ListEmptyComponent={
+                  <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>
+                    Пока нет завершённых игр
+                  </Text>
+                }
+                renderItem={({ item: sc, index }) => {
+                  const diffLabel = (() => {
+                    if (sc.total_questions <= 9)  return { label: 'Легко',   color: '#43A047', grid: '3×3' };
+                    if (sc.total_questions <= 16) return { label: 'Средне',  color: '#1E88E5', grid: '4×4' };
+                    if (sc.total_questions <= 25) return { label: 'Сложно',  color: '#FB8C00', grid: '5×5' };
+                    return                               { label: 'Хардкор', color: '#E53935', grid: '6×6' };
+                  })();
+                  return (
+                    <View style={[s.puzzleCard, { backgroundColor: colors.card }]}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                        <Text style={{ fontSize: 20, marginRight: 8 }}>🧩</Text>
+                        <View style={[s.statusBadge, { backgroundColor: diffLabel.color }]}>
+                          <Text style={s.statusBadgeText}>{diffLabel.label}  {diffLabel.grid}</Text>
+                        </View>
+                        <Text style={{ color: colors.textSecondary, fontSize: 12, marginLeft: 'auto' }}>
+                          {formatDate(sc.played_at)}
+                        </Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                        <Text style={{ color: colors.primary, fontSize: 22, fontWeight: '900' }}>
+                          +{sc.score} pts
+                        </Text>
+                        <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+                          {sc.total_questions} кусочков
+                        </Text>
+                        <Text style={{ color: colors.textSecondary, fontSize: 13, marginLeft: 'auto' }}>
+                          #{index + 1}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                }}
+              />
+          }
+        </SafeAreaView>
+      </Modal>
+
       {/* Language modal */}
-      <Modal visible={langModalVisible} transparent animationType="slide">
-        <View style={s.modalOverlay}>
+      <Modal visible={langModalVisible} transparent animationType="slide">        <View style={s.modalOverlay}>
           <View style={[s.modalSheet, { backgroundColor: colors.background }]}>
             <Text style={[s.modalTitle, { color: colors.text }]}>{t(lang,'selectLanguage')}</Text>
             {[
@@ -376,5 +502,30 @@ function makeStyles(colors) {
     langOption: { flexDirection: 'row', justifyContent: 'space-between', padding: 14 },
     langLabel: { fontSize: 16 },
     closeBtn: { alignItems: 'center', marginTop: 16, padding: 12 },
+
+    // Puzzle game section
+    puzzleBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 16,
+      borderRadius: 16,
+      margin: 12,
+      marginBottom: 4,
+    },
+    puzzleTrophyBadge: {
+      borderRadius: 10,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+    },
+    puzzleModalTotal: {
+      alignItems: 'center',
+      padding: 16,
+      borderBottomWidth: 1,
+    },
+    puzzleCard: {
+      borderRadius: 14,
+      padding: 14,
+      marginBottom: 10,
+    },
   });
 }

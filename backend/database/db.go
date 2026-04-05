@@ -244,4 +244,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_bonuses_driver_week ON referral_b
 
 -- Additional info for call orders (landmarks, street details)
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS additional_info TEXT DEFAULT '';
+
+-- Quiz scores: each ride session can produce one quiz result per passenger
+CREATE TABLE IF NOT EXISTS quiz_scores (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    order_id    UUID REFERENCES orders(id) ON DELETE SET NULL,
+    score       INTEGER NOT NULL DEFAULT 0,
+    total_questions INTEGER NOT NULL DEFAULT 0,
+    correct_answers INTEGER NOT NULL DEFAULT 0,
+    played_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_scores_user_id ON quiz_scores (user_id, played_at DESC);
 `
