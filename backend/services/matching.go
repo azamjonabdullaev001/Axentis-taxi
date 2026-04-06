@@ -124,7 +124,11 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		 FROM drivers d
 		 WHERE d.is_available = true
 		   AND d.current_lat IS NOT NULL
-		   AND d.current_lng IS NOT NULL`,
+		   AND d.current_lng IS NOT NULL
+		   AND NOT EXISTS (
+		     SELECT 1 FROM orders o
+		     WHERE o.driver_id = d.id AND o.status = 'queued'
+		   )`,
 	)
 	if err != nil {
 		log.Printf("[MATCHING] findNearbyDrivers query error: %v", err)

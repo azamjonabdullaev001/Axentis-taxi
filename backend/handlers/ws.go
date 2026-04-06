@@ -23,10 +23,10 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 4096,
 }
 
-// passengerEntry caches the active passenger for a driver to avoid DB queries on every 10ms update.
+// passengerEntry caches passengers for a driver's active + queued orders to avoid DB queries on every 10ms update.
 type passengerEntry struct {
-	passengerID string
-	expiresAt   time.Time
+	passengerIDs []string
+	expiresAt    time.Time
 }
 
 type WSHandler struct {
@@ -100,51 +100,56 @@ func (h *WSHandler) readPump(client *services.Client) {
 			pong, _ := json.Marshal(map[string]string{"type": "pong"})
 			client.Send <- pong
 		case "location_update":
-			// High-frequency (10ms) driver location relay — no DB write, just forward to passenger.
+			// High-frequency driver location relay — forward to all active/queued passengers.
 			lat, _ := data["lat"].(float64)
 			lng, _ := data["lng"].(float64)
 			heading := data["heading"] // may be nil
 
-			passengerID := h.getPassengerForDriver(client.ID)
-			if passengerID != "" {
-				msg, _ := json.Marshal(map[string]interface{}{
-					"type":    "driver_location",
-					"lat":     lat,
-					"lng":     lng,
-					"heading": heading,
-				})
-				h.hub.SendToUser(passengerID, msg)
+			locationMsg, _ := json.Marshal(map[string]interface{}{
+				"type":    "driver_location",
+				"lat":     lat,
+				"lng":     lng,
+				"heading": heading,
+			})
+			for _, pid := range h.getPassengersForDriver(client.ID) {
+				h.hub.SendToUser(pid, locationMsg)
 			}
 		}
 	}
 }
 
-// getPassengerForDriver returns the passenger user_id for the driver's active order.
+// getPassengersForDriver returns passenger user_ids for the driver's active and queued orders.
 // Results are cached for 3 seconds to avoid DB queries on every 10ms update.
-func (h *WSHandler) getPassengerForDriver(driverUserID string) string {
+func (h *WSHandler) getPassengersForDriver(driverUserID string) []string {
 	h.mu.RLock()
 	entry, ok := h.cache[driverUserID]
 	h.mu.RUnlock()
 	if ok && time.Now().Before(entry.expiresAt) {
-		return entry.passengerID
+		return entry.passengerIDs
 	}
 
-	var passengerID string
-	err := h.db.QueryRow(context.Background(),
-		`SELECT o.passenger_id FROM orders o
+	rows, err := h.db.Query(context.Background(),
+		`SELECT DISTINCT o.passenger_id::text FROM orders o
 		 JOIN drivers d ON o.driver_id = d.id
-		 WHERE d.user_id = $1 AND o.status IN ('accepted', 'arrived', 'in_progress')
-		 ORDER BY o.created_at DESC LIMIT 1`,
+		 WHERE d.user_id = $1 AND o.status IN ('accepted', 'arrived', 'in_progress', 'queued')
+		 AND o.passenger_id IS NOT NULL`,
 		driverUserID,
-	).Scan(&passengerID)
-	if err != nil {
-		passengerID = ""
+	)
+	var ids []string
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var pid string
+			if rows.Scan(&pid) == nil {
+				ids = append(ids, pid)
+			}
+		}
 	}
 
 	h.mu.Lock()
-	h.cache[driverUserID] = passengerEntry{passengerID: passengerID, expiresAt: time.Now().Add(3 * time.Second)}
+	h.cache[driverUserID] = passengerEntry{passengerIDs: ids, expiresAt: time.Now().Add(3 * time.Second)}
 	h.mu.Unlock()
-	return passengerID
+	return ids
 }
 
 func (h *WSHandler) writePump(client *services.Client) {

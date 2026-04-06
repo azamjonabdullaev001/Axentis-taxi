@@ -97,6 +97,7 @@ class Translations {
       'copy': 'Копировать',
       'share': 'Поделиться',
       'codeCopied': 'Код скопирован',
+      'queuedOrder': 'В очереди',
       // Navigation
       'map': 'Карта',
       'navMode': 'Навигация',
@@ -185,6 +186,7 @@ class Translations {
       'copy': 'Nusxa',
       'share': 'Ulashish',
       'codeCopied': 'Kod nusxalandi',
+      'queuedOrder': 'Navbatda',
       // Navigation
       'map': 'Xarita',
       'navMode': 'Navigatsiya',

@@ -305,30 +305,46 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 	}
 	orderID := c.Param("id")
 	userID := c.GetString("user_id")
+	ctx := context.Background()
 
 	var driverID string
-	if err := h.db.QueryRow(context.Background(),
+	if err := h.db.QueryRow(ctx,
 		`SELECT id FROM drivers WHERE user_id = $1`, userID,
 	).Scan(&driverID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
 		return
 	}
 
-	tag, err := h.db.Exec(context.Background(),
-		`UPDATE orders SET driver_id = $1, status = 'accepted', accepted_at = NOW()
-		 WHERE id = $2 AND status = 'searching'`,
-		driverID, orderID,
+	// Check if driver already has an active order running
+	var activeOrderCount int
+	h.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM orders WHERE driver_id = $1 AND status IN ('accepted', 'arrived', 'in_progress')`,
+		driverID,
+	).Scan(&activeOrderCount)
+
+	isQueued := activeOrderCount > 0
+	newStatus := "accepted"
+	if isQueued {
+		newStatus = "queued"
+	}
+
+	tag, err := h.db.Exec(ctx,
+		`UPDATE orders SET driver_id = $1, status = $2, accepted_at = NOW()
+		 WHERE id = $3 AND status = 'searching'`,
+		driverID, newStatus, orderID,
 	)
 	if err != nil || tag.RowsAffected() == 0 {
 		c.JSON(http.StatusConflict, gin.H{"error": "Order no longer available"})
 		return
 	}
 
-	h.db.Exec(context.Background(),
-		`UPDATE drivers SET is_available = false WHERE id = $1`, driverID)
+	// Mark driver unavailable only when taking the first order (the active one)
+	if !isQueued {
+		h.db.Exec(ctx, `UPDATE drivers SET is_available = false WHERE id = $1`, driverID)
+	}
 
 	var passengerID *string
-	h.db.QueryRow(context.Background(),
+	h.db.QueryRow(ctx,
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
 	).Scan(&passengerID)
 
@@ -336,7 +352,7 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 	var driverAvatarURL *string
 	var driverAvgRating float64
 	var driverRatingCount int
-	h.db.QueryRow(context.Background(),
+	h.db.QueryRow(ctx,
 		`SELECT u.first_name, u.last_name, u.phone, d.car_number, u.avatar_url,
 		 COALESCE(d.average_rating, 5.0), COALESCE(d.rating_count, 0)
 		 FROM drivers d JOIN users u ON d.user_id = u.id WHERE d.id = $1`,
@@ -349,10 +365,11 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 		avatarStr = *driverAvatarURL
 	}
 
-	msg, _ := json.Marshal(map[string]interface{}{
+	msgData := map[string]interface{}{
 		"type":      "order_accepted",
 		"order_id":  orderID,
 		"driver_id": driverID,
+		"queued":    isQueued,
 		"driver": map[string]interface{}{
 			"first_name":     driverFirstName,
 			"last_name":      driverLastName,
@@ -362,7 +379,24 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 			"average_rating": driverAvgRating,
 			"rating_count":   driverRatingCount,
 		},
-	})
+	}
+
+	// If queued: include destination of driver's current active order so passenger can track
+	if isQueued {
+		var prevDestLat, prevDestLng *float64
+		var prevDestAddress string
+		h.db.QueryRow(ctx,
+			`SELECT destination_lat, destination_lng, COALESCE(destination_address,'')
+			 FROM orders WHERE driver_id = $1 AND status IN ('accepted', 'arrived', 'in_progress')
+			 ORDER BY created_at DESC LIMIT 1`,
+			driverID,
+		).Scan(&prevDestLat, &prevDestLng, &prevDestAddress)
+		msgData["prev_dest_lat"] = prevDestLat
+		msgData["prev_dest_lng"] = prevDestLng
+		msgData["prev_dest_address"] = prevDestAddress
+	}
+
+	msg, _ := json.Marshal(msgData)
 	if passengerID != nil {
 		h.hub.SendToUser(*passengerID, msg)
 		go h.push.SendOrderAcceptedPush(
@@ -372,7 +406,7 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 		)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Order accepted", "order_id": orderID})
+	c.JSON(http.StatusOK, gin.H{"message": "Order accepted", "order_id": orderID, "queued": isQueued})
 }
 
 func (h *OrderHandler) DeclineOrder(c *gin.Context) {
@@ -538,6 +572,57 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 		h.hub.SendToUser(*passengerID, msg)
 	}
 
+	// Promote queued order → accepted now that driver is free
+	var queuedOrderID string
+	var queuedPassengerID *string
+	queuedErr := h.db.QueryRow(context.Background(),
+		`UPDATE orders SET status = 'accepted', accepted_at = NOW()
+		 WHERE driver_id = $1 AND status = 'queued'
+		 RETURNING id, passenger_id`,
+		driverID,
+	).Scan(&queuedOrderID, &queuedPassengerID)
+
+	if queuedErr == nil {
+		// Notify queued passenger: their trip is now active
+		if queuedPassengerID != nil {
+			paxMsg, _ := json.Marshal(map[string]interface{}{
+				"type":     "order_activated",
+				"order_id": queuedOrderID,
+			})
+			h.hub.SendToUser(*queuedPassengerID, paxMsg)
+		}
+
+		// Fetch queued order details to send to driver
+		var qPickupLat, qPickupLng float64
+		var qPickupAddr, qDestAddr, qPassengerPhone, qPassengerName string
+		var qDestLat, qDestLng *float64
+		h.db.QueryRow(context.Background(),
+			`SELECT o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''),
+			 o.destination_lat, o.destination_lng, COALESCE(o.destination_address,''),
+			 COALESCE(u.phone, o.passenger_phone,''), COALESCE(u.first_name || ' ' || u.last_name, 'Клиент')
+			 FROM orders o LEFT JOIN users u ON o.passenger_id = u.id
+			 WHERE o.id = $1`,
+			queuedOrderID,
+		).Scan(&qPickupLat, &qPickupLng, &qPickupAddr, &qDestLat, &qDestLng, &qDestAddr, &qPassengerPhone, &qPassengerName)
+
+		driverMsg, _ := json.Marshal(map[string]interface{}{
+			"type":     "queued_order_activated",
+			"order_id": queuedOrderID,
+			"order": map[string]interface{}{
+				"id":                  queuedOrderID,
+				"pickup_lat":          qPickupLat,
+				"pickup_lng":          qPickupLng,
+				"pickup_address":      qPickupAddr,
+				"destination_lat":     qDestLat,
+				"destination_lng":     qDestLng,
+				"destination_address": qDestAddr,
+				"passenger_phone":     qPassengerPhone,
+				"passenger_name":      qPassengerName,
+			},
+		})
+		h.hub.SendToUser(userID, driverMsg)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "Trip completed",
 		"total_price": totalPrice,
@@ -551,7 +636,7 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 
 	tag, err := h.db.Exec(context.Background(),
 		`UPDATE orders SET status = 'cancelled', cancelled_at = NOW()
-		 WHERE id = $1 AND passenger_id = $2 AND status IN ('searching', 'accepted')`,
+		 WHERE id = $1 AND passenger_id = $2 AND status IN ('searching', 'accepted', 'queued')`,
 		orderID, userID,
 	)
 	if err != nil || tag.RowsAffected() == 0 {

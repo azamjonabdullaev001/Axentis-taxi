@@ -16,7 +16,7 @@ import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../services/socket_service.dart';
 
-enum OrderStatus { idle, searching, accepted, arrived, inProgress, completed }
+enum OrderStatus { idle, searching, queued, accepted, arrived, inProgress, completed }
 enum MapMode { none, pickup, destination }
 
 class HomeScreen extends StatefulWidget {
@@ -60,6 +60,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   double _driverSmoothHeading = 0;
   LatLng? _driverDisplayPos;
   DriverInfo? _driverInfo;
+
+  // ─── Queued-order: driver finishing previous trip ─────────────────────────
+  // When the driver accepted our order but still has a previous trip running,
+  // we track their destination (prev_dest) and draw a consuming polyline.
+  bool _isDriverQueued = false;
+  LatLng? _prevDestCoords;       // destination of driver's current (prev) trip
+  String _prevDestAddress = '';
+  List<LatLng> _consumedRoutePoints = []; // trimmed route shown during queued state
 
   // ─── Route ──────────────────────────────────────────────────────────────
   List<LatLng> _routePoints = [];
@@ -132,6 +140,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _geocodeDebounce?.cancel();
     final socket = context.read<SocketService>();
     socket.off('order_accepted');
+    socket.off('order_activated');
     socket.off('driver_arrived');
     socket.off('trip_started');
     socket.off('no_drivers');
@@ -153,6 +162,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final socket = context.read<SocketService>();
     socket.onReconnect = _onSocketReconnect;
     socket.on('order_accepted', _onOrderAccepted);
+    socket.on('order_activated', _onOrderActivated);
     socket.on('driver_arrived', _onDriverArrived);
     socket.on('trip_started', _onTripStarted);
     socket.on('no_drivers', _onNoDrivers);
@@ -232,7 +242,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       setState(() {
         _driverDisplayPos = LatLng(newLat, newLng);
       });
+
+      // Update consuming polyline for queued state
+      if (_isDriverQueued && _routePoints.length >= 2) {
+        _consumedRoutePoints = _trimRouteFromDriver(_driverDisplayPos!, _routePoints);
+      }
     }
+  }
+
+  /// Returns the segment of [route] from the closest point to [driver] forward.
+  /// This creates the "consumed" polyline effect as the driver moves.
+  List<LatLng> _trimRouteFromDriver(LatLng driver, List<LatLng> route) {
+    if (route.isEmpty) return [];
+    double minDist = double.infinity;
+    int closestIdx = 0;
+    for (int i = 0; i < route.length; i++) {
+      final d = _haversine(driver, route[i]);
+      if (d < minDist) {
+        minDist = d;
+        closestIdx = i;
+      }
+    }
+    final remaining = route.sublist(closestIdx);
+    if (remaining.isEmpty) return [driver];
+    return [driver, ...remaining];
   }
 
   double _normalizeAngle(double a) {
@@ -269,16 +302,70 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     final data = msg['data'] as Map<String, dynamic>? ?? msg;
     final driver = data['driver'] as Map<String, dynamic>?;
+    final isQueued = data['queued'] == true;
+
+    if (isQueued) {
+      // Driver accepted our order but is still finishing a previous trip.
+      // Show driver position and a route to the previous order's destination.
+      final prevLat = (data['prev_dest_lat'] as num?)?.toDouble();
+      final prevLng = (data['prev_dest_lng'] as num?)?.toDouble();
+      final prevAddr = data['prev_dest_address'] as String? ?? '';
+
+      setState(() {
+        _orderStatus = OrderStatus.queued;
+        _isDriverQueued = true;
+        _driverInfo = driver != null ? DriverInfo.fromJson(driver) : null;
+        _prevDestAddress = prevAddr;
+        if (prevLat != null && prevLng != null) {
+          _prevDestCoords = LatLng(prevLat, prevLng);
+        }
+        _showDriverCard = true;
+        _consumedRoutePoints = [];
+      });
+
+      // Draw route from driver's current position to their previous order's destination
+      if (_driverDisplayPos != null && _prevDestCoords != null) {
+        _fetchRoute(_driverDisplayPos!, _prevDestCoords!).then((_) {
+          setState(() => _consumedRoutePoints = List.from(_routePoints));
+        });
+      } else if (_prevDestCoords != null) {
+        // If we don't yet have driver position, fetch straight line as fallback
+        final approxDriverPos = LatLng(_driverLatRef != 0 ? _driverLatRef : _userLat,
+            _driverLngRef != 0 ? _driverLngRef : _userLng);
+        _fetchRoute(approxDriverPos, _prevDestCoords!).then((_) {
+          setState(() => _consumedRoutePoints = List.from(_routePoints));
+        });
+      }
+    } else {
+      // Normal: driver accepted and is coming directly
+      setState(() {
+        _orderStatus = OrderStatus.accepted;
+        _isDriverQueued = false;
+        _driverInfo = driver != null ? DriverInfo.fromJson(driver) : null;
+        if (_driverInfo?.lat != null && _driverInfo?.lng != null) {
+          _driverLatRef = _driverInfo!.lat!;
+          _driverLngRef = _driverInfo!.lng!;
+          _driverDisplayPos = LatLng(_driverLatRef, _driverLngRef);
+        }
+        _showDriverCard = true;
+      });
+      if (_pickupCoords != null && _driverDisplayPos != null) {
+        _fetchRoute(_driverDisplayPos!, _pickupCoords!);
+      }
+    }
+  }
+
+  // Called when driver finishes their previous trip — our queued order becomes active
+  void _onOrderActivated(Map<String, dynamic> msg) {
+    if (!mounted) return;
     setState(() {
       _orderStatus = OrderStatus.accepted;
-      _driverInfo = driver != null ? DriverInfo.fromJson(driver) : null;
-      if (_driverInfo?.lat != null && _driverInfo?.lng != null) {
-        _driverLatRef = _driverInfo!.lat!;
-        _driverLngRef = _driverInfo!.lng!;
-        _driverDisplayPos = LatLng(_driverLatRef, _driverLngRef);
-      }
-      _showDriverCard = true;
+      _isDriverQueued = false;
+      _prevDestCoords = null;
+      _consumedRoutePoints = [];
+      _routePoints = [];
     });
+    // Fetch fresh route from driver (now free) to our pickup
     if (_pickupCoords != null && _driverDisplayPos != null) {
       _fetchRoute(_driverDisplayPos!, _pickupCoords!);
     }
@@ -347,6 +434,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // Initialize display position if missing
     if (_driverDisplayPos == null) {
       setState(() => _driverDisplayPos = LatLng(lat, lng));
+      // If queued and route not yet fetched, fetch now
+      if (_isDriverQueued && _routePoints.isEmpty && _prevDestCoords != null) {
+        _fetchRoute(LatLng(lat, lng), _prevDestCoords!).then((_) {
+          setState(() => _consumedRoutePoints = List.from(_routePoints));
+        });
+      }
     }
   }
 
@@ -357,12 +450,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         final api = context.read<ApiService>();
         final order = await api.getOrder(_orderId!);
         final status = (order['order'] as Map<String, dynamic>?)?['status'] as String? ?? '';
-        if (status == 'accepted' && mounted) {
-          final driver = (order['order'] as Map<String, dynamic>?)?['driver'];
-          setState(() {
-            _orderStatus = OrderStatus.accepted;
-            _driverInfo = driver != null ? DriverInfo.fromJson(driver as Map<String, dynamic>) : null;
-          });
+        if (mounted) {
+          if (status == 'accepted') {
+            final driver = (order['order'] as Map<String, dynamic>?)?['driver'];
+            setState(() {
+              _orderStatus = OrderStatus.accepted;
+              _isDriverQueued = false;
+              _driverInfo = driver != null ? DriverInfo.fromJson(driver as Map<String, dynamic>) : null;
+            });
+          } else if (status == 'queued') {
+            setState(() => _orderStatus = OrderStatus.queued);
+          }
         }
       } catch (_) {}
     }
@@ -594,6 +692,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _selectedRating = 0;
       _freeRideKm = 0;
       _lastFreePoint = null;
+      _isDriverQueued = false;
+      _prevDestCoords = null;
+      _prevDestAddress = '';
+      _consumedRoutePoints = [];
     });
   }
 
@@ -700,8 +802,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 PolylineLayer(polylines: [
                   Polyline(points: _previewRoute, color: Colors.grey.withOpacity(0.6), strokeWidth: 4),
                 ]),
-              // Active route
-              if (_routePoints.length >= 2)
+              // Consuming polyline while driver is finishing previous trip (queued state)
+              if (_orderStatus == OrderStatus.queued && _consumedRoutePoints.length >= 2)
+                PolylineLayer(polylines: [
+                  Polyline(
+                    points: _consumedRoutePoints,
+                    color: Colors.orange,
+                    strokeWidth: 5,
+                    strokeCap: StrokeCap.round,
+                    strokeJoin: StrokeJoin.round,
+                  ),
+                ]),
+              // Active route (non-queued states)
+              if (_routePoints.length >= 2 && _orderStatus != OrderStatus.queued)
                 PolylineLayer(polylines: [
                   Polyline(points: _routePoints, color: _routeColor, strokeWidth: 5, strokeCap: StrokeCap.round, strokeJoin: StrokeJoin.round),
                 ]),
@@ -786,7 +899,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           // DRIVER INFO CARD
           if (_driverInfo != null && _showDriverCard &&
-              (_orderStatus == OrderStatus.accepted || _orderStatus == OrderStatus.arrived))
+              (_orderStatus == OrderStatus.queued ||
+               _orderStatus == OrderStatus.accepted ||
+               _orderStatus == OrderStatus.arrived))
             Positioned(
               top: MediaQuery.of(context).padding.top + 60,
               left: 16, right: 16,
@@ -834,6 +949,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             border: Border.all(color: Colors.white, width: 2),
           ),
           child: const Center(child: Text('A', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+        ),
+      ));
+    }
+
+    // During queued state: show driver's previous order destination (NOT the pickup for our trip)
+    if (_orderStatus == OrderStatus.queued && _prevDestCoords != null) {
+      markers.add(Marker(
+        point: _prevDestCoords!,
+        width: 36, height: 36,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.orange,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+          ),
+          child: const Center(child: Text('🏁', style: TextStyle(fontSize: 16))),
         ),
       ));
     }
@@ -952,21 +1083,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildStatusBadge(Translations t, ThemeProvider theme) {
     final labels = {
-      OrderStatus.searching: t.t('searching'),
-      OrderStatus.accepted: t.t('driverFound'),
-      OrderStatus.arrived: t.t('driverArrived'),
+      OrderStatus.searching:  t.t('searching'),
+      OrderStatus.queued:     t.t('driverFoundQueued'),
+      OrderStatus.accepted:   t.t('driverFound'),
+      OrderStatus.arrived:    t.t('driverArrived'),
       OrderStatus.inProgress: t.t('tripInProgress'),
-      OrderStatus.completed: t.t('tripCompleted'),
+      OrderStatus.completed:  t.t('tripCompleted'),
     };
     final colors = {
-      OrderStatus.searching: Colors.orange,
-      OrderStatus.accepted: Colors.blue,
-      OrderStatus.arrived: Colors.orange,
+      OrderStatus.searching:  Colors.orange,
+      OrderStatus.queued:     Colors.orange,
+      OrderStatus.accepted:   Colors.blue,
+      OrderStatus.arrived:    Colors.orange,
       OrderStatus.inProgress: Colors.green,
-      OrderStatus.completed: Colors.green,
+      OrderStatus.completed:  Colors.green,
     };
     final label = labels[_orderStatus] ?? '';
     final color = colors[_orderStatus] ?? theme.textSecondary;
+
+    // When queued: add sub-line showing driver's prev destination
+    final subLabel = (_orderStatus == OrderStatus.queued && _prevDestAddress.isNotEmpty)
+        ? _prevDestAddress
+        : null;
 
     return Center(
       child: Container(
@@ -976,15 +1114,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           borderRadius: BorderRadius.circular(20),
           boxShadow: [const BoxShadow(color: Colors.black26, blurRadius: 8)],
         ),
-        child: Row(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_orderStatus == OrderStatus.searching)
-              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
-            else
-              Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-            const SizedBox(width: 8),
-            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_orderStatus == OrderStatus.searching)
+                  const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                else
+                  Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            if (subLabel != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                '→ $subLabel',
+                style: TextStyle(color: theme.textSecondary, fontSize: 11),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ],
         ),
       ),

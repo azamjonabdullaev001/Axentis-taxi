@@ -40,7 +40,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   double _displayHeading = 0;
 
   // ─── Order ──────────────────────────────────────────────────────────────
-  Map<String, dynamic>? _currentOrder;
+  Map<String, dynamic>? _currentOrder;   // currently active order (accepted/arrived/inProgress)
+  Map<String, dynamic>? _incomingOrder;  // new order being offered while driver is already active
+  Map<String, dynamic>? _queuedOrder;    // a second order accepted to run after current finishes
   LatLng? _pickupPoint;
   LatLng? _destPoint;
   LatLng? _passengerLivePoint;
@@ -104,6 +106,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     socket.off('order_cancelled');
     socket.off('passenger_location');
     socket.off('passenger_location_hidden');
+    socket.off('queued_order_activated');
     super.dispose();
   }
 
@@ -115,6 +118,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     socket.on('order_cancelled', _onOrderCancelled);
     socket.on('passenger_location', _onPassengerLocation);
     socket.on('passenger_location_hidden', _onPassengerLocationHidden);
+    socket.on('queued_order_activated', _onQueuedOrderActivated);
   }
 
   Future<void> _initLocation() async {
@@ -269,11 +273,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       destination: order['destination_address'] as String?,
       price: '${order['total_price'] ?? ''}',
     );
-    setState(() {
-      _currentOrder = order;
-      _status = DriverStatus.incoming;
-      _countdownSeconds = 10;
-    });
+
+    // If driver is already on an active trip, don't change current order/status —
+    // keep the offer in _incomingOrder and show the overlay alongside the active trip.
+    if (_status == DriverStatus.accepted ||
+        _status == DriverStatus.arrived ||
+        _status == DriverStatus.inProgress) {
+      setState(() {
+        _incomingOrder = order;
+        _countdownSeconds = 10;
+      });
+    } else {
+      setState(() {
+        _currentOrder = order;
+        _status = DriverStatus.incoming;
+        _countdownSeconds = 10;
+      });
+    }
     _startCountdown();
   }
 
@@ -320,29 +336,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _acceptOrder() async {
     final api = context.read<ApiService>();
-    final orderId = _currentOrder!['id'] as String;
+    // Accept whichever order is currently being offered
+    final orderToAccept = _incomingOrder ?? _currentOrder;
+    if (orderToAccept == null) return;
+    final orderId = orderToAccept['id'] as String;
     _countdownTimer?.cancel();
     try {
-      await api.acceptOrder(orderId);
-      final pickup = LatLng(
-        (_currentOrder!['pickup_lat'] as num).toDouble(),
-        (_currentOrder!['pickup_lng'] as num).toDouble(),
-      );
-      LatLng? dest;
-      if (_currentOrder!['destination_lat'] != null) {
-        dest = LatLng(
-          (_currentOrder!['destination_lat'] as num).toDouble(),
-          (_currentOrder!['destination_lng'] as num).toDouble(),
+      final result = await api.acceptOrder(orderId);
+      final isQueued = result['queued'] == true;
+
+      if (isQueued) {
+        // Queue the second order — driver continues current trip unchanged
+        setState(() {
+          _queuedOrder = orderToAccept;
+          _incomingOrder = null;
+        });
+      } else {
+        // Normal: transition to accepted for the new active order
+        final pickup = LatLng(
+          (orderToAccept['pickup_lat'] as num).toDouble(),
+          (orderToAccept['pickup_lng'] as num).toDouble(),
         );
+        LatLng? dest;
+        if (orderToAccept['destination_lat'] != null) {
+          dest = LatLng(
+            (orderToAccept['destination_lat'] as num).toDouble(),
+            (orderToAccept['destination_lng'] as num).toDouble(),
+          );
+        }
+        setState(() {
+          _currentOrder = orderToAccept;
+          _incomingOrder = null;
+          _status = DriverStatus.accepted;
+          _pickupPoint = pickup;
+          _destPoint = dest;
+          _passengerLivePoint = null;
+        });
+        _startLocationStream();
+        _fetchRoute(LatLng(_latRef, _lngRef), pickup);
       }
-      setState(() {
-        _status = DriverStatus.accepted;
-        _pickupPoint = pickup;
-        _destPoint = dest;
-        _passengerLivePoint = null;
-      });
-      _startLocationStream();
-      _fetchRoute(LatLng(_latRef, _lngRef), pickup);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -355,9 +387,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _declineOrder() async {
     _countdownTimer?.cancel();
     final api = context.read<ApiService>();
-    final orderId = _currentOrder!['id'] as String;
+    final orderToDecline = _incomingOrder ?? _currentOrder;
+    if (orderToDecline == null) return;
+    final orderId = orderToDecline['id'] as String;
     await api.declineOrder(orderId);
-    _resetToAvailable();
+    if (_incomingOrder != null) {
+      // Just dismiss the overlay — driver stays on current trip
+      setState(() => _incomingOrder = null);
+    } else {
+      _resetToAvailable();
+    }
   }
 
   Future<void> _arrivedAtPickup() async {
@@ -431,6 +470,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setState(() {
       _status = DriverStatus.available;
       _currentOrder = null;
+      _incomingOrder = null;
+      _queuedOrder = null;
       _pickupPoint = null;
       _destPoint = null;
       _passengerLivePoint = null;
@@ -440,6 +481,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _drivenKm = 0;
       _lastMeteringPoint = null;
     });
+  }
+
+  // Called when backend promotes the queued order to active after prior trip completes
+  void _onQueuedOrderActivated(Map<String, dynamic> msg) {
+    if (!mounted) return;
+    final orderData = msg['order'] as Map<String, dynamic>?;
+    final o = orderData ?? _queuedOrder;
+    if (o == null) return;
+
+    final pickup = LatLng(
+      (o['pickup_lat'] as num).toDouble(),
+      (o['pickup_lng'] as num).toDouble(),
+    );
+    LatLng? dest;
+    if (o['destination_lat'] != null) {
+      dest = LatLng(
+        (o['destination_lat'] as num).toDouble(),
+        (o['destination_lng'] as num).toDouble(),
+      );
+    }
+    _waitTimer?.cancel();
+    _distanceUpdateTimer?.cancel();
+    setState(() {
+      _currentOrder = o;
+      _queuedOrder = null;
+      _completionData = null; // auto-dismiss completion overlay
+      _status = DriverStatus.accepted;
+      _pickupPoint = pickup;
+      _destPoint = dest;
+      _passengerLivePoint = null;
+      _routePoints = [];
+      _waitSeconds = 0;
+      _drivenKm = 0;
+      _lastMeteringPoint = null;
+    });
+    _startLocationStream();
+    _fetchRoute(LatLng(_latRef, _lngRef), pickup);
   }
 
   // ─── Wait timer ───────────────────────────────────────────────────────────
@@ -589,6 +667,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: _buildStatusBar(t, theme),
           ),
 
+          // Queued order badge
+          if (_queuedOrder != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 52,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [const BoxShadow(color: Colors.black26, blurRadius: 6)],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.hourglass_top, size: 14, color: Colors.white),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        '${t.t('queuedOrder')}: ${_queuedOrder!['pickup_address'] ?? ''}',
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           // Nav mode & find-me buttons
           Positioned(
             bottom: 200,
@@ -623,8 +731,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: _buildBottomPanel(t, theme),
           ),
 
-          // Incoming order overlay
-          if (_status == DriverStatus.incoming && _currentOrder != null)
+          // Incoming order overlay — shown both during idle AND while driver is mid-trip
+          if (_status == DriverStatus.incoming || _incomingOrder != null)
             _buildIncomingOverlay(t, theme),
 
           // Trip completion overlay
@@ -892,7 +1000,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildIncomingOverlay(Translations t, ThemeProvider theme) {
-    final order = _currentOrder!;
+    final order = _incomingOrder ?? _currentOrder!;
     final price = order['total_price'];
     final tripType = order['trip_type'] as String? ?? 'standard';
     final pickupAddr = order['pickup_address'] as String? ?? '';
@@ -1028,8 +1136,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: () {
-                  setState(() => _completionData = null);
-                  _resetToAvailable();
+                  if (_queuedOrder != null) {
+                    // Manually activate queued order if WS hasn't fired yet
+                    _onQueuedOrderActivated({'order': _queuedOrder});
+                  } else {
+                    setState(() => _completionData = null);
+                    _resetToAvailable();
+                  }
                 },
                 child: Text(t.t('close')),
               ),
