@@ -1384,9 +1384,10 @@ export default function HomeScreen() {
                 {(() => {
                   const sf = Number(pricingSettings.service_fee) || 2000;
                   const ppk = lockedPricePerKm || Number(pricingSettings.price_per_km) || 2000;
+                  const surge = Number(pricingSettings.surge_multiplier) || 1;
                   const meters = freeRideKm * 1000;
                   const roundedKm = (meters < 1 ? 100 : Math.ceil(meters / 100) * 100) / 1000;
-                  return Math.ceil((sf + roundedKm * ppk) / 200) * 200;
+                  return Math.ceil((sf + roundedKm * ppk * surge) / 200) * 200;
                 })().toLocaleString()} {t(lang, 'sum')}
               </Text>
               <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>

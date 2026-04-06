@@ -114,18 +114,18 @@ func (s *PricingService) CalculatePrice(distanceKm float64) (basePrice, totalPri
 	return
 }
 
-// GetEffectivePricePerKm returns the current price-per-km with surge already applied.
-// This value is locked at order creation so that admin changes never affect in-flight orders.
+// GetEffectivePricePerKm returns the RAW price-per-km from admin panel (WITHOUT surge).
+// Surge is applied separately in pricing calculations. This ensures the locked rate
+// matches what the admin sees in the pricing panel.
 func (s *PricingService) GetEffectivePricePerKm() float64 {
 	ps, err := s.GetSettings()
 	if err != nil {
 		return 2000
 	}
-	surge := ps.SurgeMultiplier
-	if surge <= 0 {
-		surge = 1.0
+	if ps.PricePerKm <= 0 {
+		return 2000
 	}
-	return ps.PricePerKm * surge
+	return ps.PricePerKm
 }
 
 func (s *PricingService) CalculateWaitFee(waitStartedAt *time.Time, freeMinutes int) float64 {

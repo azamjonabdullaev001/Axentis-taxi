@@ -41,6 +41,14 @@ export default function GameScreen({ route, navigation }) {
   const [moves, setMoves] = useState(0);
   const [won, setWon] = useState(false);
 
+  // Refs for stable handlePress access (prevents stale closure)
+  const tilesRef = useRef(null);
+  const selectedRef = useRef(null);
+  const wonRef = useRef(false);
+  useEffect(() => { tilesRef.current = tiles; }, [tiles]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { wonRef.current = won; }, [won]);
+
   // Animated values
   const winOpacity = useRef(new Animated.Value(0)).current;
   const winScale = useRef(new Animated.Value(0.8)).current;
@@ -81,42 +89,56 @@ export default function GameScreen({ route, navigation }) {
   // ── Tile tap handler ───────────────────────────────────────────────────────
   const handlePress = useCallback(
     (pos) => {
-      if (won) return;
+      const curTiles = tilesRef.current;
+      const curSelected = selectedRef.current;
+      const curWon = wonRef.current;
+      if (curWon || !curTiles) return;
 
-      if (selected === null) {
+      if (curSelected === null) {
         // Select
         setSelected(pos);
+        selectedRef.current = pos;
         Animated.spring(tileScales[pos], { toValue: 1.08, friction: 5, useNativeDriver: true }).start();
-      } else if (selected === pos) {
+      } else if (curSelected === pos) {
         // Deselect
         setSelected(null);
+        selectedRef.current = null;
         Animated.spring(tileScales[pos], { toValue: 1, friction: 5, useNativeDriver: true }).start();
       } else {
         // Swap selected ↔ pos
-        const next = [...tiles];
-        [next[selected], next[pos]] = [next[pos], next[selected]];
+        const next = [...curTiles];
+        [next[curSelected], next[pos]] = [next[pos], next[curSelected]];
 
-        bounceTile(selected);
+        bounceTile(curSelected);
         bounceTile(pos, 1.12);
 
         setTiles(next);
+        tilesRef.current = next;
         setSelected(null);
+        selectedRef.current = null;
         setMoves((m) => m + 1);
 
-        if (isSolved(next)) setWon(true);
+        if (isSolved(next)) {
+          setWon(true);
+          wonRef.current = true;
+        }
       }
     },
-    [selected, tiles, won, tileScales],
+    [tileScales],
   );
 
   // ── Reset / restart ────────────────────────────────────────────────────────
   function restart(nextImage) {
     clearInterval(timerRef.current);
-    setTiles(shuffleTiles(G));
+    const newTiles = shuffleTiles(G);
+    setTiles(newTiles);
+    tilesRef.current = newTiles;
     setSelected(null);
+    selectedRef.current = null;
     setElapsed(0);
     setMoves(0);
     setWon(false);
+    wonRef.current = false;
     winOpacity.setValue(0);
     winScale.setValue(0.8);
     tileScales.forEach((a) => a.setValue(1));

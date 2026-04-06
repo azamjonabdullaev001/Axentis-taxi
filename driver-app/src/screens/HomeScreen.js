@@ -142,6 +142,7 @@ export default function HomeScreen() {
   const meteredKmRef = useRef(0);
   const prevMeterPosRef = useRef(null);
   const meteredPricePerKm = useRef(0);
+  const meteredSurge = useRef(1);
 
   useEffect(() => {
     driverStatusRef.current = driverStatus;
@@ -481,8 +482,9 @@ export default function HomeScreen() {
       setIncomingOrder(null);
       setPassengerLiveLocation(null); // Will be populated by socket if passenger is sharing live location
       setDriverStatus(DRIVER_STATUS.ACCEPTED);
-      // Store locked price per km for metering (sent from backend)
+      // Store locked price per km and surge for metering (sent from backend)
       meteredPricePerKm.current = incomingOrder.locked_price_per_km || 3000;
+      meteredSurge.current = incomingOrder.surge_multiplier || 1;
       // For call orders: no exact pickup pin — don't animate to pickup, just stay on driver location
       if (incomingOrder.order_type !== 'call') {
         mapRef.current?.animateToRegion({
@@ -599,6 +601,7 @@ export default function HomeScreen() {
     setMeteredKm(0);
     prevMeterPosRef.current = null;
     meteredPricePerKm.current = 0;
+    meteredSurge.current = 1;
   }
 
   // Wait fee calculation
@@ -832,9 +835,10 @@ export default function HomeScreen() {
                   {t(lang,'meterRunning')}: {(() => {
                     const sf = activeOrder.service_fee || 2000;
                     const rate = meteredPricePerKm.current || 3000;
+                    const surge = meteredSurge.current || 1;
                     const m = meteredKm * 1000;
                     const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
-                    return Math.ceil((sf + rKm * rate) / 100) * 100;
+                    return Math.ceil((sf + rKm * rate * surge) / 100) * 100;
                   })().toLocaleString()} {t(lang,'sum')}
                 </Text>
                 <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>

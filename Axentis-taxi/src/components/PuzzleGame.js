@@ -124,6 +124,16 @@ export default function PuzzleGame({ colors, user, onScoreSubmit }) {
   const [refVisible, setRefVisible] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
 
+  // Keep refs for tile state so handleTile never has stale closures
+  const tilesRef = useRef(null);
+  const selectedRef = useRef(null);
+  const wonRef = useRef(false);
+  const gridSizeRef = useRef(G);
+  useEffect(() => { tilesRef.current = tiles; }, [tiles]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { wonRef.current = won; }, [won]);
+  useEffect(() => { gridSizeRef.current = G; }, [G]);
+
   const tileScalesRef = useRef([]);
   if (tileScalesRef.current.length !== G * G) {
     tileScalesRef.current = Array.from({ length: G * G }, () => new Animated.Value(1));
@@ -136,13 +146,22 @@ export default function PuzzleGame({ colors, user, onScoreSubmit }) {
   // ── Start / reset ──────────────────────────────────────────────────────────
   function startGame(nextImage) {
     clearInterval(timerRef.current);
+    const gridSize = gridSizeRef.current;
+    // Ensure tileScales match the grid
+    if (tileScalesRef.current.length !== gridSize * gridSize) {
+      tileScalesRef.current = Array.from({ length: gridSize * gridSize }, () => new Animated.Value(1));
+    }
     const img = nextImage || image;
     setImage(img);
-    setTiles(shuffleTiles(G));
+    const newTiles = shuffleTiles(gridSize);
+    setTiles(newTiles);
+    tilesRef.current = newTiles;
     setSelected(null);
+    selectedRef.current = null;
     setMoves(0);
     setElapsed(0);
     setWon(false);
+    wonRef.current = false;
     setShowConfetti(false);
     winAnim.setValue(0);
     tileScalesRef.current.forEach((a) => a.setValue(1));
@@ -156,11 +175,15 @@ export default function PuzzleGame({ colors, user, onScoreSubmit }) {
     // Rebuild tile scales for new grid size
     tileScalesRef.current = Array.from({ length: G * G }, () => new Animated.Value(1));
     clearInterval(timerRef.current);
-    setTiles(shuffleTiles(G));
+    const newTiles = shuffleTiles(G);
+    setTiles(newTiles);
+    tilesRef.current = newTiles;
     setSelected(null);
+    selectedRef.current = null;
     setMoves(0);
     setElapsed(0);
     setWon(false);
+    wonRef.current = false;
     winAnim.setValue(0);
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(timerRef.current);
@@ -199,35 +222,50 @@ export default function PuzzleGame({ colors, user, onScoreSubmit }) {
   }, [won]);
 
   // ── Tap handler ───────────────────────────────────────────────────────────
+  // Uses refs to always access the latest state — prevents stale closure issues
+  // that could cause win detection to fail (especially on 3×3 and other grids).
   const handleTile = useCallback(
     (pos) => {
-      if (won || !tiles) return;
-      if (selected === null) {
+      const curTiles = tilesRef.current;
+      const curSelected = selectedRef.current;
+      const curWon = wonRef.current;
+      const scales = tileScalesRef.current;
+      if (curWon || !curTiles) return;
+      if (curSelected === null) {
         setSelected(pos);
-        Animated.spring(tileScales[pos], { toValue: 1.08, friction: 5, useNativeDriver: true }).start();
-      } else if (selected === pos) {
+        selectedRef.current = pos;
+        if (scales[pos]) Animated.spring(scales[pos], { toValue: 1.08, friction: 5, useNativeDriver: true }).start();
+      } else if (curSelected === pos) {
         setSelected(null);
-        Animated.spring(tileScales[pos], { toValue: 1, friction: 5, useNativeDriver: true }).start();
+        selectedRef.current = null;
+        if (scales[pos]) Animated.spring(scales[pos], { toValue: 1, friction: 5, useNativeDriver: true }).start();
       } else {
         // Swap
-        const next = [...tiles];
-        [next[selected], next[pos]] = [next[pos], next[selected]];
+        const next = [...curTiles];
+        [next[curSelected], next[pos]] = [next[pos], next[curSelected]];
 
         // Bounce both tiles
-        [selected, pos].forEach((idx) => {
-          Animated.sequence([
-            Animated.spring(tileScales[idx], { toValue: 1.12, friction: 5, useNativeDriver: true }),
-            Animated.spring(tileScales[idx], { toValue: 1, friction: 5, useNativeDriver: true }),
-          ]).start();
+        [curSelected, pos].forEach((idx) => {
+          if (scales[idx]) {
+            Animated.sequence([
+              Animated.spring(scales[idx], { toValue: 1.12, friction: 5, useNativeDriver: true }),
+              Animated.spring(scales[idx], { toValue: 1, friction: 5, useNativeDriver: true }),
+            ]).start();
+          }
         });
 
         setTiles(next);
+        tilesRef.current = next;
         setSelected(null);
+        selectedRef.current = null;
         setMoves((m) => m + 1);
-        if (isSolved(next)) setWon(true);
+        if (isSolved(next)) {
+          setWon(true);
+          wonRef.current = true;
+        }
       }
     },
-    [selected, tiles, won, tileScales],
+    [], // stable callback — reads everything from refs
   );
 
   const correct = tiles ? countCorrect(tiles) : 0;

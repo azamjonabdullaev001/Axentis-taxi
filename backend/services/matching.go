@@ -171,6 +171,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		DistanceKm         float64  `json:"distance_km"`
 		EstimatedPrice     float64  `json:"estimated_price"`
 		LockedPricePerKm   float64  `json:"locked_price_per_km"`
+		SurgeMultiplier    float64  `json:"surge_multiplier"`
 		PassengerPhone     string   `json:"passenger_phone"`
 		PassengerName      string   `json:"passenger_name"`
 		PassengerPhoto     string   `json:"passenger_photo"`
@@ -184,6 +185,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		`SELECT o.id, o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''), 
 		 o.destination_lat, o.destination_lng, COALESCE(o.destination_address,''),
 		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), COALESCE(o.locked_price_per_km,0),
+		 COALESCE(o.surge_multiplier,1.0),
 		 COALESCE(u.phone, o.passenger_phone, ''), COALESCE(u.first_name || ' ' || u.last_name, 'Клиент'),
 		 COALESCE(u.avatar_url,''), COALESCE(o.order_type,'app'), COALESCE(o.trip_type,'standard'),
 		 COALESCE(o.service_fee,2000), COALESCE(o.additional_info,'')
@@ -192,6 +194,7 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 	).Scan(&orderData.ID, &orderData.PickupLat, &orderData.PickupLng, &orderData.PickupAddress,
 		&orderData.DestinationLat, &orderData.DestinationLng, &orderData.DestinationAddress,
 		&orderData.DistanceKm, &orderData.EstimatedPrice, &orderData.LockedPricePerKm,
+		&orderData.SurgeMultiplier,
 		&orderData.PassengerPhone, &orderData.PassengerName,
 		&orderData.PassengerPhoto, &orderData.OrderType, &orderData.TripType, &orderData.ServiceFee,
 		&orderData.AdditionalInfo)
