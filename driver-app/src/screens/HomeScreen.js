@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Switch,
-  Alert, Animated, Modal, Image, Vibration,
+  View, Text, TouchableOpacity, StyleSheet,
+  Alert, Modal, Image, Vibration, Linking, Animated, PanResponder,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -9,7 +9,7 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { authAPI, driverAPI } from '../services/api';
+import { authAPI, driverAPI, friendsAPI } from '../services/api';
 import { buildAvatarUrl } from '../services/api';
 import socket from '../services/socket';
 import { t } from '../i18n';
@@ -127,6 +127,35 @@ export default function HomeScreen() {
   const waitIntervalRef = useRef(null);
   const waitFeeAnim = useRef(new Animated.Value(0)).current;
 
+  // Swipe-to-accept/decline refs
+  const swipeX = useRef(new Animated.Value(0)).current;
+  const acceptFnRef = useRef(null);
+  const declineFnRef = useRef(null);
+  const swipePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (_, { dx }) => {
+        swipeX.setValue(Math.max(-140, Math.min(140, dx)));
+      },
+      onPanResponderRelease: (_, { dx }) => {
+        if (dx > 85) {
+          Animated.timing(swipeX, { toValue: 160, duration: 180, useNativeDriver: false }).start(() => {
+            swipeX.setValue(0);
+            acceptFnRef.current?.();
+          });
+        } else if (dx < -85) {
+          Animated.timing(swipeX, { toValue: -160, duration: 180, useNativeDriver: false }).start(() => {
+            swipeX.setValue(0);
+            declineFnRef.current?.();
+          });
+        } else {
+          Animated.spring(swipeX, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+    })
+  ).current;
+
   // Incoming order modal
   const [incomingOrder, setIncomingOrder] = useState(null);
   const [acceptCountdown, setAcceptCountdown] = useState(10);
@@ -136,6 +165,11 @@ export default function HomeScreen() {
   const [completionModal, setCompletionModal] = useState(null);
   // Prevents double-tap on async action buttons
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Transfer order to friend
+  const [showTransferPicker, setShowTransferPicker] = useState(false);
+  const [transferFriends, setTransferFriends] = useState([]);
+  const [transferring, setTransferring] = useState(false);
 
   // 100m metering: accumulate driven distance and calculate running price
   const [meteredKm, setMeteredKm] = useState(0);
@@ -261,13 +295,13 @@ export default function HomeScreen() {
             // Nav mode: map rotates with heading, car icon appears pointing up
             mapRef.current?.animateCamera(
               { center: loc, heading: h, pitch: 0 },
-              { duration: 10 },
+              { duration: 20 },
             );
           } else {
             // North-up mode: map stays fixed, car icon rotates via rotation prop
             mapRef.current?.animateCamera(
               { center: loc, heading: 0, pitch: 0 },
-              { duration: 150 },
+              { duration: 20 },
             );
           }
         }
@@ -373,9 +407,19 @@ export default function HomeScreen() {
       setDriverStatus(DRIVER_STATUS.INCOMING);
       startCountdown(data.order);
       startOrderAlarm(data.order);
+      // Pre-load friends list for possible transfer
+      friendsAPI.getFriends().then(({ data: d }) => setTransferFriends(d.friends || [])).catch(() => {});
     });
     socket.on('order_cancelled', () => {
       Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByPassenger'));
+      resetToAvailable();
+    });
+    socket.on('order_transferred', () => {
+      // Our transfer succeeded — dismiss incoming order modal
+      clearInterval(countdownRef.current);
+      stopOrderAlarm();
+      setIncomingOrder(null);
+      setShowTransferPicker(false);
       resetToAvailable();
     });
     socket.on('passenger_location', (data) => {
@@ -389,6 +433,7 @@ export default function HomeScreen() {
     return () => {
       socket.off('new_order');
       socket.off('order_cancelled');
+      socket.off('order_transferred');
       socket.off('passenger_location');
       socket.off('passenger_location_hidden');
     };
@@ -514,6 +559,24 @@ export default function HomeScreen() {
     resetToAvailable();
   }
 
+  async function handleTransferToFriend(friendDriverID) {
+    if (!incomingOrder || transferring) return;
+    setTransferring(true);
+    try {
+      await friendsAPI.transferOrder(incomingOrder.id, friendDriverID);
+      // order_transferred WS event will clear the modal; handle optimistically too
+      clearInterval(countdownRef.current);
+      stopOrderAlarm();
+      setIncomingOrder(null);
+      setShowTransferPicker(false);
+      resetToAvailable();
+    } catch (e) {
+      Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+    } finally {
+      setTransferring(false);
+    }
+  }
+
   async function handleArrived() {
     if (isProcessing) return;
     setIsProcessing(true);
@@ -614,6 +677,10 @@ export default function HomeScreen() {
   const routeColor = ROUTE_COLORS[driverStatus] || '#2196F3';
   const isOnline = driverStatus !== DRIVER_STATUS.OFFLINE;
 
+  // Keep swipe refs pointing to latest handlers (PanResponder is created once)
+  acceptFnRef.current = handleAcceptOrder;
+  declineFnRef.current = handleDeclineOrder;
+
   const s = makeStyles(colors);
 
   return (
@@ -686,11 +753,11 @@ export default function HomeScreen() {
       {/* Find Me button — floats above bottom panel, right side */}
       {isOnline && (
         <TouchableOpacity
-          style={[s.findMeBtn, { backgroundColor: colors.background, bottom: driverPanelHeight + 12 }]}
+          style={[s.findMeBtn, { bottom: driverPanelHeight + 12 }]}
           onPress={goToMyLocation}
           activeOpacity={0.8}
         >
-          <Text style={{ fontSize: 20 }}>📍</Text>
+          <Text style={{ fontSize: 22 }}>📌</Text>
         </TouchableOpacity>
       )}
 
@@ -698,7 +765,7 @@ export default function HomeScreen() {
       {isOnline && (
         <TouchableOpacity
           style={[s.navModeBtn, {
-            backgroundColor: navMode ? colors.primary : colors.background,
+            backgroundColor: navMode ? '#FFCC00' : '#1F2937',
             bottom: driverPanelHeight + 64,
           }]}
           onPress={() => {
@@ -717,253 +784,348 @@ export default function HomeScreen() {
       )}
 
       {/* Bottom action panel */}
-      <View style={[s.bottomPanel, {
-        backgroundColor: colors.background,
-        bottom: 0,
-        paddingBottom: 16,
-      }]}
+      <View
+        style={s.bottomPanel}
         onLayout={(e) => setDriverPanelHeight(e.nativeEvent.layout.height)}
       >
+        <View style={s.handleWrap}>
+          <View style={s.handle} />
+        </View>
+
+        {/* ── OFFLINE ─────────────────────────────────────── */}
         {driverStatus === DRIVER_STATUS.OFFLINE && (
-          <Text style={[s.offlineMsg, { color: colors.textSecondary }]}>
-            {t(lang,'enableOnline')}
-          </Text>
-        )}
-
-        {driverStatus === DRIVER_STATUS.AVAILABLE && (
-          <Text style={[s.readyMsg, { color: colors.success }]}>
-            {t(lang,'waitingForOrders')}
-          </Text>
-        )}
-
-        {driverStatus === DRIVER_STATUS.ACCEPTED && activeOrder && (
-          <View>
-            {activeOrder.order_type === 'call' ? (
-              <>
-                <Text style={[s.actionTitle, { color: colors.text }]}>📞 Звонковый заказ</Text>
-                <Text style={[s.addressText, { color: colors.textSecondary }]}>
-                  📍 {activeOrder.pickup_address || ''}
-                </Text>
-                {activeOrder.additional_info ? (
-                  <Text style={[s.addressText, { color: colors.text, fontWeight: '600', fontSize: 15 }]}>
-                    🏠 {activeOrder.additional_info}
-                  </Text>
-                ) : null}
-                {activeOrder.passenger_phone ? (
-                  <Text style={[s.addressText, { color: colors.primary, fontWeight: '600', fontSize: 16, textAlign: 'center', marginVertical: 8 }]}>
-                    📱 {activeOrder.passenger_phone}
-                  </Text>
-                ) : null}
-                <TouchableOpacity
-                  style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
-                  onPress={handleArrived}
-                  disabled={isProcessing}
-                >
-                  <Text style={s.actionBtnText}>✅ Я на месте</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'goingToPassenger')}</Text>
-                {activeOrder.passenger_phone ? (
-                  <Text style={[s.addressText, { color: colors.primary, fontWeight: '600' }]}>
-                    👤 {activeOrder.passenger_name || ''} &nbsp; 📱 {activeOrder.passenger_phone}
-                  </Text>
-                ) : null}
-                <Text style={[s.addressText, { color: colors.textSecondary }]}>
-                  📍 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
-                </Text>
-                {activeOrder.trip_type !== 'free' && activeOrder.destination_address ? (
-                  <Text style={[s.addressText, { color: colors.textSecondary }]}>
-                    🎯 {activeOrder.destination_address}
-                  </Text>
-                ) : null}
-                <Text style={[s.priceText, { color: colors.primary }]}>
-                  {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
-                </Text>
-                <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
-                  {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
-                </Text>
-                <TouchableOpacity
-                  style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
-                  onPress={handleArrived}
-                  disabled={isProcessing}
-                >
-                  <Text style={s.actionBtnText}>{t(lang,'arrivedAtPickup')}</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
-
-        {driverStatus === DRIVER_STATUS.ARRIVED && (
-          <View>
-            <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'waitingForPassenger')}</Text>
-            <View style={s.timerRow}>
-              <Text style={{ fontSize: 36, fontWeight: '800', color: waitSeconds < freeSeconds ? colors.success : colors.error }}>
-                {String(waitMin).padStart(2,'0')}:{String(waitSec).padStart(2,'0')}
-              </Text>
-              <View>
-                <Text style={[s.timerLabel, { color: colors.textSecondary }]}>
-                  {waitSeconds < freeSeconds
-                    ? `${t(lang,'freeWaitLabel')} (${freeSeconds - waitSeconds}${t(lang,'sec')})`
-                    : `+${waitFee.toLocaleString()} ${t(lang,'sum')}`}
-                </Text>
-              </View>
+          <View style={s.panelSection}>
+            <View style={s.statusRow}>
+              <View style={[s.statusDot, { backgroundColor: '#888' }]} />
+              <Text style={s.statusTitle}>{t(lang,'youOffline')}</Text>
             </View>
-            <TouchableOpacity
-              style={[s.actionBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]}
-              onPress={handleStartTrip}
-              disabled={isProcessing}
-            >
-              <Text style={s.actionBtnText}>{t(lang,'startTrip')}</Text>
+            <Text style={s.statusSub}>{t(lang,'enableOnline')}</Text>
+            <TouchableOpacity style={s.primaryBtn} onPress={() => toggleOnline(true)}>
+              <Text style={s.primaryBtnText}>{t(lang,'goOnline')}</Text>
             </TouchableOpacity>
           </View>
         )}
 
-        {driverStatus === DRIVER_STATUS.IN_PROGRESS && activeOrder && (
-          <View>
-            <Text style={[s.actionTitle, { color: colors.text }]}>{t(lang,'passengerOnboard')}</Text>
-            {activeOrder.destination_address ? (
-              <Text style={[s.addressText, { color: colors.textSecondary }]}>
-                🎯 {activeOrder.destination_address}
+        {/* ── AVAILABLE ────────────────────────────────────── */}
+        {driverStatus === DRIVER_STATUS.AVAILABLE && (
+          <View style={s.panelSection}>
+            <View style={s.statusRow}>
+              <View style={[s.statusDot, { backgroundColor: '#22C55E' }]} />
+              <Text style={s.statusTitle}>{t(lang,'youOnline')}</Text>
+            </View>
+            <Text style={s.statusSub}>{t(lang,'searchingClients')}{'\n'}{t(lang,'keepAppOpen')}</Text>
+            <TouchableOpacity style={s.offlineBtn} onPress={() => toggleOnline(false)}>
+              <Text style={s.offlineBtnText}>{t(lang,'goOffline')}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── ACCEPTED ─────────────────────────────────────── */}
+        {driverStatus === DRIVER_STATUS.ACCEPTED && activeOrder && (
+          <View style={s.panelSection}>
+            <View style={s.panelHeaderRow}>
+              <Text style={s.panelHeaderIcon}>🚗</Text>
+              <Text style={s.panelHeaderTitle}>{t(lang,'goingToPassenger')}</Text>
+            </View>
+
+            {/* Passenger card */}
+            <View style={s.passengerCard}>
+              <View style={s.avatarCircle}>
+                <Text style={s.avatarText}>
+                  {(activeOrder.passenger_name || activeOrder.passenger_phone || '?')[0].toUpperCase()}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.passengerName} numberOfLines={1}>
+                  {activeOrder.passenger_name || t(lang,'passenger')}
+                </Text>
+                <Text style={s.passengerPhone}>{activeOrder.passenger_phone || ''}</Text>
+              </View>
+            </View>
+
+            {/* Addresses */}
+            <View style={s.addrRow}>
+              <View style={[s.addrBadge, { backgroundColor: '#22C55E' }]}><Text style={s.addrBadgeText}>A</Text></View>
+              <Text style={s.addrText} numberOfLines={1}>
+                {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
               </Text>
+            </View>
+            {activeOrder.trip_type !== 'free' && activeOrder.destination_address ? (
+              <View style={s.addrRow}>
+                <View style={[s.addrBadge, { backgroundColor: '#EF4444' }]}><Text style={s.addrBadgeText}>B</Text></View>
+                <Text style={s.addrText} numberOfLines={1}>{activeOrder.destination_address}</Text>
+              </View>
             ) : null}
-            {(activeOrder.trip_type === 'free' || activeOrder.order_type === 'call') ? (
-              <>
-                <Text style={[s.priceText, { color: colors.primary, fontSize: 28 }]}>
-                  {t(lang,'meterRunning')}: {(() => {
-                    const sf = activeOrder.service_fee || 2000;
-                    const rate = meteredPricePerKm.current || 3000;
-                    const surge = meteredSurge.current || 1;
-                    const m = meteredKm * 1000;
-                    const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
-                    return Math.ceil((sf + rKm * rate * surge) / 100) * 100;
-                  })().toLocaleString()} {t(lang,'sum')}
-                </Text>
-                <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
-                  {meteredKm.toFixed(2)} {t(lang,'km')}
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={[s.priceText, { color: colors.primary }]}>
-                  {(activeOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
-                </Text>
-                <Text style={[s.addressText, { color: colors.textSecondary, textAlign: 'center' }]}>
-                  {(activeOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
-                </Text>
-              </>
-            )}
+
+            <View style={s.twoButtonRow}>
+              <TouchableOpacity
+                style={s.outlineBtn}
+                onPress={() => activeOrder.passenger_phone && Linking.openURL(`tel:${activeOrder.passenger_phone}`)}
+              >
+                <Text style={s.outlineBtnText}>📞  {t(lang,'callBtn')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.primaryBtn, { flex: 1, marginTop: 0, opacity: isProcessing ? 0.6 : 1 }]}
+                onPress={handleArrived}
+                disabled={isProcessing}
+              >
+                <Text style={s.primaryBtnText}>{t(lang,'arrivedAtPickup')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ── ARRIVED ──────────────────────────────────────── */}
+        {driverStatus === DRIVER_STATUS.ARRIVED && (
+          <View style={s.panelSection}>
+            <View style={s.waitingHeader}>
+              <Text style={s.waitingHeaderText}>{t(lang,'waitingClient')}</Text>
+            </View>
+            <View style={s.timerBigRow}>
+              <Text style={[s.timerBig, { color: waitSeconds < freeSeconds ? '#22C55E' : '#EF4444' }]}>
+                {String(waitMin).padStart(2, '0')}:{String(waitSec).padStart(2, '0')}
+              </Text>
+              <Text style={s.timerStatus}>
+                {waitSeconds < freeSeconds
+                  ? `${t(lang,'freeWaitLabel')} • ${t(lang,'remaining')} ${String(Math.floor((freeSeconds - waitSeconds) / 60)).padStart(2,'0')}:${String((freeSeconds - waitSeconds) % 60).padStart(2,'0')}`
+                  : `+${waitFee.toLocaleString()} ${t(lang,'sum')}`}
+              </Text>
+            </View>
+
+            <View style={s.iconBtnRow}>
+              <TouchableOpacity
+                style={s.iconBtn}
+                onPress={() => activeOrder?.passenger_phone && Linking.openURL(`tel:${activeOrder.passenger_phone}`)}
+              >
+                <Text style={s.iconBtnEmoji}>📞</Text>
+                <Text style={s.iconBtnLabel}>{t(lang,'callBtn')}</Text>
+              </TouchableOpacity>
+              <View style={s.iconBtnDivider} />
+              <TouchableOpacity style={s.iconBtn}>
+                <Text style={s.iconBtnEmoji}>💬</Text>
+                <Text style={s.iconBtnLabel}>{t(lang,'chat')}</Text>
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity
-              style={[s.actionBtn, { backgroundColor: colors.success, opacity: isProcessing ? 0.6 : 1 }]}
+              style={[s.primaryBtn, { opacity: isProcessing ? 0.6 : 1 }]}
+              onPress={handleStartTrip}
+              disabled={isProcessing}
+            >
+              <Text style={s.primaryBtnText}>{t(lang,'startTrip')}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── IN PROGRESS ──────────────────────────────────── */}
+        {driverStatus === DRIVER_STATUS.IN_PROGRESS && activeOrder && (
+          <View style={s.panelSection}>
+            <View style={s.panelHeaderRow}>
+              <Text style={s.panelHeaderIcon}>🛣</Text>
+              <Text style={s.panelHeaderTitle}>{t(lang,'inTrip')}</Text>
+            </View>
+
+            <View style={s.tripInfoRow}>
+              <Text style={s.tripPrice}>
+                {(activeOrder.trip_type === 'free' || activeOrder.order_type === 'call'
+                  ? (() => {
+                      const sf = activeOrder.service_fee || 2000;
+                      const rate = meteredPricePerKm.current || 3000;
+                      const surge = meteredSurge.current || 1;
+                      const m = meteredKm * 1000;
+                      const rKm = m < 1 ? 0 : (Math.ceil(m / 100) * 100) / 1000;
+                      return Math.ceil((sf + rKm * rate * surge) / 100) * 100;
+                    })()
+                  : activeOrder.estimated_price || 0
+                ).toLocaleString()} {t(lang,'sum')}
+              </Text>
+              <View style={s.tripDistBox}>
+                <Text style={s.tripDistLabel}>{t(lang,'remaining')}:</Text>
+                <Text style={s.tripDistValue}>
+                  {(activeOrder.trip_type === 'free' || activeOrder.order_type === 'call'
+                    ? meteredKm
+                    : activeOrder.distance_km || 0
+                  ).toFixed(1)} {t(lang,'km')}
+                </Text>
+                <Text style={s.tripDistLabel}>
+                  ~{Math.max(1, Math.round((activeOrder.distance_km || meteredKm || 1) / 0.4))} {t(lang,'min')}
+                </Text>
+              </View>
+            </View>
+
+            {activeOrder.destination_address ? (
+              <View style={s.addrRow}>
+                <View style={[s.addrBadge, { backgroundColor: '#EF4444' }]}><Text style={s.addrBadgeText}>B</Text></View>
+                <Text style={s.addrText} numberOfLines={1}>{activeOrder.destination_address}</Text>
+              </View>
+            ) : null}
+
+            <TouchableOpacity
+              style={[s.completeBtn, { opacity: isProcessing ? 0.6 : 1 }]}
               onPress={handleCompleteTrip}
               disabled={isProcessing}
             >
-              <Text style={s.actionBtnText}>{t(lang,'completeTrip')}</Text>
+              <Text style={s.primaryBtnText}>{t(lang,'completeTrip')}</Text>
             </TouchableOpacity>
           </View>
         )}
       </View>
 
-      {/* Incoming order modal — slides up from bottom */}
+      {/* Incoming order modal — slides up from bottom, map stays visible */}
       <Modal visible={!!incomingOrder} transparent animationType="slide">
         <View style={s.modalOverlay}>
-          <View style={[s.orderModal, { backgroundColor: colors.background }]}>
+          <View style={s.orderModal}>
+            {/* Countdown circle */}
             <View style={s.timerCircle}>
-              <Text style={[s.timerCount, { color: colors.primary }]}>{acceptCountdown}</Text>
+              <Text style={s.timerCount}>{acceptCountdown}</Text>
             </View>
-            <Text style={[s.newOrderTitle, { color: colors.text }]}>{t(lang,'newOrder')}</Text>
+
             {incomingOrder && (
               <>
-                {/* Passenger photo if available */}
-                {incomingOrder.passenger_photo ? (
-                  <Image
-                    source={{ uri: buildAvatarUrl(incomingOrder.passenger_photo) }}
-                    style={s.passengerPhoto}
-                  />
-                ) : (
-                  <View style={[s.passengerPhotoPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Text style={{ fontSize: 30 }}>👤</Text>
-                  </View>
-                )}
-                <Text style={[s.passengerPhoneText, { color: colors.text }]}>
-                  📱 {incomingOrder.passenger_phone}
-                </Text>
-                {incomingOrder.order_type === 'call' && (
-                  <View style={s.callBadge}>
-                    <Text style={s.callBadgeText}>📞 Звонковый заказ</Text>
-                  </View>
-                )}
-                {incomingOrder.order_type === 'call' ? (
-                  <>
-                    <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                      📍 {incomingOrder.pickup_address || ''}
-                    </Text>
-                    {incomingOrder.additional_info ? (
-                      <Text style={[s.orderDetail, { color: colors.text, fontWeight: '600' }]}>
-                        🏠 {incomingOrder.additional_info}
-                      </Text>
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                      📍 {incomingOrder.pickup_address || t(lang,'from')}
-                    </Text>
-                    {incomingOrder.trip_type !== 'free' && incomingOrder.destination_address ? (
-                      <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                        🎯 {incomingOrder.destination_address}
-                      </Text>
-                    ) : incomingOrder.trip_type === 'free' ? (
-                      <Text style={[s.orderDetail, { color: colors.textSecondary }]}>
-                        🔄 {t(lang,'free')}
-                      </Text>
-                    ) : null}
-                  </>
-                )}
+                {/* Title row */}
+                <Text style={s.newOrderTitle}>🚕 {t(lang,'newOrder')}</Text>
+
+                {/* Price + distance */}
                 {incomingOrder.trip_type !== 'free' && (
-                  <>
-                    <Text style={[s.orderPrice, { color: colors.primary }]}>
+                  <View style={s.priceLine}>
+                    <Text style={s.orderPriceLarge}>
                       {(incomingOrder.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
                     </Text>
-                    <Text style={[s.orderDist, { color: colors.textSecondary }]}>
+                    <Text style={s.orderDistBadge}>
                       {(incomingOrder.distance_km || 0).toFixed(1)} {t(lang,'km')}
                     </Text>
-                  </>
+                  </View>
+                )}
+
+                {/* Phone row */}
+                <TouchableOpacity
+                  style={s.phoneRow}
+                  onPress={() => incomingOrder.passenger_phone && Linking.openURL(`tel:${incomingOrder.passenger_phone}`)}
+                >
+                  <Text style={s.phoneRowEmoji}>📱</Text>
+                  <Text style={s.phoneRowText}>{incomingOrder.passenger_phone || '—'}</Text>
+                </TouchableOpacity>
+
+                {/* Address A */}
+                <View style={s.addrRow}>
+                  <View style={[s.addrBadge, { backgroundColor: '#22C55E' }]}><Text style={s.addrBadgeText}>A</Text></View>
+                  <Text style={s.addrTextModal} numberOfLines={2}>
+                    {incomingOrder.order_type === 'call'
+                      ? (incomingOrder.pickup_address || '') + (incomingOrder.additional_info ? `\n🏠 ${incomingOrder.additional_info}` : '')
+                      : (incomingOrder.pickup_address || t(lang, 'from'))}
+                  </Text>
+                </View>
+
+                {/* Address B */}
+                {incomingOrder.trip_type !== 'free' && incomingOrder.destination_address ? (
+                  <View style={s.addrRow}>
+                    <View style={[s.addrBadge, { backgroundColor: '#EF4444' }]}><Text style={s.addrBadgeText}>B</Text></View>
+                    <Text style={s.addrTextModal} numberOfLines={2}>{incomingOrder.destination_address}</Text>
+                  </View>
+                ) : incomingOrder.trip_type === 'free' ? (
+                  <View style={s.addrRow}>
+                    <View style={[s.addrBadge, { backgroundColor: '#6B7280' }]}><Text style={s.addrBadgeText}>B</Text></View>
+                    <Text style={s.addrTextModal}>{t(lang,'byMeter')}</Text>
+                  </View>
+                ) : null}
+
+                {/* Call badge */}
+                {incomingOrder.order_type === 'call' && (
+                  <View style={s.callBadge}><Text style={s.callBadgeText}>📞 {t(lang,'callOrder')}</Text></View>
+                )}
+
+                {/* Transfer to friend button (only shown if driver has friends) */}
+                {transferFriends.length > 0 && (
+                  <TouchableOpacity
+                    style={s.transferBtn}
+                    onPress={() => setShowTransferPicker(true)}
+                  >
+                    <Text style={s.transferBtnText}>👥 {t(lang, 'transferOrder')}</Text>
+                  </TouchableOpacity>
                 )}
               </>
             )}
-            <View style={s.orderBtns}>
-              <TouchableOpacity style={[s.declineBtn, { borderColor: colors.error }]} onPress={handleDeclineOrder}>
-                <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'decline')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.acceptBtn, { backgroundColor: colors.primary, opacity: isProcessing ? 0.6 : 1 }]} onPress={handleAcceptOrder} disabled={isProcessing}>
-                <Text style={{ color: '#000', fontWeight: '800', fontSize: 15 }}>{t(lang,'accept')}</Text>
-              </TouchableOpacity>
+
+            {/* ── Swipe to accept / decline ── */}
+            <View style={s.swipeWrap}>
+              <Animated.View
+                style={[s.swipeTrack, {
+                  backgroundColor: swipeX.interpolate({
+                    inputRange: [-140, 0, 140],
+                    outputRange: ['rgba(239,68,68,0.25)', 'rgba(55,65,81,0.6)', 'rgba(34,197,94,0.25)'],
+                  }),
+                }]}
+              >
+                <Text style={s.swipeLabelLeft}>✕  {t(lang,'decline')}</Text>
+                <Animated.View
+                  style={[s.swipeKnob, { transform: [{ translateX: swipeX }] }]}
+                  {...swipePan.panHandlers}
+                >
+                  <Text style={{ fontSize: 22 }}>⇌</Text>
+                </Animated.View>
+                <Text style={s.swipeLabelRight}>{t(lang,'accept')}  ✓</Text>
+              </Animated.View>
+              <Text style={s.swipeSubLabel}>{t(lang,'swipeHint')}</Text>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Friend picker modal for order transfer */}
+      <Modal visible={showTransferPicker} transparent animationType="slide" onRequestClose={() => setShowTransferPicker(false)}>
+        <View style={s.modalOverlay}>
+          <View style={[s.orderModal, { paddingBottom: 24 }]}>
+            <Text style={s.newOrderTitle}>👥 {t(lang, 'selectFriend')}</Text>
+            {transferFriends.length === 0 ? (
+              <Text style={{ color: '#9CA3AF', textAlign: 'center', marginVertical: 16 }}>{t(lang, 'noFriends')}</Text>
+            ) : (
+              transferFriends.map((f) => (
+                <TouchableOpacity
+                  key={f.friendship_id}
+                  style={[s.transferFriendRow, { opacity: transferring ? 0.5 : 1 }]}
+                  disabled={transferring}
+                  onPress={() => handleTransferToFriend(f.driver_id)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>{f.first_name} {f.last_name}</Text>
+                    <Text style={{ color: '#9CA3AF', fontSize: 13 }}>{f.phone} · 🚗 {f.car_number}</Text>
+                  </View>
+                  {transferring
+                    ? <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#FFCC00' }} />
+                    : <Text style={{ color: '#FFCC00', fontSize: 18 }}>→</Text>}
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity
+              style={{ marginTop: 12, alignItems: 'center', padding: 10 }}
+              onPress={() => setShowTransferPicker(false)}
+            >
+              <Text style={{ color: '#9CA3AF', fontSize: 14 }}>{t(lang, 'cancel')}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
       {/* Trip completion — bottom sheet (no dark overlay, map stays visible) */}
       {!!completionModal && (
-        <View style={[s.bottomPanel, { backgroundColor: colors.background }]}>
+        <View style={s.bottomPanel}>
           <View style={s.handleWrap}>
-            <View style={[s.handle, { backgroundColor: colors.border }]} />
+            <View style={s.handle} />
           </View>
-          <Text style={[s.newOrderTitle, { color: colors.text, textAlign: 'center' }]}>
-            🏁 {t(lang,'tripCompleted')}
-          </Text>
-          <Text style={[s.orderPrice, { color: colors.primary, textAlign: 'center', marginVertical: 12 }]}>
-            {t(lang,'total')}: {(completionModal?.price ?? 0).toLocaleString()} {t(lang,'sum')}
-          </Text>
-          <TouchableOpacity
-            style={[s.actionBtn, { backgroundColor: colors.primary, marginTop: 8 }]}
-            onPress={() => { setCompletionModal(null); resetToAvailable(); }}
-          >
-            <Text style={s.actionBtnText}>✅ {t(lang,'backToWork')}</Text>
-          </TouchableOpacity>
+          <View style={s.panelSection}>
+            <Text style={s.completionTrophy}>🏆</Text>
+            <Text style={s.completionTitle}>{t(lang,'tripCompleted')}</Text>
+            <Text style={s.completionPrice}>
+              {t(lang,'total')}: {(completionModal?.price ?? 0).toLocaleString()} {t(lang,'sum')}
+            </Text>
+            <Text style={s.completionSub}>🎉 {t(lang,'greatWork')}</Text>
+            <TouchableOpacity
+              style={[s.primaryBtn, { marginTop: 16 }]}
+              onPress={() => { setCompletionModal(null); resetToAvailable(); }}
+            >
+              <Text style={s.primaryBtnText}>{t(lang,'findNextOrder')}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
     </View>
@@ -971,61 +1133,154 @@ export default function HomeScreen() {
 }
 
 function makeStyles(colors) {
+  const DARK = '#000000';
+  const CARD = '#111827';
+  const BORDER = '#1F2937';
+
   return StyleSheet.create({
     container: { flex: 1 },
     map: { flex: 1 },
     carIcon: { width: 24, height: 38 },
+
+    // ── Floating map buttons ─────────────────────────────────────
     findMeBtn: {
-      position: 'absolute',
-      right: 16,
+      position: 'absolute', right: 16,
       width: 44, height: 44, borderRadius: 22,
+      backgroundColor: '#1F2937',
       justifyContent: 'center', alignItems: 'center',
-      elevation: 6, shadowOpacity: 0.2, shadowRadius: 6,
+      elevation: 6,
+      shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6,
     },
     navModeBtn: {
-      position: 'absolute',
-      right: 16,
+      position: 'absolute', right: 16,
       width: 44, height: 44, borderRadius: 22,
       justifyContent: 'center', alignItems: 'center',
-      elevation: 6, shadowOpacity: 0.2, shadowRadius: 6,
+      elevation: 6,
+      shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6,
     },
-    findMeBtnInner: {
-      position: 'absolute', top: 14, right: 16,
-      width: 40, height: 40, borderRadius: 20,
-      justifyContent: 'center', alignItems: 'center',
-      elevation: 3, shadowOpacity: 0.12, shadowRadius: 4,
-    },
+
+    // ── Top status bar ───────────────────────────────────────────
     statusBar: {
       position: 'absolute', top: 0, left: 0, right: 0,
       flexDirection: 'row', alignItems: 'center', padding: 16,
-      borderRadius: 18,
-      marginHorizontal: 12,
+      borderRadius: 18, marginHorizontal: 12,
+      backgroundColor: DARK,
       elevation: 4, shadowOpacity: 0.15, shadowRadius: 4,
     },
     statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
     statusText: { fontSize: 15, fontWeight: '600' },
+
+    // ── Bottom panel shell ───────────────────────────────────────
     bottomPanel: {
       position: 'absolute', bottom: 0, left: 0, right: 0,
+      backgroundColor: DARK,
       borderTopLeftRadius: 24, borderTopRightRadius: 24,
-      padding: 20, paddingBottom: 36,
-      elevation: 12, shadowOpacity: 0.15, shadowRadius: 8,
+      paddingBottom: 32,
+      elevation: 16,
+      shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 12,
     },
-    offlineMsg: { textAlign: 'center', fontSize: 15, padding: 16 },
-    readyMsg: { textAlign: 'center', fontSize: 16, fontWeight: '600', padding: 16 },
-    actionTitle: { fontSize: 17, fontWeight: '700', marginBottom: 8, textAlign: 'center' },
-    addressText: { fontSize: 14, marginBottom: 4 },
-    priceText: { fontSize: 22, fontWeight: '800', textAlign: 'center', marginVertical: 8 },
-    actionBtn: { borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 12 },
-    actionBtnText: { fontWeight: '800', fontSize: 16, color: '#000' },
-    handleWrap: { alignItems: 'center', paddingTop: 10, paddingBottom: 6 },
-    handle: { width: 44, height: 4, borderRadius: 2 },
-    timerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, marginVertical: 8 },
-    timerLabel: { fontSize: 13, textAlign: 'center' },
+    handleWrap: { alignItems: 'center', paddingTop: 12, paddingBottom: 4 },
+    handle: { width: 44, height: 4, borderRadius: 2, backgroundColor: BORDER },
+
+    panelSection: { paddingHorizontal: 20, paddingBottom: 4, paddingTop: 8 },
+
+    // ── Status (online/offline) ──────────────────────────────────
+    statusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+    statusTitle: { fontSize: 18, fontWeight: '800', color: '#F9FAFB' },
+    statusSub: { fontSize: 14, color: '#9CA3AF', marginBottom: 14, lineHeight: 20 },
+
+    primaryBtn: {
+      backgroundColor: '#FFCC00',
+      borderRadius: 14, paddingVertical: 15,
+      alignItems: 'center', marginTop: 8,
+    },
+    primaryBtnText: { fontSize: 16, fontWeight: '800', color: '#111' },
+
+    offlineBtn: {
+      borderRadius: 14, paddingVertical: 14,
+      alignItems: 'center', marginTop: 8,
+      borderWidth: 1.5, borderColor: '#EF4444',
+    },
+    offlineBtnText: { fontSize: 16, fontWeight: '700', color: '#EF4444' },
+
+    completeBtn: {
+      backgroundColor: '#22C55E',
+      borderRadius: 14, paddingVertical: 15,
+      alignItems: 'center', marginTop: 8,
+    },
+
+    // ── ACCEPTED panel ───────────────────────────────────────────
+    panelHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+    panelHeaderIcon: { fontSize: 22, marginRight: 8 },
+    panelHeaderTitle: { fontSize: 17, fontWeight: '800', color: '#F9FAFB' },
+
+    passengerCard: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: CARD, borderRadius: 14, padding: 12, marginBottom: 12,
+    },
+    avatarCircle: {
+      width: 44, height: 44, borderRadius: 22,
+      backgroundColor: '#FFCC00', justifyContent: 'center', alignItems: 'center', marginRight: 12,
+    },
+    avatarText: { fontSize: 18, fontWeight: '900', color: '#111' },
+    passengerName: { fontSize: 15, fontWeight: '700', color: '#F9FAFB' },
+    passengerPhone: { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
+
+    addrRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+    addrBadge: {
+      width: 22, height: 22, borderRadius: 11,
+      justifyContent: 'center', alignItems: 'center', marginRight: 10, marginTop: 1,
+    },
+    addrBadgeText: { fontSize: 11, fontWeight: '800', color: '#fff' },
+    addrText: { flex: 1, fontSize: 14, color: '#D1D5DB', lineHeight: 20 },
+
+    twoButtonRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+    outlineBtn: {
+      flex: 1, borderWidth: 1.5, borderColor: '#9CA3AF',
+      borderRadius: 14, paddingVertical: 13, alignItems: 'center',
+    },
+    outlineBtnText: { fontSize: 15, fontWeight: '700', color: '#D1D5DB' },
+
+    // ── ARRIVED panel ────────────────────────────────────────────
+    waitingHeader: {
+      backgroundColor: '#F97316', borderRadius: 12,
+      paddingVertical: 8, paddingHorizontal: 14, alignSelf: 'center', marginBottom: 14,
+    },
+    waitingHeaderText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+    timerBigRow: { alignItems: 'center', marginBottom: 12 },
+    timerBig: { fontSize: 56, fontWeight: '900', letterSpacing: -1 },
+    timerStatus: { fontSize: 14, color: '#9CA3AF', marginTop: 2 },
+
+    iconBtnRow: {
+      flexDirection: 'row', backgroundColor: CARD,
+      borderRadius: 14, marginBottom: 14, overflow: 'hidden',
+    },
+    iconBtn: { flex: 1, alignItems: 'center', paddingVertical: 14 },
+    iconBtnEmoji: { fontSize: 24 },
+    iconBtnLabel: { fontSize: 12, color: '#9CA3AF', marginTop: 4 },
+    iconBtnDivider: { width: 1, backgroundColor: BORDER, marginVertical: 10 },
+
+    // ── IN_PROGRESS panel ────────────────────────────────────────
+    tripInfoRow: {
+      flexDirection: 'row', alignItems: 'center',
+      justifyContent: 'space-between', marginBottom: 12,
+    },
+    tripPrice: { fontSize: 28, fontWeight: '900', color: '#FFCC00' },
+    tripDistBox: { alignItems: 'flex-end' },
+    tripDistLabel: { fontSize: 12, color: '#9CA3AF' },
+    tripDistValue: { fontSize: 15, fontWeight: '700', color: '#F9FAFB' },
+
+    // ── Completion panel ─────────────────────────────────────────
+    completionTrophy: { fontSize: 52, textAlign: 'center', marginBottom: 8 },
+    completionTitle: { fontSize: 20, fontWeight: '900', color: '#F9FAFB', textAlign: 'center' },
+    completionPrice: { fontSize: 26, fontWeight: '800', color: '#FFCC00', textAlign: 'center', marginTop: 8 },
+    completionSub: { fontSize: 15, color: '#9CA3AF', textAlign: 'center', marginTop: 6 },
+
+    // ── Map markers ──────────────────────────────────────────────
     destMarker: { backgroundColor: '#E53935', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },
     destMarkerText: { color: '#fff', fontWeight: '800', fontSize: 13 },
     pickupMarker: { backgroundColor: '#2196F3', borderRadius: 8, padding: 6, borderWidth: 2, borderColor: '#fff' },
     markerText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-    // Live passenger marker: pulsing green ring around person emoji
     livePassengerOuter: {
       width: 52, height: 52, borderRadius: 26,
       backgroundColor: 'rgba(76, 175, 80, 0.18)',
@@ -1037,35 +1292,71 @@ function makeStyles(colors) {
       backgroundColor: 'rgba(76, 175, 80, 0.35)',
       justifyContent: 'center', alignItems: 'center',
     },
-    // Modal
-    modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
-    orderModal: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 32, alignItems: 'center' },
+
+    // ── Incoming order modal ─────────────────────────────────────
+    modalOverlay: { flex: 1, justifyContent: 'flex-end' },  // no dim — map stays visible
+    orderModal: {
+      backgroundColor: '#000000',
+      borderTopLeftRadius: 28, borderTopRightRadius: 28,
+      padding: 24, paddingBottom: 36, alignItems: 'center',
+      borderTopWidth: 1, borderTopColor: '#1F2937',
+    },
     timerCircle: {
-      width: 64, height: 64, borderRadius: 32,
-      borderWidth: 3, borderColor: colors.primary,
+      width: 68, height: 68, borderRadius: 34,
+      borderWidth: 3, borderColor: '#FFCC00',
       justifyContent: 'center', alignItems: 'center', marginBottom: 12,
     },
-    timerCount: { fontSize: 26, fontWeight: '800' },
-    newOrderTitle: { fontSize: 20, fontWeight: '800', marginBottom: 12 },
-    passengerPhoto: {
-      width: 80, height: 80, borderRadius: 40, marginBottom: 8,
-      borderWidth: 2, borderColor: colors.primary,
+    timerCount: { fontSize: 28, fontWeight: '900', color: '#FFCC00' },
+    newOrderTitle: { fontSize: 22, fontWeight: '900', color: '#FFCC00', marginBottom: 10 },
+
+    priceLine: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+    orderPriceLarge: { fontSize: 32, fontWeight: '900', color: '#F9FAFB' },
+    orderDistBadge: {
+      backgroundColor: CARD, borderRadius: 20,
+      paddingHorizontal: 10, paddingVertical: 4,
+      fontSize: 14, fontWeight: '700', color: '#9CA3AF',
     },
-    passengerPhotoPlaceholder: {
-      width: 80, height: 80, borderRadius: 40, marginBottom: 8,
-      borderWidth: 2, alignItems: 'center', justifyContent: 'center',
-    },
-    passengerPhoneText: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
+
+    phoneRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
+    phoneRowEmoji: { fontSize: 18 },
+    phoneRowText: { fontSize: 15, fontWeight: '600', color: '#D1D5DB' },
+
+    addrTextModal: { flex: 1, fontSize: 14, color: '#D1D5DB', lineHeight: 20 },
+
     callBadge: {
-      backgroundColor: '#E3F2FD', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5,
-      marginBottom: 10,
+      backgroundColor: '#1E3A5F', borderRadius: 20,
+      paddingHorizontal: 14, paddingVertical: 5, marginTop: 8, marginBottom: 4,
     },
-    callBadgeText: { fontSize: 13, fontWeight: '700', color: '#1565C0' },
-    orderDetail: { fontSize: 14, marginBottom: 4, textAlign: 'center' },
-    orderPrice: { fontSize: 26, fontWeight: '800', marginVertical: 8 },
-    orderDist: { fontSize: 14, marginBottom: 16 },
-    orderBtns: { flexDirection: 'row', gap: 12, marginTop: 4 },
-    declineBtn: { flex: 1, borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center' },
-    acceptBtn: { flex: 1, borderRadius: 14, padding: 14, alignItems: 'center' },
+    callBadgeText: { fontSize: 13, fontWeight: '700', color: '#60A5FA' },
+
+    transferBtn: {
+      marginTop: 10, borderWidth: 1, borderColor: '#374151', borderRadius: 12,
+      paddingVertical: 9, paddingHorizontal: 16, alignItems: 'center',
+    },
+    transferBtnText: { color: '#9CA3AF', fontSize: 13, fontWeight: '600' },
+
+    transferFriendRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      backgroundColor: '#1F2937', borderRadius: 12, padding: 14, marginBottom: 8,
+    },
+
+    // ── Swipe control ────────────────────────────────────────────
+    swipeWrap: { width: '100%', alignItems: 'center', marginTop: 18 },
+    swipeTrack: {
+      width: '100%', height: 60, borderRadius: 30,
+      flexDirection: 'row', alignItems: 'center',
+      justifyContent: 'space-between', paddingHorizontal: 16,
+      borderWidth: 1, borderColor: '#374151', overflow: 'hidden',
+    },
+    swipeLabelLeft: { fontSize: 13, fontWeight: '700', color: '#EF4444' },
+    swipeLabelRight: { fontSize: 13, fontWeight: '700', color: '#22C55E' },
+    swipeKnob: {
+      width: 52, height: 52, borderRadius: 26,
+      backgroundColor: '#FFCC00',
+      justifyContent: 'center', alignItems: 'center',
+      elevation: 4,
+      shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4,
+    },
+    swipeSubLabel: { fontSize: 12, color: '#6B7280', marginTop: 8 },
   });
 }

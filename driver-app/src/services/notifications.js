@@ -6,11 +6,6 @@ import * as Notifications from 'expo-notifications';
 let alarmIntervalId = null;
 let notificationHandlerSet = false;
 
-/**
- * Ensure foreground notification handler is registered.
- * Without this, notifications scheduled while the app is in the foreground
- * will be delivered silently (no banner, no sound).
- */
 function ensureNotificationHandler() {
   if (notificationHandlerSet) return;
   try {
@@ -28,7 +23,6 @@ function ensureNotificationHandler() {
   }
 }
 
-// Try at module load (works in standalone builds)
 ensureNotificationHandler();
 
 export async function initializeNotifications() {
@@ -41,14 +35,19 @@ export async function initializeNotifications() {
   }
 
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('orders', {
+    // Use 'order_bell_v2' — a NEW channel id so Android always creates it fresh
+    // (Android ignores sound/importance changes on existing channels)
+    await Notifications.setNotificationChannelAsync('order_bell_v2', {
       name: 'Incoming orders',
       importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
+      vibrationPattern: [0, 300, 200, 300],
       lightColor: '#FFCC00',
       sound: 'default',
+      enableVibrate: true,
     });
   }
+
+
 
   // Retry handler setup after permissions & channel are ready
   ensureNotificationHandler();
@@ -79,10 +78,10 @@ export async function getExpoPushToken() {
 export async function showIncomingOrderNotification(order) {
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'Новый заказ',
-      body: `${order?.pickup_address || 'Точка подачи'} -> ${order?.destination_address || 'Точка назначения'}`,
+      title: '🚕 Новый заказ!',
+      body: `${order?.pickup_address || 'Точка подачи'}${order?.destination_address ? ' → ' + order.destination_address : ''}`,
       sound: 'default',
-      channelId: 'orders',
+      channelId: 'order_bell_v2',
       priority: Notifications.AndroidNotificationPriority.MAX,
     },
     trigger: null,
@@ -90,42 +89,35 @@ export async function showIncomingOrderNotification(order) {
 }
 
 /**
- * Start a repeating alarm: vibration loop + notification sound every second.
- * Call stopOrderAlarm() when the driver accepts, declines, or the countdown expires.
+ * Start the incoming-order alarm:
+ * - Plays an in-app bell sound (expo-av)
+ * - Fires EXACTLY ONE system notification (sound + banner)
+ * - Starts a vibration loop (repeating until stopOrderAlarm)
+ * All of this together gives a pleasant, non-spammy ringtone effect.
  */
 export function startOrderAlarm(order) {
-  // Ensure handler is registered (covers edge case where module-level call failed)
   ensureNotificationHandler();
 
-  // Haptic: 400ms on, 600ms off — repeating until stopOrderAlarm()
-  Vibration.vibrate([0, 400, 600], true);
+  // Stop any previous alarm cleanly first
+  stopOrderAlarm();
 
-  // Fire first notification immediately (sound)
+  // Sound is provided by the notification itself (shouldPlaySound: true + sound: 'default')
+
+  // 2. ONE notification — provides system sound + banner on locked screen
   showIncomingOrderNotification(order).catch((e) =>
-    console.warn('[notifications] initial alarm notification failed:', e),
+    console.warn('[notifications] alarm notification failed:', e),
   );
 
-  // Re-fire notification sound every 2 seconds (less spam than every 1s)
-  clearInterval(alarmIntervalId);
-  alarmIntervalId = setInterval(() => {
-    Notifications.scheduleNotificationAsync({
-      content: {
-        title: '🚕 Новый заказ!',
-        body: order?.pickup_address || 'Нажмите чтобы принять',
-        sound: 'default',
-        channelId: 'orders',
-        priority: Notifications.AndroidNotificationPriority.MAX,
-      },
-      trigger: null,
-    }).catch((e) => console.warn('[notifications] repeating alarm failed:', e));
-  }, 2000);
+  // 3. Repeating vibration pattern: 300ms buzz, 500ms pause, loops
+  Vibration.vibrate([0, 300, 500], true);
 }
 
 /**
- * Stop the repeating order alarm (vibration + notification loop).
+ * Stop the order alarm (vibration + sound loop).
  */
 export function stopOrderAlarm() {
   Vibration.cancel();
   clearInterval(alarmIntervalId);
   alarmIntervalId = null;
+
 }

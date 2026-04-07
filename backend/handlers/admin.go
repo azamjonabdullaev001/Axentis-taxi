@@ -760,9 +760,10 @@ func generateReferralCodeAdmin(ctx context.Context, db *pgxpool.Pool) (string, e
 func (h *AdminHandler) GetReferralSettings(c *gin.Context) {
 	var rs models.ReferralSettings
 	err := h.db.QueryRow(context.Background(),
-		`SELECT id, default_commission_pct, reduced_commission_pct, weekly_bonus_amount, updated_at
+		`SELECT id, default_commission_pct, reduced_commission_pct, weekly_bonus_amount,
+		 COALESCE(cashback_pct,10.0), updated_at
 		 FROM referral_settings ORDER BY id LIMIT 1`,
-	).Scan(&rs.ID, &rs.DefaultCommissionPct, &rs.ReducedCommissionPct, &rs.WeeklyBonusAmount, &rs.UpdatedAt)
+	).Scan(&rs.ID, &rs.DefaultCommissionPct, &rs.ReducedCommissionPct, &rs.WeeklyBonusAmount, &rs.CashbackPct, &rs.UpdatedAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch referral settings"})
 		return
@@ -775,6 +776,7 @@ func (h *AdminHandler) UpdateReferralSettings(c *gin.Context) {
 		DefaultCommissionPct *float64 `json:"default_commission_pct"`
 		ReducedCommissionPct *float64 `json:"reduced_commission_pct"`
 		WeeklyBonusAmount    *float64 `json:"weekly_bonus_amount"`
+		CashbackPct          *float64 `json:"cashback_pct"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -792,13 +794,18 @@ func (h *AdminHandler) UpdateReferralSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "weekly_bonus_amount must be >= 0"})
 		return
 	}
+	if req.CashbackPct != nil && (*req.CashbackPct < 0 || *req.CashbackPct > 50) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cashback_pct must be 0–50"})
+		return
+	}
 	_, err := h.db.Exec(context.Background(),
 		`UPDATE referral_settings SET
 		 default_commission_pct = COALESCE($1, default_commission_pct),
 		 reduced_commission_pct = COALESCE($2, reduced_commission_pct),
 		 weekly_bonus_amount    = COALESCE($3, weekly_bonus_amount),
+		 cashback_pct           = COALESCE($4, cashback_pct),
 		 updated_at = NOW()`,
-		req.DefaultCommissionPct, req.ReducedCommissionPct, req.WeeklyBonusAmount,
+		req.DefaultCommissionPct, req.ReducedCommissionPct, req.WeeklyBonusAmount, req.CashbackPct,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update referral settings"})
@@ -1124,4 +1131,99 @@ func (h *AdminHandler) GetPhoneHistory(c *gin.Context) {
 		addresses = []AddrHistory{}
 	}
 	c.JSON(http.StatusOK, gin.H{"addresses": addresses})
+}
+
+// ── Bonus Settings ────────────────────────────────────────────────────────────
+
+func (h *AdminHandler) GetBonusSettings(c *gin.Context) {
+	var bs models.BonusSettings
+	err := h.db.QueryRow(context.Background(),
+		`SELECT id, night_bonus_pct, night_bonus_enabled,
+		        streak_days_required, streak_bonus_amount, streak_bonus_enabled,
+		        milestone_50_amount, milestone_100_amount, milestone_500_amount, milestone_1000_amount,
+		        milestones_enabled, updated_at
+		 FROM bonus_settings ORDER BY id LIMIT 1`,
+	).Scan(&bs.ID, &bs.NightBonusPct, &bs.NightBonusEnabled,
+		&bs.StreakDaysRequired, &bs.StreakBonusAmount, &bs.StreakBonusEnabled,
+		&bs.Milestone50Amount, &bs.Milestone100Amount, &bs.Milestone500Amount, &bs.Milestone1000Amount,
+		&bs.MilestonesEnabled, &bs.UpdatedAt)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch bonus settings"})
+		return
+	}
+	c.JSON(http.StatusOK, bs)
+}
+
+func (h *AdminHandler) UpdateBonusSettings(c *gin.Context) {
+	var req struct {
+		NightBonusPct       *float64 `json:"night_bonus_pct"`
+		NightBonusEnabled   *bool    `json:"night_bonus_enabled"`
+		StreakDaysRequired  *int     `json:"streak_days_required"`
+		StreakBonusAmount   *float64 `json:"streak_bonus_amount"`
+		StreakBonusEnabled  *bool    `json:"streak_bonus_enabled"`
+		Milestone50Amount  *float64 `json:"milestone_50_amount"`
+		Milestone100Amount *float64 `json:"milestone_100_amount"`
+		Milestone500Amount *float64 `json:"milestone_500_amount"`
+		Milestone1000Amount *float64 `json:"milestone_1000_amount"`
+		MilestonesEnabled  *bool    `json:"milestones_enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.NightBonusPct != nil && (*req.NightBonusPct < 0 || *req.NightBonusPct > 100) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "night_bonus_pct must be 0–100"})
+		return
+	}
+	_, err := h.db.Exec(context.Background(),
+		`UPDATE bonus_settings SET
+		 night_bonus_pct       = COALESCE($1,  night_bonus_pct),
+		 night_bonus_enabled   = COALESCE($2,  night_bonus_enabled),
+		 streak_days_required  = COALESCE($3,  streak_days_required),
+		 streak_bonus_amount   = COALESCE($4,  streak_bonus_amount),
+		 streak_bonus_enabled  = COALESCE($5,  streak_bonus_enabled),
+		 milestone_50_amount   = COALESCE($6,  milestone_50_amount),
+		 milestone_100_amount  = COALESCE($7,  milestone_100_amount),
+		 milestone_500_amount  = COALESCE($8,  milestone_500_amount),
+		 milestone_1000_amount = COALESCE($9,  milestone_1000_amount),
+		 milestones_enabled    = COALESCE($10, milestones_enabled),
+		 updated_at = NOW()`,
+		req.NightBonusPct, req.NightBonusEnabled,
+		req.StreakDaysRequired, req.StreakBonusAmount, req.StreakBonusEnabled,
+		req.Milestone50Amount, req.Milestone100Amount, req.Milestone500Amount, req.Milestone1000Amount,
+		req.MilestonesEnabled,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update bonus settings"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Bonus settings updated"})
+}
+
+// GET /admin/bonus-events?limit=100 — recent bonus payouts across all drivers
+func (h *AdminHandler) GetBonusEvents(c *gin.Context) {
+	limit := 100
+	rows, err := h.db.Query(context.Background(),
+		`SELECT be.id, be.driver_id, be.bonus_type, be.amount, COALESCE(be.description,''), be.created_at,
+		        u.first_name || ' ' || u.last_name, u.phone
+		 FROM driver_bonus_events be
+		 JOIN drivers d ON d.id = be.driver_id
+		 JOIN users u ON u.id = d.user_id
+		 ORDER BY be.created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	events := []models.BonusEvent{}
+	for rows.Next() {
+		var e models.BonusEvent
+		if err := rows.Scan(&e.ID, &e.DriverID, &e.BonusType, &e.Amount, &e.Description, &e.CreatedAt,
+			&e.DriverName, &e.DriverPhone); err != nil {
+			continue
+		}
+		events = append(events, e)
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events})
 }

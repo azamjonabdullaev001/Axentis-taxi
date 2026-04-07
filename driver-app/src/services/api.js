@@ -54,6 +54,19 @@ export const driverAPI = {
   getDriverRatings: () => api.get('/driver/ratings'),
   applyReferral: (referral_code, benefit_type) =>
     api.post('/referral/apply', { referral_code, benefit_type }),
+  getBonusHistory: () => api.get('/driver/bonus-history'),
+};
+
+export const friendsAPI = {
+  searchDriver: (phone) => api.get('/drivers/search', { params: { phone } }),
+  sendRequest: (recipient_driver_id) =>
+    api.post('/driver/friends/request', { recipient_driver_id }),
+  acceptRequest: (id) => api.put(`/driver/friends/${id}/accept`),
+  declineRequest: (id) => api.delete(`/driver/friends/${id}/decline`),
+  getFriends: () => api.get('/driver/friends'),
+  getPendingRequests: () => api.get('/driver/friends/requests'),
+  transferOrder: (order_id, friend_driver_id) =>
+    api.post(`/orders/${order_id}/transfer`, { friend_driver_id }),
 };
 
 export default api;

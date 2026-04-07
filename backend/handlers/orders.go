@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"time"
@@ -558,6 +559,9 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	h.db.Exec(context.Background(),
 		`UPDATE drivers SET is_available = true WHERE id = $1`, driverID)
 
+	// ── Bonus processing ─────────────────────────────────────────────────────
+	h.applyCompletionBonuses(driverID, userID, orderID, totalPrice, now)
+
 	var passengerID *string
 	h.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
@@ -1005,5 +1009,178 @@ func (h *OrderHandler) GetDriverRatings(c *gin.Context) {
 		"average_rating": avgRating,
 		"rating_count":   ratingCount,
 	})
+}
+
+// GET /driver/bonus-history — returns last 50 bonus events + cashback for the caller
+func (h *OrderHandler) GetBonusHistory(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID,
+	).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	rows, err := h.db.Query(context.Background(),
+		`SELECT id, bonus_type, amount, COALESCE(description,''), created_at
+		 FROM driver_bonus_events WHERE driver_id = $1
+		 ORDER BY created_at DESC LIMIT 50`, driverID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type ev struct {
+		ID          string    `json:"id"`
+		BonusType   string    `json:"bonus_type"`
+		Amount      float64   `json:"amount"`
+		Description string    `json:"description"`
+		CreatedAt   time.Time `json:"created_at"`
+	}
+	events := []ev{}
+	for rows.Next() {
+		var e ev
+		rows.Scan(&e.ID, &e.BonusType, &e.Amount, &e.Description, &e.CreatedAt)
+		events = append(events, e)
+	}
+
+	var streakDays, lifetimeTrips int
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(streak_days,0), COALESCE(lifetime_trips,0) FROM drivers WHERE id = $1`, driverID,
+	).Scan(&streakDays, &lifetimeTrips)
+
+	c.JSON(http.StatusOK, gin.H{
+		"events":         events,
+		"streak_days":    streakDays,
+		"lifetime_trips": lifetimeTrips,
+	})
+}
+
+// applyCompletionBonuses runs all bonus checks when a trip completes.
+// It is safe to call asynchronously — all DB errors are silently logged.
+func (h *OrderHandler) applyCompletionBonuses(driverID, driverUserID, orderID string, totalPrice float64, completedAt time.Time) {
+	ctx := context.Background()
+
+	// ── 1. Cashback ──────────────────────────────────────────────────────────
+	var benefitType string
+	var cashbackPct float64
+	h.db.QueryRow(ctx, `SELECT COALESCE(referral_benefit_type,'') FROM drivers WHERE id = $1`, driverID).Scan(&benefitType)
+	if benefitType == "cashback" {
+		h.db.QueryRow(ctx, `SELECT COALESCE(cashback_pct,0) FROM referral_settings ORDER BY id LIMIT 1`).Scan(&cashbackPct)
+		if cashbackPct > 0 {
+			cashbackAmt := totalPrice * cashbackPct / 100
+			h.db.Exec(ctx, `UPDATE drivers SET balance = balance + $1 WHERE id = $2`, cashbackAmt, driverID)
+			h.db.Exec(ctx,
+				`INSERT INTO cashback_transactions (driver_id, order_id, amount, pct) VALUES ($1, $2, $3, $4)`,
+				driverID, orderID, cashbackAmt, cashbackPct)
+			h.db.Exec(ctx,
+				`INSERT INTO driver_bonus_events (driver_id, bonus_type, amount, description) VALUES ($1,'cashback',$2,$3)`,
+				driverID, cashbackAmt, fmt.Sprintf("Кэшбэк %.0f%% — %.0f сум", cashbackPct, cashbackAmt))
+			msg, _ := json.Marshal(map[string]interface{}{"type": "cashback_credited", "amount": cashbackAmt, "pct": cashbackPct})
+			h.hub.SendToUser(driverUserID, msg)
+		}
+	}
+
+	// ── 2. Night bonus ───────────────────────────────────────────────────────
+	hour := completedAt.Hour()
+	if hour >= 22 || hour < 6 {
+		var nightPct float64
+		var nightEnabled bool
+		h.db.QueryRow(ctx, `SELECT night_bonus_pct, night_bonus_enabled FROM bonus_settings ORDER BY id LIMIT 1`).
+			Scan(&nightPct, &nightEnabled)
+		if nightEnabled && nightPct > 0 {
+			nightAmt := totalPrice * nightPct / 100
+			h.db.Exec(ctx, `UPDATE drivers SET balance = balance + $1 WHERE id = $2`, nightAmt, driverID)
+			h.db.Exec(ctx,
+				`INSERT INTO driver_bonus_events (driver_id, bonus_type, amount, description) VALUES ($1,'night_bonus',$2,$3)`,
+				driverID, nightAmt, fmt.Sprintf("Ночная надбавка %.0f%% — %.0f сум", nightPct, nightAmt))
+			msg, _ := json.Marshal(map[string]interface{}{"type": "night_bonus_credited", "amount": nightAmt})
+			h.hub.SendToUser(driverUserID, msg)
+		}
+	}
+
+	// ── 3. Lifetime trips + milestones ───────────────────────────────────────
+	var lifetimeTrips int
+	h.db.QueryRow(ctx,
+		`UPDATE drivers SET lifetime_trips = COALESCE(lifetime_trips,0) + 1 WHERE id = $1 RETURNING lifetime_trips`,
+		driverID).Scan(&lifetimeTrips)
+
+	var milestonesEnabled bool
+	var m50, m100, m500, m1000 float64
+	h.db.QueryRow(ctx,
+		`SELECT milestones_enabled, milestone_50_amount, milestone_100_amount, milestone_500_amount, milestone_1000_amount
+		 FROM bonus_settings ORDER BY id LIMIT 1`,
+	).Scan(&milestonesEnabled, &m50, &m100, &m500, &m1000)
+
+	if milestonesEnabled {
+		var milestoneAmt float64
+		switch lifetimeTrips {
+		case 50:
+			milestoneAmt = m50
+		case 100:
+			milestoneAmt = m100
+		case 500:
+			milestoneAmt = m500
+		case 1000:
+			milestoneAmt = m1000
+		}
+		if milestoneAmt > 0 {
+			h.db.Exec(ctx, `UPDATE drivers SET balance = balance + $1 WHERE id = $2`, milestoneAmt, driverID)
+			h.db.Exec(ctx,
+				`INSERT INTO driver_bonus_events (driver_id, bonus_type, amount, description) VALUES ($1,$2,$3,$4)`,
+				driverID, fmt.Sprintf("milestone_%d", lifetimeTrips), milestoneAmt,
+				fmt.Sprintf("🏆 Достижение %d поездок", lifetimeTrips))
+			msg, _ := json.Marshal(map[string]interface{}{
+				"type": "achievement_unlocked", "milestone": lifetimeTrips, "amount": milestoneAmt,
+			})
+			h.hub.SendToUser(driverUserID, msg)
+		}
+	}
+
+	// ── 4. Streak ────────────────────────────────────────────────────────────
+	var streakEnabled bool
+	var streakRequired int
+	var streakAmt float64
+	h.db.QueryRow(ctx,
+		`SELECT streak_bonus_enabled, streak_days_required, streak_bonus_amount FROM bonus_settings ORDER BY id LIMIT 1`,
+	).Scan(&streakEnabled, &streakRequired, &streakAmt)
+
+	today := completedAt.UTC().Truncate(24 * time.Hour).Format("2006-01-02")
+	yesterday := completedAt.UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour).Format("2006-01-02")
+
+	var lastTripDateStr *string
+	var currentStreak int
+	h.db.QueryRow(ctx,
+		`SELECT last_trip_date::text, COALESCE(streak_days,0) FROM drivers WHERE id = $1`, driverID,
+	).Scan(&lastTripDateStr, &currentStreak)
+
+	newStreak := currentStreak
+	switch {
+	case lastTripDateStr == nil:
+		newStreak = 1
+	case *lastTripDateStr == today:
+		// already counted for today — no change
+	case *lastTripDateStr == yesterday:
+		newStreak = currentStreak + 1
+	default:
+		newStreak = 1
+	}
+	h.db.Exec(ctx, `UPDATE drivers SET streak_days = $1, last_trip_date = $2::date WHERE id = $3`, newStreak, today, driverID)
+
+	if streakEnabled && streakRequired > 0 && newStreak > 0 && newStreak%streakRequired == 0 {
+		h.db.Exec(ctx, `UPDATE drivers SET balance = balance + $1 WHERE id = $2`, streakAmt, driverID)
+		h.db.Exec(ctx,
+			`INSERT INTO driver_bonus_events (driver_id, bonus_type, amount, description) VALUES ($1,'streak',$2,$3)`,
+			driverID, streakAmt, fmt.Sprintf("🔥 Стрик %d дней подряд — %.0f сум", newStreak, streakAmt))
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type": "streak_bonus_credited", "streak_days": newStreak, "amount": streakAmt,
+		})
+		h.hub.SendToUser(driverUserID, msg)
+	}
 }
 

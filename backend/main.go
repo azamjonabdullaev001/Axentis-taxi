@@ -58,6 +58,7 @@ func main() {
 	adminHandler := handlers.NewAdminHandlerFull(db, cfg, pricingService, hub, pushService)
 	wsHandler := handlers.NewWSHandler(hub, db)
 	quizHandler := handlers.NewQuizHandler(db)
+	friendsHandler := handlers.NewFriendsHandler(db, hub)
 
 	api := r.Group("/api/v1")
 	{
@@ -102,6 +103,18 @@ func main() {
 			protected.POST("/quiz/submit", quizHandler.SubmitScore)
 			protected.GET("/quiz/my-scores", quizHandler.GetMyScores)
 			protected.GET("/quiz/total-score", quizHandler.GetTotalScore)
+
+			// Bonus history for driver
+			protected.GET("/driver/bonus-history", orderHandler.GetBonusHistory)
+
+			// Friends
+			protected.GET("/drivers/search", friendsHandler.SearchDriver)
+			protected.POST("/driver/friends/request", friendsHandler.SendRequest)
+			protected.PUT("/driver/friends/:id/accept", friendsHandler.AcceptRequest)
+			protected.DELETE("/driver/friends/:id/decline", friendsHandler.DeclineRequest)
+			protected.GET("/driver/friends", friendsHandler.GetFriends)
+			protected.GET("/driver/friends/requests", friendsHandler.GetPendingRequests)
+			protected.POST("/orders/:id/transfer", friendsHandler.TransferOrder)
 		}
 
 		adminAPI := api.Group("/admin")
@@ -134,6 +147,11 @@ func main() {
 			adminAPI.GET("/referral-settings", adminHandler.GetReferralSettings)
 			adminAPI.PUT("/referral-settings", adminHandler.UpdateReferralSettings)
 			adminAPI.GET("/referrals", adminHandler.GetReferrals)
+
+			// Bonus program
+			adminAPI.GET("/bonus-settings", adminHandler.GetBonusSettings)
+			adminAPI.PUT("/bonus-settings", adminHandler.UpdateBonusSettings)
+			adminAPI.GET("/bonus-events", adminHandler.GetBonusEvents)
 		}
 
 		api.POST("/admin/login", adminHandler.Login)

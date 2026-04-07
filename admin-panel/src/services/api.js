@@ -51,6 +51,10 @@ export const adminAPI = {
   getReferralSettings: () => api.get('/admin/referral-settings'),
   updateReferralSettings: (d) => api.put('/admin/referral-settings', d),
   getReferrals: () => api.get('/admin/referrals'),
+  // Bonus system
+  getBonusSettings: () => api.get('/admin/bonus-settings'),
+  updateBonusSettings: (d) => api.put('/admin/bonus-settings', d),
+  getBonusEvents: () => api.get('/admin/bonus-events'),
 }
 
 export default api

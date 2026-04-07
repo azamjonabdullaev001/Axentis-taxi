@@ -491,15 +491,15 @@ export default function HomeScreen() {
       const prevH = display.heading ?? 0;
       const targetH = target.heading ?? 0;
       let hDiff = ((targetH - prevH) % 360 + 540) % 360 - 180;
-      const nextHeading = (prevH + hDiff * 0.35 + 360) % 360;
+      const nextHeading = (prevH + hDiff * 0.6 + 360) % 360;
       const next = {
-        latitude:  lerp(display.latitude,  target.latitude,  0.18),
-        longitude: lerp(display.longitude, target.longitude, 0.18),
+        latitude:  lerp(display.latitude,  target.latitude,  0.5),
+        longitude: lerp(display.longitude, target.longitude, 0.5),
         heading:   nextHeading,
       };
       driverDisplayRef.current = next;
       setDriverDisplayLocation({ ...next });
-    }, 16);
+    }, 30);
 
     return () => clearInterval(smoothTimerRef.current);
   }, [orderStatus]);

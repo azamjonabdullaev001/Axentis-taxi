@@ -34,6 +34,8 @@ type Driver struct {
 	CurrentHeading      *float64   `json:"current_heading,omitempty"`
 	AverageRating       float64    `json:"average_rating"`
 	RatingCount         int        `json:"rating_count"`
+	LifetimeTrips       int        `json:"lifetime_trips"`
+	StreakDays          int        `json:"streak_days"`
 	LastSeen            time.Time  `json:"last_seen"`
 	CreatedAt           time.Time  `json:"created_at"`
 	User                *User      `json:"user,omitempty"`
@@ -48,7 +50,47 @@ type ReferralSettings struct {
 	DefaultCommissionPct float64   `json:"default_commission_pct"`
 	ReducedCommissionPct float64   `json:"reduced_commission_pct"`
 	WeeklyBonusAmount    float64   `json:"weekly_bonus_amount"`
+	CashbackPct          float64   `json:"cashback_pct"`
 	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+// BonusSettings controls night-shift, streak, and milestone bonuses.
+type BonusSettings struct {
+	ID                  int       `json:"id"`
+	NightBonusPct       float64   `json:"night_bonus_pct"`
+	NightBonusEnabled   bool      `json:"night_bonus_enabled"`
+	StreakDaysRequired  int       `json:"streak_days_required"`
+	StreakBonusAmount   float64   `json:"streak_bonus_amount"`
+	StreakBonusEnabled  bool      `json:"streak_bonus_enabled"`
+	Milestone50Amount  float64   `json:"milestone_50_amount"`
+	Milestone100Amount float64   `json:"milestone_100_amount"`
+	Milestone500Amount float64   `json:"milestone_500_amount"`
+	Milestone1000Amount float64  `json:"milestone_1000_amount"`
+	MilestonesEnabled  bool      `json:"milestones_enabled"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// BonusEvent represents a driver_bonus_events row.
+type BonusEvent struct {
+	ID          string    `json:"id"`
+	DriverID    string    `json:"driver_id"`
+	BonusType   string    `json:"bonus_type"`
+	Amount      float64   `json:"amount"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	// Enriched
+	DriverName  string    `json:"driver_name,omitempty"`
+	DriverPhone string    `json:"driver_phone,omitempty"`
+}
+
+// CashbackTransaction is a per-trip cashback record.
+type CashbackTransaction struct {
+	ID        string    `json:"id"`
+	DriverID  string    `json:"driver_id"`
+	OrderID   *string   `json:"order_id"`
+	Amount    float64   `json:"amount"`
+	Pct       float64   `json:"pct"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type ReferralBonus struct {
@@ -57,6 +99,48 @@ type ReferralBonus struct {
 	WeekStart string    `json:"week_start"`
 	Amount    float64   `json:"amount"`
 	PaidAt    time.Time `json:"paid_at"`
+}
+
+// DriverFriend represents a friendship row in driver_friends table.
+type DriverFriend struct {
+	ID          string    `json:"id"`
+	RequesterID string    `json:"requester_id"`
+	RecipientID string    `json:"recipient_id"`
+	Status      string    `json:"status"` // pending | accepted | declined
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// FriendEntry is the enriched row returned in list endpoints.
+type FriendEntry struct {
+	FriendshipID string  `json:"friendship_id"`
+	DriverID     string  `json:"driver_id"`
+	FirstName    string  `json:"first_name"`
+	LastName     string  `json:"last_name"`
+	Phone        string  `json:"phone"`
+	AvatarURL    *string `json:"avatar_url"`
+	CarNumber    string  `json:"car_number"`
+}
+
+// FriendRequest is used in the pending-requests list.
+type FriendRequest struct {
+	RequestID   string  `json:"request_id"`
+	RequesterID string  `json:"requester_id"`
+	FirstName   string  `json:"first_name"`
+	LastName    string  `json:"last_name"`
+	Phone       string  `json:"phone"`
+	AvatarURL   *string `json:"avatar_url"`
+	CarNumber   string  `json:"car_number"`
+}
+
+// DriverSearchResult is returned by the driver search endpoint.
+type DriverSearchResult struct {
+	DriverID  string  `json:"driver_id"`
+	UserID    string  `json:"user_id"`
+	FirstName string  `json:"first_name"`
+	LastName  string  `json:"last_name"`
+	Phone     string  `json:"phone"`
+	AvatarURL *string `json:"avatar_url"`
+	CarNumber string  `json:"car_number"`
 }
 
 type Rating struct {

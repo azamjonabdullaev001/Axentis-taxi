@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { authAPI, driverAPI } from '../services/api';
+import { authAPI, driverAPI, friendsAPI } from '../services/api';
 import { buildAvatarUrl } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../config';
@@ -32,16 +32,95 @@ export default function ProfileScreen() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
 
+  // Friends
+  const [friendsExpanded, setFriendsExpanded] = useState(false);
+  const [friendSearch, setFriendSearch] = useState('');
+  const [friendSearchResult, setFriendSearchResult] = useState(null);
+  const [friendSearchLoading, setFriendSearchLoading] = useState(false);
+  const [friendsList, setFriendsList] = useState([]);
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [friendsLoading, setFriendsLoading] = useState(false);
+
   // Referral
   const [referralExpanded, setReferralExpanded] = useState(false);
   const [referralInput, setReferralInput] = useState('');
   const [referralStep, setReferralStep] = useState('input'); // 'input' | 'choose'
   const [applyingReferral, setApplyingReferral] = useState(false);
 
+  // Bonus history
+  const [bonusExpanded, setBonusExpanded] = useState(false);
+  const [bonusEvents, setBonusEvents] = useState([]);
+  const [bonusStats, setBonusStats] = useState({ streak_days: 0, lifetime_trips: 0 });
+  const [loadingBonuses, setLoadingBonuses] = useState(false);
+
   useEffect(() => {
     driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
     loadHistory();
   }, []);
+
+  async function loadFriendsData() {
+    setFriendsLoading(true);
+    try {
+      const [friendsRes, requestsRes] = await Promise.all([
+        friendsAPI.getFriends(),
+        friendsAPI.getPendingRequests(),
+      ]);
+      setFriendsList(friendsRes.data.friends || []);
+      setPendingRequests(requestsRes.data.requests || []);
+    } catch {}
+    setFriendsLoading(false);
+  }
+
+  async function loadBonusHistory() {
+    setLoadingBonuses(true);
+    try {
+      const { data } = await driverAPI.getBonusHistory();
+      setBonusEvents(data.events || []);
+      setBonusStats({ streak_days: data.streak_days || 0, lifetime_trips: data.lifetime_trips || 0 });
+    } catch {}
+    setLoadingBonuses(false);
+  }
+
+  async function handleSearchFriend() {
+    if (!friendSearch.trim()) return;
+    setFriendSearchLoading(true);
+    setFriendSearchResult(null);
+    try {
+      const { data } = await friendsAPI.searchDriver(friendSearch.trim());
+      setFriendSearchResult(data.driver);
+    } catch {
+      setFriendSearchResult({ notFound: true });
+    }
+    setFriendSearchLoading(false);
+  }
+
+  async function handleSendFriendRequest(driverID) {
+    try {
+      await friendsAPI.sendRequest(driverID);
+      Alert.alert('✅', t(lang, 'requestSent'));
+      setFriendSearchResult(null);
+      setFriendSearch('');
+    } catch (e) {
+      Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+    }
+  }
+
+  async function handleAcceptFriendRequest(requestID) {
+    try {
+      await friendsAPI.acceptRequest(requestID);
+      Alert.alert('✅', t(lang, 'friendAdded'));
+      loadFriendsData();
+    } catch (e) {
+      Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+    }
+  }
+
+  async function handleDeclineFriendRequest(requestID) {
+    try {
+      await friendsAPI.declineRequest(requestID);
+      loadFriendsData();
+    } catch {}
+  }
 
   async function loadHistory() {
     setLoadingHistory(true);
@@ -271,6 +350,8 @@ export default function ProfileScreen() {
                 <Text style={{ color: '#2E7D32', fontWeight: '700', fontSize: 14 }}>
                   {driver.referral_benefit_type === 'commission'
                     ? '✅ Применено: сниженная комиссия'
+                    : driver.referral_benefit_type === 'cashback'
+                    ? `✅ ${t(lang, 'cashbackApplied')}`
                     : '✅ Применено: еженедельный бонус'}
                 </Text>
                 {driver.referred_by ? (
@@ -351,6 +432,28 @@ export default function ProfileScreen() {
                       <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>Получайте фиксированный бонус каждую неделю на баланс</Text>
                     </TouchableOpacity>
 
+                    <TouchableOpacity
+                      style={[s.benefitCard, { borderColor: '#10B981', marginTop: 10 }]}
+                      disabled={applyingReferral}
+                      onPress={async () => {
+                        setApplyingReferral(true);
+                        try {
+                          await driverAPI.applyReferral(referralInput, 'cashback');
+                          const profile = await authAPI.getProfile();
+                          setUser(profile.data.user);
+                          Alert.alert('Готово', 'Кэшбэк активирован!');
+                          setReferralStep('input');
+                        } catch (e) {
+                          Alert.alert('Ошибка', e?.response?.data?.error || 'Не удалось применить');
+                        } finally {
+                          setApplyingReferral(false);
+                        }
+                      }}
+                    >
+                      <Text style={{ color: '#10B981', fontWeight: '800', fontSize: 15 }}>💰 {t(lang, 'cashback')}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>{t(lang, 'cashbackDesc')}</Text>
+                    </TouchableOpacity>
+
                     {applyingReferral && <ActivityIndicator color={colors.primary} style={{ marginTop: 12 }} />}
 
                     <TouchableOpacity onPress={() => setReferralStep('input')} style={{ marginTop: 10, alignItems: 'center' }}>
@@ -360,6 +463,220 @@ export default function ProfileScreen() {
                 )}
               </>
             )}
+          </View>
+        )}
+      </View>
+
+      {/* ── Bonus History section ── */}
+      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <TouchableOpacity
+          style={s.row}
+          onPress={() => {
+            const next = !bonusExpanded;
+            setBonusExpanded(next);
+            if (next) loadBonusHistory();
+          }}
+        >
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#F59E0B20' }]}>
+              <Ionicons name="trophy-outline" size={18} color="#F59E0B" />
+            </View>
+            <View>
+              <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'bonusHistory')}</Text>
+              {bonusStats.lifetime_trips > 0 && (
+                <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                  🔥 {bonusStats.streak_days} {t(lang, 'streakDays')} · {bonusStats.lifetime_trips} {t(lang, 'lifetimeTrips')}
+                </Text>
+              )}
+            </View>
+          </View>
+          <Ionicons name={bonusExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        {bonusExpanded && (
+          <View style={{ paddingHorizontal: 4, paddingBottom: 12 }}>
+            {/* Stats cards */}
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+              <View style={{ flex: 1, backgroundColor: colors.background, borderRadius: 10, padding: 12, alignItems: 'center' }}>
+                <Text style={{ color: '#F59E0B', fontSize: 24, fontWeight: '900' }}>{bonusStats.streak_days}</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 11 }}>🔥 {t(lang, 'streakDays')}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: colors.background, borderRadius: 10, padding: 12, alignItems: 'center' }}>
+                <Text style={{ color: '#10B981', fontSize: 24, fontWeight: '900' }}>{bonusStats.lifetime_trips}</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 11 }}>🚕 {t(lang, 'lifetimeTrips')}</Text>
+              </View>
+            </View>
+
+            {loadingBonuses ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : bonusEvents.length === 0 ? (
+              <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 8 }}>{t(lang, 'noBonuses')}</Text>
+            ) : (
+              bonusEvents.slice(0, 10).map((ev, i) => (
+                <View key={ev.id || i} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: i < Math.min(bonusEvents.length, 10) - 1 ? 1 : 0, borderBottomColor: colors.border }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                      {ev.bonus_type === 'cashback' ? '💰' : ev.bonus_type === 'night_bonus' ? '🌙' : ev.bonus_type === 'streak' ? '🔥' : '🏆'}{' '}
+                      {ev.description || ev.bonus_type}
+                    </Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>{ev.created_at ? new Date(ev.created_at).toLocaleDateString('ru-RU') : ''}</Text>
+                  </View>
+                  <Text style={{ color: '#10B981', fontWeight: '800', fontSize: 14 }}>+{Number(ev.amount || 0).toLocaleString('ru-RU')} {t(lang, 'sum')}</Text>
+                </View>
+              ))
+            )}
+          </View>
+        )}
+      </View>
+
+      {/* ── Friends section ── */}
+      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <TouchableOpacity
+          style={s.row}
+          onPress={() => {
+            const next = !friendsExpanded;
+            setFriendsExpanded(next);
+            if (next) loadFriendsData();
+          }}
+        >
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#5B8DEE20' }]}>
+              <Ionicons name="people-outline" size={18} color="#5B8DEE" />
+            </View>
+            <View>
+              <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'friends')}</Text>
+              {friendsList.length > 0 && (
+                <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                  {friendsList.length} {lang === 'uz' ? "do'st" : 'друзей'}
+                </Text>
+              )}
+            </View>
+          </View>
+          <Ionicons name={friendsExpanded ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        {friendsExpanded && (
+          <View style={{ paddingHorizontal: 12, paddingBottom: 16 }}>
+
+            {/* Search input */}
+            <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6 }}>{t(lang, 'searchByPhone')}</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+              <TextInput
+                style={[s.referralInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background, flex: 1, letterSpacing: 0 }]}
+                value={friendSearch}
+                onChangeText={setFriendSearch}
+                keyboardType="phone-pad"
+                placeholder="+998 XX XXX XX XX"
+                placeholderTextColor={colors.textSecondary}
+                returnKeyType="search"
+                onSubmitEditing={handleSearchFriend}
+              />
+              <TouchableOpacity
+                style={[s.referralBtn, { backgroundColor: friendSearch.length >= 9 ? colors.primary : colors.border }]}
+                disabled={friendSearch.length < 9 || friendSearchLoading}
+                onPress={handleSearchFriend}
+              >
+                {friendSearchLoading
+                  ? <ActivityIndicator size="small" color="#000" />
+                  : <Text style={{ color: '#000', fontWeight: '700' }}>{lang === 'uz' ? 'Qidirish' : 'Найти'}</Text>}
+              </TouchableOpacity>
+            </View>
+
+            {/* Search result */}
+            {friendSearchResult && (
+              friendSearchResult.notFound
+                ? <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 12 }}>
+                    {lang === 'uz' ? "Haydovchi topilmadi" : 'Водитель не найден'}
+                  </Text>
+                : <View style={[s.friendCard, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                      {friendSearchResult.avatar_url
+                        ? <Image source={{ uri: buildAvatarUrl(friendSearchResult.avatar_url) }} style={s.friendAvatar} />
+                        : <View style={[s.friendAvatar, { backgroundColor: '#5B8DEE', justifyContent: 'center', alignItems: 'center' }]}>
+                            <Text style={{ color: '#fff', fontWeight: '700' }}>{(friendSearchResult.first_name?.[0] || '?').toUpperCase()}</Text>
+                          </View>}
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.text, fontWeight: '600' }}>{friendSearchResult.first_name} {friendSearchResult.last_name}</Text>
+                        <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{friendSearchResult.phone}</Text>
+                        <Text style={{ color: colors.primary, fontSize: 12 }}>🚗 {friendSearchResult.car_number}</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => handleSendFriendRequest(friendSearchResult.driver_id)}
+                      style={{ backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}
+                    >
+                      <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{t(lang, 'addFriend')}</Text>
+                    </TouchableOpacity>
+                  </View>
+            )}
+
+            {/* Pending incoming requests */}
+            {friendsLoading
+              ? <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
+              : (
+                <>
+                  {pendingRequests.length > 0 && (
+                    <>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8, marginTop: 4 }}>{t(lang, 'pendingRequests')}</Text>
+                      {pendingRequests.map((req) => (
+                        <View key={req.request_id} style={[s.friendCard, { borderColor: '#FFCC0040', backgroundColor: colors.background, marginBottom: 8 }]}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                            {req.avatar_url
+                              ? <Image source={{ uri: buildAvatarUrl(req.avatar_url) }} style={s.friendAvatar} />
+                              : <View style={[s.friendAvatar, { backgroundColor: '#5B8DEE', justifyContent: 'center', alignItems: 'center' }]}>
+                                  <Text style={{ color: '#fff', fontWeight: '700' }}>{(req.first_name?.[0] || '?').toUpperCase()}</Text>
+                                </View>}
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.text, fontWeight: '600' }}>{req.first_name} {req.last_name}</Text>
+                              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{req.phone}</Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                            <TouchableOpacity
+                              onPress={() => handleAcceptFriendRequest(req.request_id)}
+                              style={{ backgroundColor: '#22C55E', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}
+                            >
+                              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>✓</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => handleDeclineFriendRequest(req.request_id)}
+                              style={{ backgroundColor: '#EF4444', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}
+                            >
+                              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>✕</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </>
+                  )}
+
+                  {/* Accepted friends list */}
+                  {friendsList.length === 0 && pendingRequests.length === 0 ? (
+                    <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 8 }}>{t(lang, 'noFriends')}</Text>
+                  ) : friendsList.length > 0 ? (
+                    <>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8, marginTop: 4 }}>{t(lang, 'friends')}</Text>
+                      {friendsList.map((f) => (
+                        <View key={f.friendship_id} style={[s.friendCard, { borderColor: '#22C55E40', backgroundColor: colors.background, marginBottom: 8 }]}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                            {f.avatar_url
+                              ? <Image source={{ uri: buildAvatarUrl(f.avatar_url) }} style={s.friendAvatar} />
+                              : <View style={[s.friendAvatar, { backgroundColor: '#5B8DEE', justifyContent: 'center', alignItems: 'center' }]}>
+                                  <Text style={{ color: '#fff', fontWeight: '700' }}>{(f.first_name?.[0] || '?').toUpperCase()}</Text>
+                                </View>}
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.text, fontWeight: '600' }}>{f.first_name} {f.last_name}</Text>
+                              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{f.phone}</Text>
+                              <Text style={{ color: colors.primary, fontSize: 12 }}>🚗 {f.car_number}</Text>
+                            </View>
+                          </View>
+                          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#22C55E' }} />
+                        </View>
+                      ))}
+                    </>
+                  ) : null}
+                </>
+              )}
           </View>
         )}
       </View>
@@ -470,6 +787,8 @@ function makeStyles(colors) {
     logoutBtn: { borderWidth: 1.5, borderRadius: 14, padding: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
     ratingSummaryRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, gap: 4 },
     ratingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1 },
+    friendCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderRadius: 12, padding: 10, marginBottom: 10 },
+    friendAvatar: { width: 40, height: 40, borderRadius: 20 },
     modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
     modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
     modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 20 },

@@ -256,4 +256,63 @@ CREATE TABLE IF NOT EXISTS quiz_scores (
     played_at   TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_quiz_scores_user_id ON quiz_scores (user_id, played_at DESC);
+
+-- Driver friends / social network
+CREATE TABLE IF NOT EXISTS driver_friends (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    requester_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    recipient_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    status       VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined')),
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(requester_id, recipient_id)
+);
+CREATE INDEX IF NOT EXISTS idx_driver_friends_recipient ON driver_friends (recipient_id, status);
+
+-- Cashback % for the 'cashback' benefit type
+ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS cashback_pct DECIMAL(5,2) DEFAULT 10.0;
+
+-- Driver lifetime stats for milestones and streaks
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS lifetime_trips INTEGER DEFAULT 0;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS streak_days INTEGER DEFAULT 0;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS last_trip_date DATE;
+
+-- General bonus program settings (night, streak, milestones)
+CREATE TABLE IF NOT EXISTS bonus_settings (
+    id                   SERIAL PRIMARY KEY,
+    night_bonus_pct      DECIMAL(5,2)  DEFAULT 15.0,
+    night_bonus_enabled  BOOLEAN       DEFAULT false,
+    streak_days_required INTEGER       DEFAULT 7,
+    streak_bonus_amount  DECIMAL(14,2) DEFAULT 50000,
+    streak_bonus_enabled BOOLEAN       DEFAULT false,
+    milestone_50_amount  DECIMAL(14,2) DEFAULT 25000,
+    milestone_100_amount DECIMAL(14,2) DEFAULT 50000,
+    milestone_500_amount DECIMAL(14,2) DEFAULT 200000,
+    milestone_1000_amount DECIMAL(14,2) DEFAULT 500000,
+    milestones_enabled   BOOLEAN       DEFAULT false,
+    updated_at           TIMESTAMPTZ   DEFAULT NOW()
+);
+INSERT INTO bonus_settings DEFAULT VALUES
+WHERE NOT EXISTS (SELECT 1 FROM bonus_settings);
+
+-- Per-trip cashback records
+CREATE TABLE IF NOT EXISTS cashback_transactions (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_id  UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    order_id   UUID REFERENCES orders(id) ON DELETE SET NULL,
+    amount     DECIMAL(14,2) NOT NULL,
+    pct        DECIMAL(5,2)  NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cashback_driver ON cashback_transactions (driver_id, created_at DESC);
+
+-- All bonus payouts: streaks, milestones, night bonuses, etc.
+CREATE TABLE IF NOT EXISTS driver_bonus_events (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_id   UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    bonus_type  VARCHAR(50) NOT NULL,
+    amount      DECIMAL(14,2) NOT NULL,
+    description TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bonus_events_driver ON driver_bonus_events (driver_id, created_at DESC);
 `
