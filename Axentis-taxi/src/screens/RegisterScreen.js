@@ -59,146 +59,172 @@ export default function RegisterScreen({ navigation }) {
         behavior="padding"
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
-        <ScrollView contentContainerStyle={[s.scroll, { paddingTop: Math.max(insets.top, 12), paddingBottom: 72 + insets.bottom }]} keyboardShouldPersistTaps="handled">
-        <View style={s.header}>
-          <Text style={s.logo}>🚕</Text>
-          <Text style={s.title}>Axentis Taxi</Text>
-          <Text style={s.subtitle}>{t(lang,'register')}</Text>
-        </View>
-
-        <View style={s.form}>
-          <Input label={t(lang,'firstName')} value={form.first_name}
-            onChangeText={(v) => setField('first_name', v)} colors={colors} />
-          <Input label={t(lang,'lastName')} value={form.last_name}
-            onChangeText={(v) => setField('last_name', v)} colors={colors} />
-
-          <Text style={s.label}>{t(lang,'phone')}</Text>
-          <View style={s.phoneRow}>
-            <View style={s.prefix}>
-              <Text style={s.prefixText}>+998</Text>
+        <ScrollView contentContainerStyle={[s.scroll, { paddingBottom: 40 + insets.bottom }]} keyboardShouldPersistTaps="handled">
+          <View style={s.header}>
+            <View style={s.logoOuter}>
+              <View style={s.logoCircle}>
+                <Ionicons name="car-sport" size={36} color="#000" />
+              </View>
             </View>
-            <TextInput
-              style={[s.phoneInput, { color: colors.text, borderColor: colors.border }]}
-              value={form.phone.replace('+998','')}
-              onChangeText={(v) => setField('phone', v.replace(/[^0-9]/g,''))}
-              keyboardType="phone-pad"
-              maxLength={9}
-              placeholder="90 123 45 67"
-              placeholderTextColor={colors.textSecondary}
-            />
+            <Text style={s.title}>Axentis Taxi</Text>
+            <Text style={s.subtitle}>{t(lang,'register')}</Text>
           </View>
 
-          <PasswordInput
-            label={t(lang,'password')}
-            value={form.password}
-            onChangeText={(v) => setField('password', v)}
-            visible={passwordVisible}
-            onToggleVisibility={() => setPasswordVisible((value) => !value)}
-            colors={colors}
-            placeholder="Минимум 8 символов"
-          />
-          <PasswordInput
-            label={t(lang,'confirmPassword')}
-            value={form.confirm_password}
-            onChangeText={(v) => setField('confirm_password', v)}
-            visible={confirmPasswordVisible}
-            onToggleVisibility={() => setConfirmPasswordVisible((value) => !value)}
-            colors={colors}
-          />
+          <View style={s.card}>
+            <Text style={s.label}>{t(lang,'firstName')}</Text>
+            <TextInput
+              style={s.input}
+              value={form.first_name}
+              onChangeText={(v) => setField('first_name', v)}
+              placeholderTextColor="#505068"
+            />
 
-          <TouchableOpacity style={[s.btn, loading && s.btnDisabled]}
-            onPress={handleRegister} disabled={loading}>
-            {loading
-              ? <ActivityIndicator color="#000" />
-              : <Text style={s.btnText}>{t(lang,'register')}</Text>}
-          </TouchableOpacity>
+            <Text style={s.label}>{t(lang,'lastName')}</Text>
+            <TextInput
+              style={s.input}
+              value={form.last_name}
+              onChangeText={(v) => setField('last_name', v)}
+              placeholderTextColor="#505068"
+            />
+
+            <Text style={s.label}>{t(lang,'phone')}</Text>
+            <View style={s.phoneRow}>
+              <View style={s.prefix}>
+                <Text style={s.prefixText}>+998</Text>
+              </View>
+              <TextInput
+                style={s.phoneInput}
+                value={form.phone.replace('+998','')}
+                onChangeText={(v) => setField('phone', v.replace(/[^0-9]/g,''))}
+                keyboardType="phone-pad"
+                maxLength={9}
+                placeholder="90 123 45 67"
+                placeholderTextColor="#505068"
+              />
+            </View>
+
+            <Text style={s.label}>{t(lang,'password')}</Text>
+            <View style={s.passwordWrap}>
+              <TextInput
+                style={s.passwordInput}
+                value={form.password}
+                onChangeText={(v) => setField('password', v)}
+                secureTextEntry={!passwordVisible}
+                placeholder="Минимум 8 символов"
+                placeholderTextColor="#505068"
+              />
+              <TouchableOpacity style={s.eyeBtn} onPress={() => setPasswordVisible((v) => !v)}>
+                <Ionicons name={passwordVisible ? 'eye-outline' : 'eye-off-outline'} size={20} color="#6B6B80" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={s.label}>{t(lang,'confirmPassword')}</Text>
+            <View style={s.passwordWrap}>
+              <TextInput
+                style={s.passwordInput}
+                value={form.confirm_password}
+                onChangeText={(v) => setField('confirm_password', v)}
+                secureTextEntry={!confirmPasswordVisible}
+                placeholder="Минимум 8 символов"
+                placeholderTextColor="#505068"
+              />
+              <TouchableOpacity style={s.eyeBtn} onPress={() => setConfirmPasswordVisible((v) => !v)}>
+                <Ionicons name={confirmPasswordVisible ? 'eye-outline' : 'eye-off-outline'} size={20} color="#6B6B80" />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[s.btn, loading && s.btnDisabled]}
+              onPress={handleRegister}
+              disabled={loading}
+              activeOpacity={0.8}
+            >
+              {loading
+                ? <ActivityIndicator color="#000" />
+                : <Text style={s.btnText}>{t(lang,'register')}</Text>}
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity style={s.linkRow} onPress={() => navigation.navigate('Login')}>
             <Text style={s.link}>{t(lang,'haveAccount')} <Text style={s.linkBold}>{t(lang,'login')}</Text></Text>
           </TouchableOpacity>
-        </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function Input({ label, colors, ...props }) {
-  return (
-    <View style={{ marginBottom: 14 }}>
-      <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 6 }}>{label}</Text>
-      <TextInput
-        style={{
-          borderWidth: 1, borderColor: colors.border, borderRadius: 12,
-          padding: 14, fontSize: 15, color: colors.text, backgroundColor: colors.card,
-        }}
-        placeholderTextColor={colors.textSecondary}
-        {...props}
-      />
-    </View>
-  );
-}
-
-function PasswordInput({ label, colors, visible, onToggleVisibility, ...props }) {
-  return (
-    <View style={{ marginBottom: 14 }}>
-      <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 6 }}>{label}</Text>
-      <View style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 12,
-        backgroundColor: colors.card,
-      }}>
-        <TextInput
-          style={{
-            flex: 1,
-            padding: 14,
-            fontSize: 15,
-            color: colors.text,
-          }}
-          placeholderTextColor={colors.textSecondary}
-          secureTextEntry={!visible}
-          {...props}
-        />
-        <TouchableOpacity style={{ paddingHorizontal: 14, paddingVertical: 12 }} onPress={onToggleVisibility}>
-          <Ionicons
-            name={visible ? 'eye-outline' : 'eye-off-outline'}
-            size={20}
-            color={colors.textSecondary}
-          />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
 function makeStyles(colors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background },
+    container: { flex: 1, backgroundColor: '#0B0B11' },
     scroll: { flexGrow: 1, paddingHorizontal: 24 },
-    header: { alignItems: 'center', marginTop: 40, marginBottom: 32 },
-    logo: { fontSize: 56 },
-    title: { fontSize: 26, fontWeight: '800', color: colors.primary, marginTop: 8 },
-    subtitle: { fontSize: 16, color: colors.textSecondary, marginTop: 4 },
-    form: {},
-    label: { color: colors.textSecondary, fontSize: 13, marginBottom: 6 },
-    phoneRow: { flexDirection: 'row', marginBottom: 14 },
+    header: { alignItems: 'center', marginTop: 32, marginBottom: 28 },
+    logoOuter: {
+      width: 96, height: 96, borderRadius: 48,
+      borderWidth: 2, borderColor: 'rgba(255,204,0,0.15)',
+      justifyContent: 'center', alignItems: 'center',
+      marginBottom: 16,
+    },
+    logoCircle: {
+      width: 78, height: 78, borderRadius: 39,
+      backgroundColor: colors.primary,
+      justifyContent: 'center', alignItems: 'center',
+      shadowColor: '#FFCC00',
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.4,
+      shadowRadius: 18,
+      elevation: 14,
+    },
+    title: { fontSize: 26, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.8, marginBottom: 4 },
+    subtitle: { fontSize: 14, color: '#6E6E82', fontWeight: '500' },
+    card: {
+      backgroundColor: '#12121A',
+      borderRadius: 20,
+      padding: 22,
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.05)',
+    },
+    label: { color: '#8A8A9E', fontSize: 13, marginBottom: 8, fontWeight: '600', letterSpacing: 0.2 },
+    input: {
+      borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.06)', borderRadius: 14,
+      paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: '#FFFFFF',
+      backgroundColor: '#1A1A26', marginBottom: 18,
+    },
+    phoneRow: { flexDirection: 'row', marginBottom: 18 },
     prefix: {
-      backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 14,
-      justifyContent: 'center', marginRight: 8,
+      backgroundColor: colors.primary, borderRadius: 14,
+      paddingHorizontal: 16, justifyContent: 'center', marginRight: 10,
+      shadowColor: '#FFCC00',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 4,
     },
-    prefixText: { fontWeight: '700', fontSize: 15, color: '#000' },
-    phoneInput: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15, backgroundColor: colors.card },
+    prefixText: { fontWeight: '800', fontSize: 15, color: '#000' },
+    phoneInput: {
+      flex: 1, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.06)', borderRadius: 14,
+      paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, backgroundColor: '#1A1A26', color: '#FFFFFF',
+    },
+    passwordWrap: {
+      flexDirection: 'row', alignItems: 'center',
+      borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.06)', borderRadius: 14,
+      marginBottom: 18, backgroundColor: '#1A1A26',
+    },
+    passwordInput: { flex: 1, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: '#FFFFFF' },
+    eyeBtn: { paddingHorizontal: 14, paddingVertical: 12 },
     btn: {
-      backgroundColor: colors.primary, borderRadius: 14, padding: 16,
-      alignItems: 'center', marginTop: 8,
+      backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 16,
+      alignItems: 'center', marginTop: 4,
+      shadowColor: '#FFCC00',
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.35,
+      shadowRadius: 16,
+      elevation: 10,
     },
-    btnDisabled: { opacity: 0.7 },
-    btnText: { fontWeight: '800', fontSize: 16, color: '#000' },
-    linkRow: { alignItems: 'center', marginTop: 20 },
-    link: { color: colors.textSecondary, fontSize: 14 },
+    btnDisabled: { opacity: 0.5 },
+    btnText: { fontWeight: '800', fontSize: 16, color: '#000', letterSpacing: 0.5 },
+    linkRow: { alignItems: 'center', marginTop: 24 },
+    link: { color: '#6E6E82', fontSize: 14 },
     linkBold: { color: colors.primary, fontWeight: '700' },
   });
 }
