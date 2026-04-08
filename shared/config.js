@@ -5,7 +5,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-const BACKEND_HOST = '84.247.138.53:8181';   // ← меняй здесь
+const BACKEND_HOST = '84.247.138.53:8080';   // ← меняй здесь
 
 const API_BASE = `http://${BACKEND_HOST}/api/v1`;
 const WS_BASE  = `ws://${BACKEND_HOST}/ws`;
