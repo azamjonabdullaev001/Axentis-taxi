@@ -4,6 +4,7 @@ import {
   ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView,
   Platform, Modal, FlatList,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
@@ -28,7 +29,12 @@ export default function RegisterScreen({ navigation }) {
     first_name: '', last_name: '', phone: '',
     password: '', confirm_password: '',
     car_region: '01', car_number_suffix: '',
-    pinfl: '',
+  });
+  const [docs, setDocs] = useState({
+    selfie: null,
+    license_front: null,
+    license_back: null,
+    id_document: null,
   });
   const [loading, setLoading] = useState(false);
   const [regionModal, setRegionModal] = useState(false);
@@ -42,6 +48,33 @@ export default function RegisterScreen({ navigation }) {
     return `${form.car_region}${normalizeCarSuffix(form.car_number_suffix)}`;
   }
 
+  async function pickImageFor(key, label) {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      Alert.alert(t(lang, 'error'), 'Нужен доступ к галерее');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    const asset = result.assets[0];
+    const ext = (asset.fileName?.split('.').pop() || 'jpg').toLowerCase();
+    setDocs((prev) => ({
+      ...prev,
+      [key]: {
+        uri: asset.uri,
+        type: asset.mimeType || `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+        name: asset.fileName || `${key}.${ext}`,
+        label,
+      },
+    }));
+  }
+
   async function handleRegister() {
     if (!form.first_name.trim()) { Alert.alert(t(lang,'error'), 'Введите имя'); return; }
     if (!form.last_name.trim()) { Alert.alert(t(lang,'error'), 'Введите фамилию'); return; }
@@ -53,19 +86,32 @@ export default function RegisterScreen({ navigation }) {
     if (!isValidCarSuffix(form.car_number_suffix)) {
       Alert.alert(t(lang,'error'), 'Введите номер автомобиля в едином формате: 4-6 символов, буквы и цифры вместе'); return;
     }
+    if (!docs.selfie || !docs.license_front || !docs.license_back || !docs.id_document) {
+      Alert.alert(t(lang, 'error'), 'Загрузите selfie, права (2 стороны) и паспорт/ID');
+      return;
+    }
 
     const phone = form.phone.startsWith('+998') ? form.phone : `+998${form.phone}`;
     setLoading(true);
     try {
-      await register({
+      const res = await register({
         first_name: form.first_name,
         last_name: form.last_name,
         phone,
         password: form.password,
         confirm_password: form.confirm_password,
         car_number: buildCarNumber(),
-        pinfl: form.pinfl.trim(),
+        selfie: docs.selfie,
+        license_front: docs.license_front,
+        license_back: docs.license_back,
+        id_document: docs.id_document,
       });
+
+      if (res?.registration_status === 'pending') {
+        Alert.alert('Registration sent', 'Your account is waiting for admin approval.', [
+          { text: 'OK', onPress: () => navigation.navigate('Login') },
+        ]);
+      }
     } catch (e) {
       Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Ошибка регистрации'));
     } finally {
@@ -164,18 +210,25 @@ export default function RegisterScreen({ navigation }) {
         </Text>
         <Text style={[s.carHint, { color: colors.textSecondary }]}>После кода региона вводите номер слитно: например A123BC, AB123C или ABC123</Text>
 
-        {/* PINFL / JSHSHIR */}
+        {/* Driver documents */}
         <View style={{ marginBottom: 14 }}>
-          <Text style={s.label}>ПИНФЛ (ЖШШИР) — 14 цифр</Text>
-          <TextInput
-            style={[s.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
-            value={form.pinfl}
-            onChangeText={(v) => setField('pinfl', v.replace(/\D/g, '').slice(0, 14))}
-            keyboardType="numeric"
-            maxLength={14}
-            placeholder="14-значный ПИНФЛ"
-            placeholderTextColor={colors.textSecondary}
-          />
+          <Text style={s.label}>Документы для проверки</Text>
+          <TouchableOpacity style={[s.docBtn, { borderColor: colors.border, backgroundColor: colors.card }]} onPress={() => pickImageFor('selfie', 'Selfie')}>
+            <Text style={{ color: colors.text }}>📷 Selfie водителя</Text>
+            <Text style={[s.docState, { color: docs.selfie ? '#22C55E' : colors.textSecondary }]}>{docs.selfie ? 'Загружено' : 'Не выбрано'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.docBtn, { borderColor: colors.border, backgroundColor: colors.card }]} onPress={() => pickImageFor('license_front', 'License Front')}>
+            <Text style={{ color: colors.text }}>🪪 Права (лицевая сторона)</Text>
+            <Text style={[s.docState, { color: docs.license_front ? '#22C55E' : colors.textSecondary }]}>{docs.license_front ? 'Загружено' : 'Не выбрано'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.docBtn, { borderColor: colors.border, backgroundColor: colors.card }]} onPress={() => pickImageFor('license_back', 'License Back')}>
+            <Text style={{ color: colors.text }}>🪪 Права (обратная сторона)</Text>
+            <Text style={[s.docState, { color: docs.license_back ? '#22C55E' : colors.textSecondary }]}>{docs.license_back ? 'Загружено' : 'Не выбрано'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.docBtn, { borderColor: colors.border, backgroundColor: colors.card }]} onPress={() => pickImageFor('id_document', 'ID Document')}>
+            <Text style={{ color: colors.text }}>🛂 Паспорт или ID-карта</Text>
+            <Text style={[s.docState, { color: docs.id_document ? '#22C55E' : colors.textSecondary }]}>{docs.id_document ? 'Загружено' : 'Не выбрано'}</Text>
+          </TouchableOpacity>
         </View>
 
         <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={handleRegister} disabled={loading}>
@@ -236,6 +289,17 @@ function makeStyles(colors) {
     carNumberInput: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 14, textAlign: 'center', fontSize: 16, letterSpacing: 1.5 },
     carPreview: { fontSize: 13, marginBottom: 16 },
     carHint: { fontSize: 12, lineHeight: 18, marginTop: -8, marginBottom: 16 },
+    docBtn: {
+      borderWidth: 1,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 8,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+    },
+    docState: { fontSize: 12, fontWeight: '700' },
     btn: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 4 },
     btnDisabled: { opacity: 0.6 },
     btnText: { fontWeight: '800', fontSize: 16, color: '#000' },

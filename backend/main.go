@@ -138,6 +138,9 @@ func main() {
 			// Driver management
 			adminAPI.GET("/drivers/online", adminHandler.GetOnlineDrivers)
 			adminAPI.POST("/drivers", adminHandler.CreateDriver)
+			adminAPI.GET("/drivers/pending", adminHandler.GetPendingDriverRegistrations)
+			adminAPI.POST("/drivers/:id/approve", adminHandler.ApproveDriverRegistration)
+			adminAPI.POST("/drivers/:id/reject", adminHandler.RejectDriverRegistration)
 			adminAPI.GET("/drivers/:id/analytics", adminHandler.GetDriverAnalytics)
 
 			// Dispatcher helpers

@@ -82,6 +82,20 @@ const ROUTE_COLORS = {
   in_progress: '#4CAF50',   // Green: trip underway
 };
 
+function distanceMeters(a, b) {
+  if (!a || !b) return 0;
+  const R = 6371000;
+  const toRad = (v) => (v * Math.PI) / 180;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLng = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
 export default function HomeScreen() {
   const { colors, lang } = useTheme();
   const { user } = useAuth();
@@ -120,6 +134,8 @@ export default function HomeScreen() {
   const [passengerLiveLocation, setPassengerLiveLocation] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
   const routeTargetRef = useRef(null); // last fetched target to avoid redundant OSRM calls
+  const routeOriginRef = useRef(null); // last route start point used for OSRM
+  const lastRouteFetchAtRef = useRef(0);
 
   // Wait timer (free 2 min, then 500 sum/min)
   const [waitSeconds, setWaitSeconds] = useState(0);
@@ -465,14 +481,19 @@ export default function HomeScreen() {
       return;
     }
 
-    // Skip re-fetch if target hasn't moved more than 30m
-    const prev = routeTargetRef.current;
-    if (prev) {
-      const dLat = Math.abs(dest.latitude - prev.latitude);
-      const dLng = Math.abs(dest.longitude - prev.longitude);
-      if (dLat < 0.00027 && dLng < 0.00027) return; // ~30m threshold
-    }
+    const now = Date.now();
+    const prevTarget = routeTargetRef.current;
+    const prevOrigin = routeOriginRef.current;
+    const targetMoved = distanceMeters(dest, prevTarget) >= 30;
+    const originMoved = distanceMeters(location, prevOrigin) >= 20;
+
+    // Rebuild route not only when destination changes, but also when driver deviates from old path.
+    if (prevTarget && prevOrigin && !targetMoved && !originMoved) return;
+    if (now-lastRouteFetchAtRef.current < 2500) return;
+
     routeTargetRef.current = dest;
+    routeOriginRef.current = location;
+    lastRouteFetchAtRef.current = now;
 
     // Fetch road route; fall back to straight line if offline/slow
     fetchRoadRoute(location, dest).then(({ coords }) => {
@@ -644,6 +665,10 @@ export default function HomeScreen() {
       }
       const { data } = await driverAPI.completeTrip(activeOrder.id);
       const rounded = Math.ceil((data.total_price || 0) / 200) * 200;
+      setRouteCoords([]);
+      routeTargetRef.current = null;
+      routeOriginRef.current = null;
+      lastRouteFetchAtRef.current = 0;
       setCompletionModal({ price: rounded });
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
@@ -657,6 +682,8 @@ export default function HomeScreen() {
     setPassengerLiveLocation(null);
     setRouteCoords([]);
     routeTargetRef.current = null;
+    routeOriginRef.current = null;
+    lastRouteFetchAtRef.current = 0;
     setDriverStatus(DRIVER_STATUS.AVAILABLE);
     stopWaitTimer();
     setWaitSeconds(0);

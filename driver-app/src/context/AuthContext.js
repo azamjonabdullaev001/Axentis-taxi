@@ -48,17 +48,22 @@ export function AuthProvider({ children }) {
 
   async function register(userData) {
     const { data } = await authAPI.registerDriver(userData);
-    await AsyncStorage.setItem('auth_token', data.token);
-    await AsyncStorage.setItem('user_id', data.user_id);
-    try {
-      const profile = await authAPI.getProfile();
-      setUser(profile.data.user);
-      setDriver(profile.data.driver || null);
-    } catch {
-      setUser({ id: data.user_id, role: data.role });
-      setDriver(null);
+
+    // Driver registration now requires admin approval before login.
+    if (data?.token && data?.user_id) {
+      await AsyncStorage.setItem('auth_token', data.token);
+      await AsyncStorage.setItem('user_id', data.user_id);
+      try {
+        const profile = await authAPI.getProfile();
+        setUser(profile.data.user);
+        setDriver(profile.data.driver || null);
+      } catch {
+        setUser({ id: data.user_id, role: data.role });
+        setDriver(null);
+      }
+      socket.connect(data.user_id);
     }
-    socket.connect(data.user_id);
+
     return data;
   }
 

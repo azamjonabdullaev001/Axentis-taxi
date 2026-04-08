@@ -217,7 +217,13 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 			 COALESCE(d.id::text,'') as driver_id,
 			 COALESCE(d.car_number,'') as car_number,
 			 COALESCE(d.is_available, false) as is_available,
-			 COALESCE(u.avatar_url,'') as avatar_url
+			 COALESCE(u.avatar_url,'') as avatar_url,
+			 COALESCE(d.registration_status, 'pending') as registration_status,
+			 COALESCE(d.review_comment, '') as review_comment,
+			 COALESCE(d.selfie_url, '') as selfie_url,
+			 COALESCE(d.license_front_url, '') as license_front_url,
+			 COALESCE(d.license_back_url, '') as license_back_url,
+			 COALESCE(d.id_document_url, '') as id_document_url
 			 FROM users u
 			 LEFT JOIN drivers d ON d.user_id = u.id
 			 WHERE u.role = 'driver'
@@ -226,13 +232,15 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 	} else if role != "" {
 		rows, err = h.db.Query(context.Background(),
 			`SELECT id, first_name, last_name, phone, role, is_active, created_at,
-			 '', '', false, COALESCE(avatar_url,'') FROM users WHERE role = $1 ORDER BY created_at DESC LIMIT 200`,
+			 '', '', false, COALESCE(avatar_url,''), '', '', '', '', '', ''
+			 FROM users WHERE role = $1 ORDER BY created_at DESC LIMIT 200`,
 			role,
 		)
 	} else {
 		rows, err = h.db.Query(context.Background(),
 			`SELECT id, first_name, last_name, phone, role, is_active, created_at,
-			 '', '', false, COALESCE(avatar_url,'') FROM users ORDER BY created_at DESC LIMIT 200`,
+			 '', '', false, COALESCE(avatar_url,''), '', '', '', '', '', ''
+			 FROM users ORDER BY created_at DESC LIMIT 200`,
 		)
 	}
 
@@ -245,10 +253,12 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 	var users []map[string]interface{}
 	for rows.Next() {
 		var id, firstName, lastName, phone, userRole, driverID, carNum, avatarURL string
+		var registrationStatus, reviewComment, selfieURL, licenseFrontURL, licenseBackURL, idDocURL string
 		var isActive, isAvailable bool
 		var createdAt time.Time
 		rows.Scan(&id, &firstName, &lastName, &phone, &userRole, &isActive, &createdAt,
-			&driverID, &carNum, &isAvailable, &avatarURL)
+			&driverID, &carNum, &isAvailable, &avatarURL,
+			&registrationStatus, &reviewComment, &selfieURL, &licenseFrontURL, &licenseBackURL, &idDocURL)
 		u := map[string]interface{}{
 			"id": id, "first_name": firstName, "last_name": lastName,
 			"phone": phone, "role": userRole, "is_active": isActive, "created_at": createdAt,
@@ -258,6 +268,12 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 			u["driver_id"] = driverID
 			u["car_number"] = carNum
 			u["is_available"] = isAvailable
+			u["registration_status"] = registrationStatus
+			u["review_comment"] = reviewComment
+			u["selfie_url"] = selfieURL
+			u["license_front_url"] = licenseFrontURL
+			u["license_back_url"] = licenseBackURL
+			u["id_document_url"] = idDocURL
 		}
 		users = append(users, u)
 	}
@@ -720,7 +736,8 @@ func (h *AdminHandler) CreateDriver(c *gin.Context) {
 	pinfl := strings.TrimSpace(req.PINFL)
 
 	_, err = tx.Exec(context.Background(),
-		`INSERT INTO drivers (user_id, car_number, pinfl, referral_code) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO drivers (user_id, car_number, pinfl, referral_code, registration_status, reviewed_at)
+		 VALUES ($1, $2, $3, $4, 'approved', NOW())`,
 		userID, carNumber, pinfl, refCode,
 	)
 	if err != nil {
@@ -753,6 +770,135 @@ func generateReferralCodeAdmin(ctx context.Context, db *pgxpool.Pool) (string, e
 		}
 	}
 	return "", fmt.Errorf("referral code generation failed")
+}
+
+// ── Driver Registration Moderation ──────────────────────────────────────────
+
+func (h *AdminHandler) GetPendingDriverRegistrations(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT d.id, d.user_id, u.first_name, u.last_name, u.phone,
+		        d.car_number, d.created_at,
+		        COALESCE(d.selfie_url, ''), COALESCE(d.license_front_url, ''),
+		        COALESCE(d.license_back_url, ''), COALESCE(d.id_document_url, ''),
+		        COALESCE(d.registration_status, 'pending'), COALESCE(d.review_comment, '')
+		 FROM drivers d
+		 JOIN users u ON d.user_id = u.id
+		 WHERE COALESCE(d.registration_status, 'pending') = 'pending'
+		 ORDER BY d.created_at ASC`,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch pending registrations"})
+		return
+	}
+	defer rows.Close()
+
+	var items []map[string]interface{}
+	for rows.Next() {
+		var driverID, userID, firstName, lastName, phone, carNumber string
+		var selfieURL, licenseFrontURL, licenseBackURL, idDocURL, status, reviewComment string
+		var createdAt time.Time
+		if err := rows.Scan(
+			&driverID, &userID, &firstName, &lastName, &phone,
+			&carNumber, &createdAt,
+			&selfieURL, &licenseFrontURL, &licenseBackURL, &idDocURL,
+			&status, &reviewComment,
+		); err != nil {
+			continue
+		}
+
+		items = append(items, map[string]interface{}{
+			"driver_id":          driverID,
+			"user_id":            userID,
+			"first_name":         firstName,
+			"last_name":          lastName,
+			"phone":              phone,
+			"car_number":         carNumber,
+			"created_at":         createdAt,
+			"registration_status": status,
+			"review_comment":      reviewComment,
+			"selfie_url":          selfieURL,
+			"license_front_url":   licenseFrontURL,
+			"license_back_url":    licenseBackURL,
+			"id_document_url":     idDocURL,
+		})
+	}
+	if items == nil {
+		items = []map[string]interface{}{}
+	}
+	c.JSON(http.StatusOK, gin.H{"drivers": items})
+}
+
+func (h *AdminHandler) ApproveDriverRegistration(c *gin.Context) {
+	driverID := c.Param("id")
+	adminID := c.GetString("admin_id")
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	ct, err := h.db.Exec(context.Background(),
+		`UPDATE drivers
+		 SET registration_status = 'approved',
+		     reviewed_by_admin_id = $2,
+		     reviewed_at = NOW(),
+		     review_comment = COALESCE(NULLIF($3,''), review_comment)
+		 WHERE id = $1`,
+		driverID, adminID, strings.TrimSpace(req.Comment),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to approve driver"})
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	_, _ = h.db.Exec(context.Background(),
+		`UPDATE users SET is_active = true, updated_at = NOW()
+		 WHERE id = (SELECT user_id FROM drivers WHERE id = $1)`,
+		driverID,
+	)
+
+	c.JSON(http.StatusOK, gin.H{"message": "Driver registration approved"})
+}
+
+func (h *AdminHandler) RejectDriverRegistration(c *gin.Context) {
+	driverID := c.Param("id")
+	adminID := c.GetString("admin_id")
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Rejection comment is required"})
+		return
+	}
+	comment := strings.TrimSpace(req.Comment)
+	if comment == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Rejection comment is required"})
+		return
+	}
+
+	ct, err := h.db.Exec(context.Background(),
+		`UPDATE drivers
+		 SET registration_status = 'rejected',
+		     reviewed_by_admin_id = $2,
+		     reviewed_at = NOW(),
+		     review_comment = $3,
+		     is_available = false
+		 WHERE id = $1`,
+		driverID, adminID, comment,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reject driver"})
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Driver registration rejected"})
 }
 
 // ── Referral Settings ─────────────────────────────────────────────────────────

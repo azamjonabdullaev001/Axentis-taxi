@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"math/big"
 	"net/http"
 	"os"
@@ -105,8 +106,72 @@ func (h *AuthHandler) RegisterPassenger(c *gin.Context) {
 
 func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 	var req RegisterDriverRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL string
+
+	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+		req = RegisterDriverRequest{
+			FirstName:  strings.TrimSpace(c.PostForm("first_name")),
+			LastName:   strings.TrimSpace(c.PostForm("last_name")),
+			Phone:      strings.TrimSpace(c.PostForm("phone")),
+			Password:   c.PostForm("password"),
+			ConfirmPw:  c.PostForm("confirm_password"),
+			CarNumber:  strings.TrimSpace(c.PostForm("car_number")),
+			ReferredBy: strings.TrimSpace(c.PostForm("referred_by")),
+		}
+
+		selfie, err := c.FormFile("selfie")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Selfie is required"})
+			return
+		}
+		licenseFront, err := c.FormFile("license_front")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Driver license (front) is required"})
+			return
+		}
+		licenseBack, err := c.FormFile("license_back")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Driver license (back) is required"})
+			return
+		}
+		idDoc, err := c.FormFile("id_document")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Passport or ID card image is required"})
+			return
+		}
+
+		selfieURL, err = saveUploadedImage(selfie, "driver-docs")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		licenseFrontURL, err = saveUploadedImage(licenseFront, "driver-docs")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		licenseBackURL, err = saveUploadedImage(licenseBack, "driver-docs")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		idDocumentURL, err = saveUploadedImage(idDoc, "driver-docs")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Use multipart/form-data with selfie, license_front, license_back, id_document"})
+		return
+	}
+
+	if strings.TrimSpace(req.FirstName) == "" || strings.TrimSpace(req.LastName) == "" ||
+		strings.TrimSpace(req.Phone) == "" || strings.TrimSpace(req.Password) == "" || strings.TrimSpace(req.CarNumber) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "All required fields must be filled"})
+		return
+	}
+	if len(req.Password) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at least 8 characters"})
 		return
 	}
 	if req.Password != req.ConfirmPw {
@@ -173,11 +238,13 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		}
 	}
 
-	pinfl := strings.TrimSpace(req.PINFL)
-
 	_, err = tx.Exec(context.Background(),
-		`INSERT INTO drivers (user_id, car_number, pinfl, referral_code, referred_by) VALUES ($1, $2, $3, $4, $5)`,
-		userID, normalizedCarNumber, pinfl, refCode, referredBy,
+		`INSERT INTO drivers
+		 (user_id, car_number, referral_code, referred_by, registration_status,
+		  selfie_url, license_front_url, license_back_url, id_document_url)
+		 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)`,
+		userID, normalizedCarNumber, refCode, referredBy,
+		selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})
@@ -189,12 +256,13 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		return
 	}
 
-	token, err := generateUserToken(userID, "driver", h.cfg.JWTSecret)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"token": token, "user_id": userID, "role": "driver", "referral_code": refCode})
+	c.JSON(http.StatusCreated, gin.H{
+		"user_id":          userID,
+		"role":             "driver",
+		"referral_code":    refCode,
+		"registration_status": "pending",
+		"message":          "Registration submitted and waiting for admin approval",
+	})
 }
 
 // ApplyReferral lets a driver choose a referral benefit after entering a referral code.
@@ -282,6 +350,28 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	if user.Role == "driver" {
+		var registrationStatus string
+		var reviewComment string
+		err = h.db.QueryRow(context.Background(),
+			`SELECT COALESCE(registration_status, 'pending'), COALESCE(review_comment, '')
+			 FROM drivers WHERE user_id = $1`,
+			user.ID,
+		).Scan(&registrationStatus, &reviewComment)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Driver profile not found"})
+			return
+		}
+		if registrationStatus != "approved" {
+			resp := gin.H{"error": "Driver account is pending admin approval", "registration_status": registrationStatus}
+			if registrationStatus == "rejected" && reviewComment != "" {
+				resp["review_comment"] = reviewComment
+			}
+			c.JSON(http.StatusForbidden, resp)
+			return
+		}
+	}
+
 	token, err := generateUserToken(user.ID, user.Role, h.cfg.JWTSecret)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
@@ -309,15 +399,21 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 	if role == "driver" {
 		var driver models.Driver
 		var referralCode, referredBy, referralBenefitType *string
+		var reviewedByAdminID *string
 		err = h.db.QueryRow(context.Background(),
 			`SELECT id, car_number, COALESCE(pinfl,''), is_available, current_lat, current_lng, current_heading, last_seen,
 			 COALESCE(referral_code,''), COALESCE(referred_by,''), COALESCE(referral_benefit_type,''),
-			 COALESCE(balance,0)
+			 COALESCE(balance,0), COALESCE(registration_status,'pending'),
+			 reviewed_by_admin_id::text, reviewed_at, COALESCE(review_comment,''),
+			 COALESCE(selfie_url,''), COALESCE(license_front_url,''),
+			 COALESCE(license_back_url,''), COALESCE(id_document_url,'')
 			 FROM drivers WHERE user_id = $1`,
 			userID,
 		).Scan(&driver.ID, &driver.CarNumber, &driver.PINFL, &driver.IsAvailable,
 			&driver.CurrentLat, &driver.CurrentLng, &driver.CurrentHeading, &driver.LastSeen,
-			&referralCode, &referredBy, &referralBenefitType, &driver.Balance)
+			&referralCode, &referredBy, &referralBenefitType, &driver.Balance,
+			&driver.RegistrationStatus, &reviewedByAdminID, &driver.ReviewedAt, &driver.ReviewComment,
+			&driver.SelfieURL, &driver.LicenseFrontURL, &driver.LicenseBackURL, &driver.IDDocumentURL)
 		if err == nil {
 			if referralCode != nil {
 				driver.ReferralCode = *referralCode
@@ -327,6 +423,9 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 			}
 			if referralBenefitType != nil {
 				driver.ReferralBenefitType = *referralBenefitType
+			}
+			if reviewedByAdminID != nil {
+				driver.ReviewedByAdminID = *reviewedByAdminID
 			}
 			c.JSON(http.StatusOK, gin.H{"user": user, "driver": driver})
 			return
@@ -365,6 +464,47 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Profile updated"})
 }
 
+func saveUploadedImage(header *multipart.FileHeader, subDir string) (string, error) {
+	file, err := header.Open()
+	if err != nil {
+		return "", fmt.Errorf("failed to read uploaded file")
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == ".jpeg" {
+		ext = ".jpg"
+	}
+	allowed := map[string]bool{".jpg": true, ".png": true, ".webp": true}
+	if !allowed[ext] {
+		return "", fmt.Errorf("only jpg, png, webp images are allowed")
+	}
+	if header.Size > 5*1024*1024 {
+		return "", fmt.Errorf("file too large (max 5 MB)")
+	}
+
+	b := make([]byte, 16)
+	rand.Read(b)
+	filename := hex.EncodeToString(b) + ext
+
+	dir := filepath.Join("./uploads", subDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create upload directory")
+	}
+
+	dst, err := os.Create(filepath.Join(dir, filename))
+	if err != nil {
+		return "", fmt.Errorf("failed to save file")
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		return "", fmt.Errorf("failed to write file")
+	}
+
+	return "/uploads/" + subDir + "/" + filename, nil
+}
+
 func (h *AuthHandler) UploadAvatar(c *gin.Context) {
 	userID := c.GetString("user_id")
 
@@ -375,47 +515,12 @@ func (h *AuthHandler) UploadAvatar(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Validate extension
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext == ".jpeg" {
-		ext = ".jpg"
-	}
-	allowed := map[string]bool{".jpg": true, ".png": true, ".webp": true}
-	if !allowed[ext] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only jpg, png, webp images are allowed"})
-		return
-	}
-
-	// Limit to 5 MB
-	if header.Size > 5*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 5 MB)"})
-		return
-	}
-
-	// Unique filename
-	b := make([]byte, 16)
-	rand.Read(b)
-	filename := hex.EncodeToString(b) + ext
-
-	dir := "./uploads/avatars"
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create upload directory"})
-		return
-	}
-
-	dst, err := os.Create(filepath.Join(dir, filename))
+	_ = file
+	avatarPath, err := saveUploadedImage(header, "avatars")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write file"})
-		return
-	}
-
-	avatarPath := "/uploads/avatars/" + filename
 	_, err = h.db.Exec(context.Background(),
 		`UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`,
 		avatarPath, userID,

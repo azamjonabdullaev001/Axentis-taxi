@@ -43,6 +43,9 @@ export const adminAPI = {
   createCallOrder: (d) => api.post('/admin/call-orders', d),
   // Driver management
   createDriver: (d) => api.post('/admin/drivers', d),
+  getPendingDrivers: () => api.get('/admin/drivers/pending'),
+  approveDriver: (id, comment = '') => api.post(`/admin/drivers/${id}/approve`, { comment }),
+  rejectDriver: (id, comment) => api.post(`/admin/drivers/${id}/reject`, { comment }),
   getDriverAnalytics: (id, params) => api.get(`/admin/drivers/${id}/analytics`, { params }),
   getDriversWithDetails: () => api.get('/admin/users', { params: { role: 'driver' } }),
   getOnlineDrivers: () => api.get('/admin/drivers/online'),

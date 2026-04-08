@@ -33,7 +33,31 @@ export function getAPIErrorMessage(error, fallback = 'Ошибка запрос�
 }
 
 export const authAPI = {
-  registerDriver: (data) => api.post('/auth/register/driver', data),
+  registerDriver: (data) => {
+    const formData = new FormData();
+    formData.append('first_name', data.first_name || '');
+    formData.append('last_name', data.last_name || '');
+    formData.append('phone', data.phone || '');
+    formData.append('password', data.password || '');
+    formData.append('confirm_password', data.confirm_password || '');
+    formData.append('car_number', data.car_number || '');
+    if (data.referred_by) formData.append('referred_by', data.referred_by);
+
+    ['selfie', 'license_front', 'license_back', 'id_document'].forEach((key) => {
+      const f = data[key];
+      if (f?.uri) {
+        formData.append(key, {
+          uri: f.uri,
+          name: f.name || `${key}.jpg`,
+          type: f.type || 'image/jpeg',
+        });
+      }
+    });
+
+    return api.post('/auth/register/driver', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
   login: (data) => api.post('/auth/login', data),
   getProfile: () => api.get('/profile'),
   updateProfile: (data) => api.put('/profile', data),

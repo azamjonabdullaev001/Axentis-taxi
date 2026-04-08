@@ -127,7 +127,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		   AND d.current_lng IS NOT NULL
 		   AND NOT EXISTS (
 		     SELECT 1 FROM orders o
-		     WHERE o.driver_id = d.id AND o.status = 'queued'
+		     WHERE o.driver_id = d.id AND o.status IN ('queued','accepted','arrived','in_progress')
 		   )`,
 	)
 	if err != nil {

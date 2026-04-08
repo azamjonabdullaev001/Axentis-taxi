@@ -168,13 +168,13 @@ func (s *PricingService) processPeakPeriods() {
 	if err != nil {
 		return
 	}
+	defer rows.Close()
 	var periods []pp
 	for rows.Next() {
 		var p pp
 		rows.Scan(&p.startStr, &p.endStr, &p.peak, &p.riseMin, &p.fallMin)
 		periods = append(periods, p)
 	}
-	rows.Close()
 
 	for _, p := range periods {
 		startT, e1 := time.Parse("15:04:05", p.startStr)

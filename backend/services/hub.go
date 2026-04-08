@@ -53,8 +53,8 @@ func (h *Hub) Run() {
 				select {
 				case client.Send <- message:
 				default:
-					close(client.Send)
-					delete(h.clients, client.ID)
+					// Drop message for slow client; do NOT close here to avoid
+					// double-close panic if the client also goes through unregister.
 				}
 			}
 			h.mu.RUnlock()

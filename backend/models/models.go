@@ -43,6 +43,14 @@ type Driver struct {
 	ReferredBy          string     `json:"referred_by,omitempty"`
 	ReferralBenefitType string     `json:"referral_benefit_type,omitempty"`
 	Balance             float64    `json:"balance"`
+	RegistrationStatus  string     `json:"registration_status,omitempty"`
+	ReviewedByAdminID   string     `json:"reviewed_by_admin_id,omitempty"`
+	ReviewedAt          *time.Time `json:"reviewed_at,omitempty"`
+	ReviewComment       string     `json:"review_comment,omitempty"`
+	SelfieURL           string     `json:"selfie_url,omitempty"`
+	LicenseFrontURL     string     `json:"license_front_url,omitempty"`
+	LicenseBackURL      string     `json:"license_back_url,omitempty"`
+	IDDocumentURL       string     `json:"id_document_url,omitempty"`
 }
 
 type ReferralSettings struct {

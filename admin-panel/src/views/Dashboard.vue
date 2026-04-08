@@ -112,20 +112,22 @@ const allOrders = ref([])
 
 onMounted(async () => {
   try {
-    const [ordersRes, revenueRes, usersRes] = await Promise.all([
+    const [ordersRes, revenueRes, usersRes, driversRes] = await Promise.all([
       adminAPI.getOrders(),
       adminAPI.getRevenue(),
-      adminAPI.getUsers()
+      adminAPI.getUsers('passenger'),
+      adminAPI.getUsers('driver')
     ])
     const orders = ordersRes.data.orders || []
     const revenue = revenueRes.data
-    const allUsers = (usersRes.data.users || [])
+    const passengers = (usersRes.data.users || [])
+    const drivers = (driversRes.data.users || [])
     allOrders.value = orders
     stats.value = {
       totalOrders: orders.length,
       totalRevenue: revenue.total_revenue || 0,
-      activeDrivers: allUsers.filter(u => u.role === 'driver' && u.is_available).length,
-      totalPassengers: allUsers.filter(u => u.role === 'passenger').length
+      activeDrivers: drivers.filter(u => u.is_available).length,
+      totalPassengers: passengers.length
     }
     recentOrders.value = orders.slice(0, 10)
   } finally {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -105,6 +106,7 @@ func (p *PushService) send(payload interface{}) {
 		return
 	}
 	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body) // drain body to allow connection reuse
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[push] unexpected status from Expo push API: %d", resp.StatusCode)

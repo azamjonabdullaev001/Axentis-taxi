@@ -1387,7 +1387,7 @@ export default function HomeScreen() {
                   const surge = Number(pricingSettings.surge_multiplier) || 1;
                   const meters = freeRideKm * 1000;
                   const roundedKm = (meters < 1 ? 100 : Math.ceil(meters / 100) * 100) / 1000;
-                  return Math.ceil((sf + roundedKm * ppk * surge) / 200) * 200;
+                  return Math.ceil((sf + roundedKm * ppk * surge) / 100) * 100;
                 })().toLocaleString()} {t(lang, 'sum')}
               </Text>
               <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>

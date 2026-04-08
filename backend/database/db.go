@@ -207,6 +207,17 @@ CREATE INDEX IF NOT EXISTS idx_orders_driver_id_created ON orders (driver_id, cr
 -- PINFL (JSHSHIR) — 14-digit Uzbek personal ID, required for drivers only
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS pinfl VARCHAR(20) DEFAULT '';
 
+-- Driver verification workflow and registration documents
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS registration_status VARCHAR(20) DEFAULT 'pending';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS reviewed_by_admin_id UUID REFERENCES admins(id);
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS review_comment TEXT DEFAULT '';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS selfie_url VARCHAR(500) DEFAULT '';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS license_front_url VARCHAR(500) DEFAULT '';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS license_back_url VARCHAR(500) DEFAULT '';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS id_document_url VARCHAR(500) DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_drivers_registration_status ON drivers (registration_status);
+
 -- 7-digit unique referral code assigned to each driver on registration
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS referral_code VARCHAR(7);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_drivers_referral_code ON drivers (referral_code) WHERE referral_code IS NOT NULL;

@@ -235,7 +235,8 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
 			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
-			 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(d.car_number,'')
+			 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0), COALESCE(d.car_number,''),
+			 o.pickup_lat, o.pickup_lng
 			 FROM orders o
 			 LEFT JOIN drivers d ON o.driver_id = d.id
 			 WHERE o.passenger_id = $1
@@ -248,15 +249,16 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			pgRows := r
 			for pgRows.Next() {
 				var id, status, pickup, dest, carNum string
-				var dist, total, destLat, destLng float64
+				var dist, total, destLat, destLng, pickLat, pickLng float64
 				var created time.Time
-				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng, &carNum)
+				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng, &carNum, &pickLat, &pickLng)
 				orders = append(orders, map[string]interface{}{
 					"id": id, "status": status, "pickup_address": pickup,
 					"destination_address": dest, "distance_km": dist,
 					"total_price": total, "created_at": created,
 					"destination_lat": destLat, "destination_lng": destLng,
 					"car_number": carNum,
+					"pickup_lat": pickLat, "pickup_lng": pickLng,
 				})
 			}
 			_ = rows
@@ -266,7 +268,8 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 		r, e := h.db.Query(context.Background(),
 			`SELECT o.id, o.status, COALESCE(o.pickup_address,''), COALESCE(o.destination_address,''),
 			 COALESCE(o.distance_km,0), COALESCE(o.total_price,0), o.created_at,
-			 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0)
+			 COALESCE(o.destination_lat,0), COALESCE(o.destination_lng,0),
+			 o.pickup_lat, o.pickup_lng
 			 FROM orders o
 			 JOIN drivers d ON o.driver_id = d.id
 			 WHERE d.user_id = $1
@@ -279,14 +282,15 @@ func (h *OrderHandler) GetOrderHistory(c *gin.Context) {
 			pgRows := r
 			for pgRows.Next() {
 				var id, status, pickup, dest string
-				var dist, total, destLat, destLng float64
+				var dist, total, destLat, destLng, pickLat, pickLng float64
 				var created time.Time
-				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng)
+				pgRows.Scan(&id, &status, &pickup, &dest, &dist, &total, &created, &destLat, &destLng, &pickLat, &pickLng)
 				orders = append(orders, map[string]interface{}{
 					"id": id, "status": status, "pickup_address": pickup,
 					"destination_address": dest, "distance_km": dist,
 					"total_price": total, "created_at": created,
 					"destination_lat": destLat, "destination_lng": destLng,
+					"pickup_lat": pickLat, "pickup_lng": pickLng,
 				})
 			}
 			_ = rows
@@ -496,33 +500,43 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	var waitFee, storedTotalPrice, serviceFee, lockedPerKm, distKm float64
 	var waitStarted *time.Time
 	var tripType string
-	h.db.QueryRow(context.Background(),
+	if err := h.db.QueryRow(context.Background(),
 		`SELECT wait_started_at, service_fee,
 		 COALESCE(locked_price_per_km,0), COALESCE(distance_km,0), COALESCE(trip_type,'standard'),
 		 COALESCE(total_price,0)
 		 FROM orders WHERE id = $1`, orderID,
-	).Scan(&waitStarted, &serviceFee, &lockedPerKm, &distKm, &tripType, &storedTotalPrice)
+	).Scan(&waitStarted, &serviceFee, &lockedPerKm, &distKm, &tripType, &storedTotalPrice); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		return
+	}
 
 	waitFee = h.pricingService.CalculateWaitFee(waitStarted, 2)
 	var totalPrice float64
 	if tripType == "free" {
-		// Free tariff: always recalculate with CURRENT admin panel pricing so price changes
-		// take effect immediately (locked_price_per_km was set before distance was known).
-		ps, psErr := h.pricingService.GetSettings()
+		// Free tariff: use locked_price_per_km that was set at order creation.
+		// Fall back to current settings only if locked rate is missing.
 		var effectivePerKm, effectiveServiceFee float64
-		if psErr == nil {
-			surge := ps.SurgeMultiplier
-			if surge <= 0 {
-				surge = 1.0
-			}
-			effectivePerKm = ps.PricePerKm * surge
-			effectiveServiceFee = ps.ServiceFee
-		} else if lockedPerKm > 0 {
+		if lockedPerKm > 0 {
 			effectivePerKm = lockedPerKm
 			effectiveServiceFee = serviceFee
+			// Apply current surge on top of the locked rate
+			ps, psErr := h.pricingService.GetSettings()
+			if psErr == nil && ps.SurgeMultiplier > 0 {
+				effectivePerKm = lockedPerKm * ps.SurgeMultiplier
+			}
 		} else {
-			effectivePerKm = 3000
-			effectiveServiceFee = 2000
+			ps, psErr := h.pricingService.GetSettings()
+			if psErr == nil {
+				surge := ps.SurgeMultiplier
+				if surge <= 0 {
+					surge = 1.0
+				}
+				effectivePerKm = ps.PricePerKm * surge
+				effectiveServiceFee = ps.ServiceFee
+			} else {
+				effectivePerKm = 3000
+				effectiveServiceFee = 2000
+			}
 		}
 		// Round driven distance to nearest 100m block (minimum 100m)
 		distMeters := distKm * 1000
