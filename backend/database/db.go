@@ -357,4 +357,8 @@ DELETE FROM driver_friends;
 DELETE FROM drivers;
 -- Delete all non-admin users (passengers + drivers)
 DELETE FROM users;
+
+-- Ban system: temporary or permanent ban with reason
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_until TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason TEXT DEFAULT '';
 `

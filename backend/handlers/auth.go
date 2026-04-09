@@ -338,12 +338,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	normalizedPhone := normalizePhone(req.Phone)
 	var user models.User
+	var bannedUntil *time.Time
+	var banReason string
 	err := h.db.QueryRow(context.Background(),
-		`SELECT id, first_name, last_name, phone, password_hash, role, is_active
+		`SELECT id, first_name, last_name, phone, password_hash, role, is_active,
+		 banned_until, COALESCE(ban_reason, '')
 		 FROM users WHERE phone = $1`,
 		normalizedPhone,
 	).Scan(&user.ID, &user.FirstName, &user.LastName, &user.Phone,
-		&user.PasswordHash, &user.Role, &user.IsActive)
+		&user.PasswordHash, &user.Role, &user.IsActive, &bannedUntil, &banReason)
 
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid phone or password"})
@@ -351,6 +354,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	if !user.IsActive {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Account is deactivated"})
+		return
+	}
+	// Check ban
+	if bannedUntil != nil && bannedUntil.After(time.Now()) {
+		msg := "Ваш аккаунт заблокирован"
+		if banReason != "" {
+			msg += ": " + banReason
+		}
+		msg += ". До " + bannedUntil.Format("02.01.2006 15:04")
+		c.JSON(http.StatusForbidden, gin.H{"error": msg, "banned_until": bannedUntil})
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {

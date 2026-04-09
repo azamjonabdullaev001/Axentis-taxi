@@ -916,6 +916,101 @@ func (h *AdminHandler) RejectDriverRegistration(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Driver registration rejected"})
 }
 
+// ── Ban / Unban / Delete User ─────────────────────────────────────────────────
+
+func (h *AdminHandler) BanUser(c *gin.Context) {
+	userID := c.Param("id")
+	var req struct {
+		Duration string `json:"duration"` // "1h", "24h", "7d", "30d", "forever"
+		Reason   string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var bannedUntil time.Time
+	switch req.Duration {
+	case "1h":
+		bannedUntil = time.Now().Add(1 * time.Hour)
+	case "24h":
+		bannedUntil = time.Now().Add(24 * time.Hour)
+	case "7d":
+		bannedUntil = time.Now().Add(7 * 24 * time.Hour)
+	case "30d":
+		bannedUntil = time.Now().Add(30 * 24 * time.Hour)
+	case "forever":
+		bannedUntil = time.Now().Add(100 * 365 * 24 * time.Hour) // ~100 years
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid duration. Use: 1h, 24h, 7d, 30d, forever"})
+		return
+	}
+
+	ct, err := h.db.Exec(context.Background(),
+		`UPDATE users SET banned_until = $1, ban_reason = $2, is_active = false WHERE id = $3`,
+		bannedUntil, req.Reason, userID,
+	)
+	if err != nil || ct.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// If driver — also set offline
+	h.db.Exec(context.Background(),
+		`UPDATE drivers SET is_available = false WHERE user_id = $1`, userID)
+
+	c.JSON(http.StatusOK, gin.H{"message": "User banned", "banned_until": bannedUntil})
+}
+
+func (h *AdminHandler) UnbanUser(c *gin.Context) {
+	userID := c.Param("id")
+	ct, err := h.db.Exec(context.Background(),
+		`UPDATE users SET banned_until = NULL, ban_reason = '', is_active = true WHERE id = $1`,
+		userID,
+	)
+	if err != nil || ct.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "User unbanned"})
+}
+
+func (h *AdminHandler) DeleteUser(c *gin.Context) {
+	userID := c.Param("id")
+
+	// Delete cascade: orders, ratings, driver profile, then user
+	tx, err := h.db.Begin(context.Background())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction failed"})
+		return
+	}
+	defer tx.Rollback(context.Background())
+
+	// Delete related records
+	tx.Exec(context.Background(), `DELETE FROM quiz_scores WHERE user_id = $1`, userID)
+	tx.Exec(context.Background(), `DELETE FROM ratings WHERE passenger_id = $1`, userID)
+	tx.Exec(context.Background(),
+		`DELETE FROM orders WHERE passenger_id = $1 OR driver_id IN (SELECT id FROM drivers WHERE user_id = $1)`, userID)
+	tx.Exec(context.Background(),
+		`DELETE FROM cashback_transactions WHERE driver_id IN (SELECT id FROM drivers WHERE user_id = $1)`, userID)
+	tx.Exec(context.Background(),
+		`DELETE FROM driver_bonus_events WHERE driver_id IN (SELECT id FROM drivers WHERE user_id = $1)`, userID)
+	tx.Exec(context.Background(),
+		`DELETE FROM referral_bonuses WHERE driver_id IN (SELECT id FROM drivers WHERE user_id = $1)`, userID)
+	tx.Exec(context.Background(),
+		`DELETE FROM driver_friends WHERE requester_id IN (SELECT id FROM drivers WHERE user_id = $1) OR recipient_id IN (SELECT id FROM drivers WHERE user_id = $1)`, userID)
+	tx.Exec(context.Background(),
+		`DELETE FROM ratings WHERE driver_id IN (SELECT id FROM drivers WHERE user_id = $1)`, userID)
+	tx.Exec(context.Background(), `DELETE FROM drivers WHERE user_id = $1`, userID)
+	tx.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+
+	if err := tx.Commit(context.Background()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "User deleted"})
+}
+
 // ── Referral Settings ─────────────────────────────────────────────────────────
 
 func (h *AdminHandler) GetReferralSettings(c *gin.Context) {

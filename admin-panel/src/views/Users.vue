@@ -38,6 +38,7 @@
             <th>Created</th>
             <th>Active</th>
             <th v-if="tab === 'drivers'"></th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -72,6 +73,13 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
                 Analytics
               </router-link>
+            </td>
+            <td>
+              <div class="action-btns">
+                <button v-if="u.is_active !== false" class="ban-btn" :disabled="processingId === u.id" @click="showBanDialog(u)">🚫 Ban</button>
+                <button v-else class="unban-btn" :disabled="processingId === u.id" @click="unbanUser(u)">✅ Unban</button>
+                <button class="delete-btn" :disabled="processingId === u.id" @click="deleteUser(u)">🗑 Delete</button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -153,6 +161,30 @@
           </tr>
         </tbody>
       </table>
+    </div>
+    <!-- Ban dialog -->
+    <div v-if="banDialogUser" class="modal-overlay" @click.self="banDialogUser = null">
+      <div class="modal-card">
+        <h3>Ban user: {{ banDialogUser.first_name }} {{ banDialogUser.last_name }}</h3>
+        <div class="field">
+          <label>Duration</label>
+          <select v-model="banDuration" class="form-input">
+            <option value="1h">1 hour</option>
+            <option value="24h">24 hours</option>
+            <option value="7d">7 days</option>
+            <option value="30d">30 days</option>
+            <option value="forever">Permanent</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Reason (optional)</label>
+          <input v-model="banReason" class="form-input" placeholder="Spam, abuse, etc." />
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button class="ban-btn" :disabled="banning" @click="confirmBan">{{ banning ? 'Banning...' : 'Confirm ban' }}</button>
+          <button class="cancel-btn" @click="banDialogUser = null">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -274,6 +306,60 @@ function statusClass(status) {
 }
 
 function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '-' }
+
+/* ── Ban / Unban / Delete ── */
+const banDialogUser = ref(null)
+const banDuration = ref('24h')
+const banReason = ref('')
+const banning = ref(false)
+
+function showBanDialog(u) {
+  banDialogUser.value = u
+  banDuration.value = '24h'
+  banReason.value = ''
+}
+
+async function confirmBan() {
+  if (!banDialogUser.value) return
+  banning.value = true
+  processingId.value = banDialogUser.value.id
+  try {
+    await adminAPI.banUser(banDialogUser.value.id, banDuration.value, banReason.value)
+    banDialogUser.value = null
+    await loadUsers()
+  } catch (e) {
+    alert(e.response?.data?.error || 'Ban failed')
+  } finally {
+    banning.value = false
+    processingId.value = ''
+  }
+}
+
+async function unbanUser(u) {
+  if (!confirm(`Unban ${u.first_name || ''} ${u.last_name || ''}?`)) return
+  processingId.value = u.id
+  try {
+    await adminAPI.unbanUser(u.id)
+    await loadUsers()
+  } catch (e) {
+    alert(e.response?.data?.error || 'Unban failed')
+  } finally {
+    processingId.value = ''
+  }
+}
+
+async function deleteUser(u) {
+  if (!confirm(`DELETE user ${u.first_name || ''} ${u.last_name || ''} (${u.phone})? This is irreversible!`)) return
+  processingId.value = u.id
+  try {
+    await adminAPI.deleteUser(u.id)
+    await loadUsers()
+  } catch (e) {
+    alert(e.response?.data?.error || 'Delete failed')
+  } finally {
+    processingId.value = ''
+  }
+}
 </script>
 
 <style scoped>
@@ -367,4 +453,40 @@ function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '-' }
 }
 .reject-btn:disabled { opacity: .5; cursor: not-allowed; }
 .saved-msg { font-size: 14px; color: #2e7d32; }
+
+/* ── Ban / Delete action buttons ── */
+.action-btns { display: flex; gap: 6px; align-items: center; }
+.ban-btn {
+  padding: 5px 12px; background: #ff9800; color: #fff; border: none;
+  border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.ban-btn:hover { background: #e68a00; }
+.ban-btn:disabled { opacity: .5; cursor: not-allowed; }
+.unban-btn {
+  padding: 5px 12px; background: #4caf50; color: #fff; border: none;
+  border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.unban-btn:hover { background: #388e3c; }
+.unban-btn:disabled { opacity: .5; cursor: not-allowed; }
+.delete-btn {
+  padding: 5px 12px; background: #ef4444; color: #fff; border: none;
+  border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.delete-btn:hover { background: #c62828; }
+.delete-btn:disabled { opacity: .5; cursor: not-allowed; }
+.cancel-btn {
+  padding: 10px 20px; background: #eee; border: none; border-radius: 10px;
+  font-size: 14px; cursor: pointer;
+}
+
+/* ── Modal overlay ── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center; z-index: 1000;
+}
+.modal-card {
+  background: #fff; border-radius: 16px; padding: 28px; min-width: 360px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.18);
+}
+.modal-card h3 { margin-bottom: 16px; font-size: 16px; }
 </style>

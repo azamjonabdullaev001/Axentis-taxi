@@ -50,6 +50,10 @@ export const adminAPI = {
   getDriversWithDetails: () => api.get('/admin/users', { params: { role: 'driver' } }),
   getOnlineDrivers: () => api.get('/admin/drivers/online'),
   getPhoneHistory: (phone) => api.get('/admin/phone-history', { params: { phone } }),
+  // User management
+  banUser: (id, duration, reason) => api.post(`/admin/users/${id}/ban`, { duration, reason }),
+  unbanUser: (id) => api.post(`/admin/users/${id}/unban`),
+  deleteUser: (id) => api.delete(`/admin/users/${id}`),
   // Referral program
   getReferralSettings: () => api.get('/admin/referral-settings'),
   updateReferralSettings: (d) => api.put('/admin/referral-settings', d),

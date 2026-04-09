@@ -160,6 +160,11 @@ func main() {
 			adminAPI.POST("/drivers/:id/reject", adminHandler.RejectDriverRegistration)
 			adminAPI.GET("/drivers/:id/analytics", adminHandler.GetDriverAnalytics)
 
+			// User management: ban, unban, delete
+			adminAPI.POST("/users/:id/ban", adminHandler.BanUser)
+			adminAPI.POST("/users/:id/unban", adminHandler.UnbanUser)
+			adminAPI.DELETE("/users/:id", adminHandler.DeleteUser)
+
 			// Dispatcher helpers
 			adminAPI.GET("/phone-history", adminHandler.GetPhoneHistory)
 
