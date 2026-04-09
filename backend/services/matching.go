@@ -179,6 +179,34 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 	}
 
 	log.Printf("[MATCHING] findNearbyDrivers: found %d available drivers", len(candidates))
+	if len(candidates) == 0 {
+		// Diagnostic: log all drivers and why they don't match
+		diagRows, diagErr := s.db.Query(context.Background(),
+			`SELECT d.id, d.user_id, d.is_available,
+			        d.current_lat IS NOT NULL AS has_lat,
+			        d.current_lng IS NOT NULL AS has_lng,
+			        COALESCE(d.registration_status, 'NULL') AS reg_status,
+			        d.last_seen,
+			        EXISTS(SELECT 1 FROM orders o WHERE o.driver_id = d.id
+			               AND o.status IN ('queued','accepted','arrived','in_progress')
+			               AND o.created_at > NOW() - INTERVAL '2 hours') AS has_active_order
+			 FROM drivers d LIMIT 20`)
+		if diagErr == nil {
+			defer diagRows.Close()
+			for diagRows.Next() {
+				var dID, dUID, regStatus string
+				var available, hasLat, hasLng, hasActiveOrder bool
+				var lastSeen interface{}
+				diagRows.Scan(&dID, &dUID, &available, &hasLat, &hasLng, &regStatus, &lastSeen, &hasActiveOrder)
+				log.Printf("[MATCHING-DIAG] driver=%s user=%s available=%v hasLat=%v hasLng=%v regStatus=%s lastSeen=%v activeOrder=%v online=%v",
+					dID, dUID, available, hasLat, hasLng, regStatus, lastSeen, hasActiveOrder, s.hub.IsOnline(dUID))
+			}
+		}
+	}
+	for i, c := range candidates {
+		log.Printf("[MATCHING]   driver[%d]: id=%s user=%s dist=%.0fm online=%v",
+			i, c.DriverID, c.UserID, c.Distance, s.hub.IsOnline(c.UserID))
+	}
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Distance < candidates[j].Distance
 	})
@@ -234,7 +262,8 @@ func (s *MatchingService) notifyDriver(userID, orderID string) {
 		"order": orderData,
 	}
 	data, _ := json.Marshal(msg)
-	log.Printf("[NOTIFY] Sending new_order to user %s for order %s", userID, orderID)
+	isOnline := s.hub.IsOnline(userID)
+	log.Printf("[NOTIFY] Sending new_order to user %s for order %s (online=%v)", userID, orderID, isOnline)
 	s.hub.SendToUser(userID, data)
 	// Also send Expo push notification so the driver is alerted even if the app is killed
 	go s.push.SendNewOrderPush(userID, orderData.PickupAddress, orderData.DestinationAddress, orderData.ID)

@@ -28,7 +28,6 @@ export default function RegisterScreen({ navigation }) {
   const [form, setForm] = useState({
     first_name: '', last_name: '', phone: '',
     password: '', confirm_password: '',
-    pinfl: '',
     car_region: '01', car_number_suffix: '',
   });
   const [docs, setDocs] = useState({
@@ -87,9 +86,6 @@ export default function RegisterScreen({ navigation }) {
     if (!isValidCarSuffix(form.car_number_suffix)) {
       Alert.alert(t(lang,'error'), 'Введите номер автомобиля в едином формате: 4-6 символов, буквы и цифры вместе'); return;
     }
-    if (!form.pinfl.trim() || form.pinfl.trim().length !== 14 || !/^\d{14}$/.test(form.pinfl.trim())) {
-      Alert.alert(t(lang,'error'), 'ПИНФЛ (ЖШШИР) должен быть ровно 14 цифр'); return;
-    }
     if (!docs.selfie || !docs.license_front || !docs.license_back || !docs.id_document) {
       Alert.alert(t(lang, 'error'), 'Загрузите selfie, права (2 стороны) и паспорт/ID');
       return;
@@ -105,7 +101,6 @@ export default function RegisterScreen({ navigation }) {
         password: form.password,
         confirm_password: form.confirm_password,
         car_number: buildCarNumber(),
-        pinfl: form.pinfl.trim(),
         selfie: docs.selfie,
         license_front: docs.license_front,
         license_back: docs.license_back,
@@ -206,17 +201,6 @@ export default function RegisterScreen({ navigation }) {
                 </View>
               );
             })}
-
-            <Text style={s.label}>ПИНФЛ (ЖШШИР) — 14 цифр</Text>
-            <TextInput
-              style={s.input}
-              value={form.pinfl}
-              onChangeText={(v) => setField('pinfl', v.replace(/\D/g, '').slice(0, 14))}
-              keyboardType="number-pad"
-              maxLength={14}
-              placeholder="12345678901234"
-              placeholderTextColor="#505068"
-            />
           </View>
 
           {/* Car number card */}

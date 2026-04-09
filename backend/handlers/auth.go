@@ -49,7 +49,7 @@ type RegisterDriverRequest struct {
 	Password    string `json:"password" binding:"required,min=8"`
 	ConfirmPw   string `json:"confirm_password" binding:"required"`
 	CarNumber   string `json:"car_number" binding:"required"`
-	PINFL       string `json:"pinfl" binding:"required"`
+	PINFL       string `json:"pinfl"`
 	ReferredBy  string `json:"referred_by"`
 }
 
@@ -192,9 +192,9 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		return
 	}
 
-	// PINFL (JSHSHIR) must be exactly 14 digits
+	// PINFL (JSHSHIR) — optional, but if provided must be exactly 14 digits
 	pinfl := strings.TrimSpace(req.PINFL)
-	if len(pinfl) != 14 || !isAllDigits(pinfl) {
+	if pinfl != "" && (len(pinfl) != 14 || !isAllDigits(pinfl)) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "PINFL must be exactly 14 digits"})
 		return
 	}

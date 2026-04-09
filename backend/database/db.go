@@ -343,4 +343,18 @@ WHERE status IN ('searching', 'queued', 'accepted', 'arrived', 'in_progress')
 -- (drivers created before the registration workflow was added)
 UPDATE drivers SET registration_status = 'approved'
 WHERE registration_status IS NULL OR registration_status = '';
+
+-- FULL CLEANUP: delete all old test data so system starts fresh
+-- Delete all orders first (foreign key to drivers/users)
+DELETE FROM orders;
+DELETE FROM ratings;
+DELETE FROM quiz_scores;
+DELETE FROM cashback_transactions;
+DELETE FROM driver_bonus_events;
+DELETE FROM referral_bonuses;
+DELETE FROM driver_friends;
+-- Delete all drivers
+DELETE FROM drivers;
+-- Delete all non-admin users (passengers + drivers)
+DELETE FROM users;
 `
