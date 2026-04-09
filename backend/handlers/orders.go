@@ -835,7 +835,7 @@ func (h *OrderHandler) GetAvailableDrivers(c *gin.Context) {
 		 WHERE is_available = true
 		   AND current_lat IS NOT NULL
 		   AND current_lng IS NOT NULL
-		   AND registration_status = 'approved'
+		   AND COALESCE(registration_status, 'approved') = 'approved'
 		   AND last_seen > NOW() - INTERVAL '1 hour'
 		 ORDER BY last_seen DESC
 		 LIMIT 200`,

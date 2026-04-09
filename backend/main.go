@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"time"
 
 	"axentis-taxi/config"
 	"axentis-taxi/database"
@@ -39,6 +41,21 @@ func main() {
 	go pricingService.StartSurgeScheduler()
 
 	pushService := services.NewPushService(db)
+
+	// Periodic cleanup: cancel stuck orders older than 2 hours every 10 minutes
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			res, err := db.Exec(context.Background(),
+				`UPDATE orders SET status = 'cancelled', cancelled_at = NOW()
+				 WHERE status IN ('searching', 'queued', 'accepted', 'arrived', 'in_progress')
+				   AND created_at < NOW() - INTERVAL '2 hours'`)
+			if err == nil && res.RowsAffected() > 0 {
+				log.Printf("[CLEANUP] Cancelled %d stuck orders", res.RowsAffected())
+			}
+		}
+	}()
 
 	r := gin.Default()
 

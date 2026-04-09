@@ -333,4 +333,14 @@ CREATE TABLE IF NOT EXISTS driver_bonus_events (
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_bonus_events_driver ON driver_bonus_events (driver_id, created_at DESC);
+
+-- Auto-cancel stuck orders older than 2 hours in non-terminal states
+UPDATE orders SET status = 'cancelled', cancelled_at = NOW()
+WHERE status IN ('searching', 'queued', 'accepted', 'arrived', 'in_progress')
+  AND created_at < NOW() - INTERVAL '2 hours';
+
+-- Approve existing drivers that have NULL or empty registration_status
+-- (drivers created before the registration workflow was added)
+UPDATE drivers SET registration_status = 'approved'
+WHERE registration_status IS NULL OR registration_status = '';
 `
