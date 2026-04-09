@@ -302,7 +302,8 @@ CREATE TABLE IF NOT EXISTS bonus_settings (
     milestones_enabled   BOOLEAN       DEFAULT false,
     updated_at           TIMESTAMPTZ   DEFAULT NOW()
 );
-INSERT INTO bonus_settings DEFAULT VALUES
+INSERT INTO bonus_settings (updated_at)
+SELECT NOW()
 WHERE NOT EXISTS (SELECT 1 FROM bonus_settings);
 
 -- Per-trip cashback records
