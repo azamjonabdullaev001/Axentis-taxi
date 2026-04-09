@@ -139,6 +139,16 @@ CREATE TABLE IF NOT EXISTS peak_periods (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Hourly surge: 24 rows (0-23), each with a multiplier. Yandex-style simple pricing.
+CREATE TABLE IF NOT EXISTS hourly_surge (
+    hour INTEGER PRIMARY KEY CHECK (hour >= 0 AND hour <= 23),
+    multiplier DECIMAL(5,2) NOT NULL DEFAULT 1.0 CHECK (multiplier >= 0.5 AND multiplier <= 5.0)
+);
+-- Seed all 24 hours with default x1.0
+INSERT INTO hourly_surge (hour, multiplier)
+SELECT h, 1.0 FROM generate_series(0, 23) AS h
+ON CONFLICT (hour) DO NOTHING;
+
 -- base_surge_multiplier: the live multiplier restores to this value outside peak periods
 ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS base_surge_multiplier DECIMAL(5,2) DEFAULT 1.0;
 
@@ -365,4 +375,7 @@ END $$;
 -- Ban system: temporary or permanent ban with reason
 ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_until TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason TEXT DEFAULT '';
+
+-- Persistent service share percentage (admin sets in Revenue panel)
+ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS service_share_pct DECIMAL(5,2) DEFAULT 10.0;
 `

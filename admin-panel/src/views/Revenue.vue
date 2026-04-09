@@ -29,13 +29,15 @@
             <span class="share-label">Доля сервиса: <b>{{ sharePercent }}%</b></span>
             <input
               type="range" v-model.number="sharePercent"
-              min="0" max="15" step="1"
+              min="0" max="50" step="1"
               class="range-input"
+              @change="saveSharePercent"
             />
             <div class="range-marks">
-              <span>0%</span><span>5%</span><span>10%</span><span>15%</span>
+              <span>0%</span><span>10%</span><span>25%</span><span>50%</span>
             </div>
           </div>
+          <span v-if="shareSaved" class="saved-msg">Сохранено!</span>
           <div class="share-calc">
             <div class="calc-row">
               <span>Общая выручка</span><span>{{ fmt(data.total_revenue) }}</span>
@@ -72,15 +74,25 @@ ChartJS.register(Title, Tooltip, Legend, BarElement, CategoryScale, LinearScale)
 const data = ref({})
 const loading = ref(true)
 const sharePercent = ref(10)
+const shareSaved = ref(false)
 
 onMounted(async () => {
   try {
     const { data: d } = await adminAPI.getRevenue()
     data.value = d
+    if (d.share_percent != null) sharePercent.value = d.share_percent
   } finally {
     loading.value = false
   }
 })
+
+async function saveSharePercent() {
+  try {
+    await adminAPI.updatePricing({ service_share_pct: sharePercent.value })
+    shareSaved.value = true
+    setTimeout(() => { shareSaved.value = false }, 3000)
+  } catch {}
+}
 
 const ourShare = computed(() => (data.value.total_revenue || 0) * sharePercent.value / 100)
 const driverShare = computed(() => (data.value.total_revenue || 0) - ourShare.value)
@@ -131,4 +143,5 @@ function fmt(v) { return Number(v || 0).toLocaleString('ru-RU') + ' сум' }
 .calc-row.green { color: #2e7d32; font-weight: 700; }
 .calc-row.yellow { color: #b8860b; font-weight: 700; }
 .empty { color: #aaa; font-size: 14px; }
+.saved-msg { font-size: 14px; color: #2e7d32; margin-top: 8px; display: block; }
 </style>

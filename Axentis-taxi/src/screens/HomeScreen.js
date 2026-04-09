@@ -64,21 +64,19 @@ async function reverseGeocode(coords) {
   return `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
 }
 
-// Обрезаем маршрут в ближайшей к пункту назначения точке (последний подход).
-// Идём с конца маршрута назад: пока расстояние уменьшается — продолжаем.
-// Как только начинает расти — обрезаем. Это убирает «хвост» маршрута за точку назначения.
+// Обрезаем маршрут в ближайшей к пункту назначения точке.
+// Находим точку маршрута с минимальным расстоянием до dest (глобальный минимум),
+// затем обрезаем всё после неё. Это убирает петли OSRM вокруг точки назначения.
 function clipRouteAtDestination(coords, dest) {
   if (!coords || coords.length < 2 || !dest) return coords;
   const d = (p) => Math.abs(p.latitude - dest.latitude) + Math.abs(p.longitude - dest.longitude);
-  let minDist = d(coords[coords.length - 1]);
+  let minDist = Infinity;
   let clipIdx = coords.length - 1;
-  for (let i = coords.length - 2; i >= 0; i--) {
+  for (let i = 0; i < coords.length; i++) {
     const dist = d(coords[i]);
-    if (dist <= minDist) {
+    if (dist < minDist) {
       minDist = dist;
       clipIdx = i;
-    } else {
-      break;
     }
   }
   return coords.slice(0, clipIdx + 1);
@@ -320,6 +318,13 @@ export default function HomeScreen() {
 
   // Пазл — показывается во время поездки, когда открыта полная панель с данными водителя
   const [puzzleStarted, setPuzzleStarted] = useState(false);
+
+  // Secondary panel swipe for SEARCHING/ACCEPTED/ARRIVED/IN_PROGRESS panels
+  const secPanelTranslateY = useRef(new Animated.Value(0)).current;
+  const secPanelHeightRef = useRef(300);
+  const secPanelCollapsedRef = useRef(false);
+  const secDragStartYRef = useRef(0);
+  const SEC_PANEL_PEEK = 42;
 
   // Анимация пунктира "последней мили" — точки плавно текут от пина к дороге
   useEffect(() => {
@@ -835,6 +840,63 @@ export default function HomeScreen() {
     resetOrder();
   }
 
+  // Reset secondary panel when order status changes
+  useEffect(() => {
+    secPanelTranslateY.setValue(0);
+    secPanelCollapsedRef.current = false;
+  }, [orderStatus]);
+
+  const secPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gs) =>
+        Math.abs(gs.dy) > 6 && Math.abs(gs.dy) > Math.abs(gs.dx) * 1.2,
+      onPanResponderGrant: () => {
+        secPanelTranslateY.stopAnimation();
+        secDragStartYRef.current = secPanelTranslateY.__getValue();
+      },
+      onPanResponderMove: (_, { dy }) => {
+        const maxSlide = Math.max(0, secPanelHeightRef.current - SEC_PANEL_PEEK);
+        const next = Math.max(0, Math.min(maxSlide, secDragStartYRef.current + dy));
+        secPanelTranslateY.setValue(next);
+      },
+      onPanResponderRelease: (_, { dy, vy }) => {
+        const isTap = Math.abs(dy) < 10 && Math.abs(vy) < 0.2;
+        const isSwipeDown = dy > 30 || vy > 0.3;
+        const maxSlide = Math.max(0, secPanelHeightRef.current - SEC_PANEL_PEEK);
+
+        const springTo = (toValue) => {
+          Animated.spring(secPanelTranslateY, {
+            toValue,
+            useNativeDriver: true,
+            tension: 280,
+            friction: 24,
+            overshootClamping: true,
+          }).start();
+        };
+
+        if (isTap) {
+          if (secPanelCollapsedRef.current) {
+            secPanelCollapsedRef.current = false;
+            springTo(0);
+          } else {
+            secPanelCollapsedRef.current = true;
+            springTo(maxSlide);
+          }
+          return;
+        }
+
+        if (isSwipeDown) {
+          secPanelCollapsedRef.current = true;
+          springTo(maxSlide);
+        } else {
+          secPanelCollapsedRef.current = false;
+          springTo(0);
+        }
+      },
+    })
+  ).current;
+
   const handlePanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -1346,20 +1408,26 @@ export default function HomeScreen() {
 
       {/* ── SEARCHING panel ── */}
       {orderStatus === ORDER_STATUS.SEARCHING && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
-          <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
+        <Animated.View
+          style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16, transform: [{ translateY: secPanelTranslateY }] }]}
+          onLayout={(e) => { secPanelHeightRef.current = e.nativeEvent.layout.height; }}
+        >
+          <View {...secPanResponder.panHandlers} style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 8 }} />
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'searching')}</Text>
           <TouchableOpacity style={[s.cancelBtn, { borderColor: colors.border }]} onPress={handleCancel}>
             <Text style={{ color: colors.error }}>{t(lang, 'cancel')}</Text>
           </TouchableOpacity>
-        </View>
+        </Animated.View>
       )}
 
       {/* ── ACCEPTED / ARRIVED panel ── */}
       {(orderStatus === ORDER_STATUS.ACCEPTED || orderStatus === ORDER_STATUS.ARRIVED) && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16 }]}>
-          <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
+        <Animated.View
+          style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16, transform: [{ translateY: secPanelTranslateY }] }]}
+          onLayout={(e) => { secPanelHeightRef.current = e.nativeEvent.layout.height; }}
+        >
+          <View {...secPanResponder.panHandlers} style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <Text style={[s.statusText, { color: colors.text }]}>
             {orderStatus === ORDER_STATUS.ACCEPTED ? t(lang, 'driverFound') : t(lang, 'driverArrived')}
           </Text>
@@ -1394,13 +1462,16 @@ export default function HomeScreen() {
           <TouchableOpacity style={[s.cancelBtn, { borderColor: colors.border }]} onPress={handleCancel}>
             <Text style={{ color: colors.error }}>{t(lang, 'cancel')}</Text>
           </TouchableOpacity>
-        </View>
+        </Animated.View>
       )}
 
       {/* ── IN_PROGRESS panel ── */}
       {orderStatus === ORDER_STATUS.IN_PROGRESS && (
-        <View style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16, maxHeight: puzzleStarted ? '100%' : undefined }]}>
-          <View style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
+        <Animated.View
+          style={[s.panel, { backgroundColor: colors.background, bottom: 0, paddingBottom: 16, maxHeight: puzzleStarted ? '100%' : undefined, transform: [{ translateY: secPanelTranslateY }] }]}
+          onLayout={(e) => { secPanelHeightRef.current = e.nativeEvent.layout.height; }}
+        >
+          <View {...secPanResponder.panHandlers} style={s.handleWrap}><View style={[s.handle, { backgroundColor: colors.border }]} /></View>
           <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <Text style={[s.statusText, { color: colors.text }]}>{t(lang, 'tripInProgress')}</Text>
           {driverInfo && (
@@ -1454,7 +1525,7 @@ export default function HomeScreen() {
             />
           )}
           </ScrollView>
-        </View>
+        </Animated.View>
       )}
 
       {/* ── Rating modal — slides up from bottom after trip completion ── */}

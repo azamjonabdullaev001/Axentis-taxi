@@ -64,8 +64,44 @@
 
 
 
-    <!-- Peak periods -->
+    <!-- Hourly surge: Yandex-style 24h grid -->
     <div class="section-card">
+      <h3>Почасовая наценка (автоматическая)</h3>
+      <p class="hint">
+        Задайте коэффициент цены для каждого часа. Например: x1.5 в час-пик, x1.0 в обычное время.
+        Система автоматически применяет наценку по расписанию.
+      </p>
+
+      <div v-if="loadingHourly" class="loading">Загрузка...</div>
+      <div v-else class="hourly-grid">
+        <div v-for="h in hourlyData" :key="h.hour" class="hour-row">
+          <span class="hour-label">{{ String(h.hour).padStart(2, '0') }}:00</span>
+          <input
+            v-model.number="h.multiplier"
+            type="range" min="0.5" max="3.0" step="0.05"
+            class="range-input hour-range"
+          />
+          <span class="hour-val" :class="hourClass(h.multiplier)">x{{ Number(h.multiplier).toFixed(2) }}</span>
+          <span class="hour-badge" :class="hourClass(h.multiplier)">{{ hourLabel(h.multiplier) }}</span>
+        </div>
+      </div>
+
+      <div class="hour-presets">
+        <button class="preset-btn" @click="presetReset">Сбросить все</button>
+        <button class="preset-btn" @click="presetMorning">Утренний пик</button>
+        <button class="preset-btn" @click="presetEvening">Вечерний пик</button>
+      </div>
+
+      <div v-if="hourlyError" class="error-msg">{{ hourlyError }}</div>
+      <button class="save-btn" :disabled="savingHourly" @click="saveHourlySurge">
+        {{ savingHourly ? 'Сохранение...' : 'Сохранить расписание' }}
+      </button>
+      <span v-if="hourlySaved" class="saved-msg">Сохранено!</span>
+    </div>
+
+    <!-- Legacy peak periods (kept for viewing old data) -->
+    <details class="section-card legacy-section">
+      <summary class="legacy-title">📈 Старые пиковые периоды (устаревшие)</summary>
       <h3>Пиковые периоды</h3>
       <p class="hint">
         Задайте временное окно, в котором цена автоматически растёт до максимума и затем плавно возвращается к норме.
@@ -150,7 +186,7 @@
           {{ savingPeriod ? 'Сохранение...' : 'Добавить период' }}
         </button>
       </div>
-    </div>
+    </details>
   </div>
 </template>
 
@@ -179,8 +215,15 @@ const newP = ref({ start_time: '07:00', end_time: '10:00', peak_pct: 100, rise_m
 const savingPeriod = ref(false)
 const periodError = ref('')
 
+// Hourly surge data
+const hourlyData = ref([])
+const loadingHourly = ref(true)
+const savingHourly = ref(false)
+const hourlyError = ref('')
+const hourlySaved = ref(false)
+
 onMounted(async () => {
-  await Promise.all([loadSettings(), loadPeriods()])
+  await Promise.all([loadSettings(), loadPeriods(), loadHourlySurge()])
 })
 
 
@@ -286,6 +329,67 @@ function holdMinutes(p) {
   return (eh * 60 + em) - (sh * 60 + sm) - p.rise_minutes - p.fall_minutes
 }
 
+// Hourly surge functions
+async function loadHourlySurge() {
+  try {
+    const { data } = await adminAPI.getHourlySurge()
+    const hours = data.hours || []
+    // Ensure all 24 hours exist
+    const map = {}
+    hours.forEach(h => { map[h.hour] = h.multiplier })
+    hourlyData.value = Array.from({ length: 24 }, (_, i) => ({
+      hour: i,
+      multiplier: map[i] != null ? map[i] : 1.0,
+    }))
+  } catch {
+    hourlyData.value = Array.from({ length: 24 }, (_, i) => ({ hour: i, multiplier: 1.0 }))
+  } finally {
+    loadingHourly.value = false
+  }
+}
+
+async function saveHourlySurge() {
+  hourlyError.value = ''
+  savingHourly.value = true
+  try {
+    await adminAPI.updateHourlySurge({ hours: hourlyData.value })
+    hourlySaved.value = true
+    setTimeout(() => { hourlySaved.value = false }, 3000)
+  } catch (e) {
+    hourlyError.value = e.response?.data?.error || 'Ошибка сохранения'
+  } finally {
+    savingHourly.value = false
+  }
+}
+
+function presetReset() {
+  hourlyData.value.forEach(h => { h.multiplier = 1.0 })
+}
+function presetMorning() {
+  hourlyData.value.forEach(h => {
+    if (h.hour >= 7 && h.hour <= 9) h.multiplier = 1.5
+    else h.multiplier = 1.0
+  })
+}
+function presetEvening() {
+  hourlyData.value.forEach(h => {
+    if (h.hour >= 17 && h.hour <= 19) h.multiplier = 1.5
+    else h.multiplier = 1.0
+  })
+}
+
+function hourClass(m) {
+  if (m > 1.5) return 'surge-high'
+  if (m > 1) return 'surge-medium'
+  if (m < 1) return 'surge-low'
+  return 'surge-normal'
+}
+function hourLabel(m) {
+  if (m < 1) return `-${Math.round((1 - m) * 100)}%`
+  if (m === 1) return 'Норма'
+  return `+${Math.round((m - 1) * 100)}%`
+}
+
 const baseSurgeLabel = computed(() => {
   const m = settings.value.base_surge_multiplier || 1
   if (m < 1) return `-${Math.round((1 - m) * 100)}%`
@@ -378,4 +482,27 @@ b.live-normal { color: #2e7d32; }
 .pb-rise { background: #bbdefb; color: #1565c0; display: flex; align-items: center; justify-content: center; min-width: 20px; }
 .pb-peak { background: #ef9a9a; color: #b71c1c; display: flex; align-items: center; justify-content: center; min-width: 20px; }
 .pb-fall { background: #c8e6c9; color: #2e7d32; display: flex; align-items: center; justify-content: center; min-width: 20px; }
+
+/* Hourly surge grid */
+.hourly-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+.hour-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.hour-label { width: 50px; font-size: 13px; font-weight: 700; color: #555; }
+.hour-range { flex: 1; }
+.hour-val { width: 48px; font-size: 13px; font-weight: 700; text-align: right; }
+.hour-badge { display: inline-block; width: 60px; text-align: center; padding: 2px 6px; border-radius: 12px; font-size: 11px; font-weight: 700; }
+.surge-high { color: #c62828; }
+.surge-medium { color: #f57f17; }
+.surge-low { color: #1565c0; }
+.surge-normal { color: #2e7d32; }
+.hour-badge.surge-high { background: #fce4ec; }
+.hour-badge.surge-medium { background: #fff8e1; }
+.hour-badge.surge-low { background: #e3f2fd; }
+.hour-badge.surge-normal { background: #e8f5e9; }
+.hour-presets { display: flex; gap: 8px; margin-bottom: 14px; }
+.preset-btn { padding: 8px 16px; border: 1.5px solid #e0e0e0; border-radius: 10px; font-size: 13px; font-weight: 600; background: #f8f9fa; cursor: pointer; }
+.preset-btn:hover { background: #e8e8e8; }
+
+/* Legacy section */
+.legacy-section { cursor: pointer; }
+.legacy-title { font-size: 14px; font-weight: 600; color: #888; padding: 8px 0; }
 </style>

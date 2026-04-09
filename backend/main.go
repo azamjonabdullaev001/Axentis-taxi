@@ -150,6 +150,8 @@ func main() {
 			adminAPI.GET("/peak-periods", adminHandler.GetPeakPeriods)
 			adminAPI.POST("/peak-periods", adminHandler.CreatePeakPeriod)
 			adminAPI.DELETE("/peak-periods/:id", adminHandler.DeletePeakPeriod)
+			adminAPI.GET("/hourly-surge", adminHandler.GetHourlySurge)
+			adminAPI.PUT("/hourly-surge", adminHandler.UpdateHourlySurge)
 			adminAPI.POST("/call-orders", adminHandler.CreateCallOrder)
 
 			// Driver management

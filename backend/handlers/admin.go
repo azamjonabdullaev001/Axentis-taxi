@@ -171,7 +171,14 @@ func (h *AdminHandler) GetRevenue(c *gin.Context) {
 		 FROM orders WHERE status = 'completed'`,
 	).Scan(&totalRevenue, &totalOrders)
 
-	sharePercent := 10.0
+	// Read service share percentage from price_settings (set in Revenue panel)
+	var sharePercent float64
+	err := h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(service_share_pct, 10.0) FROM price_settings ORDER BY id LIMIT 1`,
+	).Scan(&sharePercent)
+	if err != nil || sharePercent <= 0 {
+		sharePercent = 10.0
+	}
 	ourShare := totalRevenue * sharePercent / 100
 
 	// Daily revenue for last 7 days
@@ -366,11 +373,11 @@ func (h *AdminHandler) GetPricingSettings(c *gin.Context) {
 	err := h.db.QueryRow(context.Background(),
 		`SELECT id, price_per_km, price_per_minute_wait, free_wait_minutes,
 		 service_fee, surge_multiplier, COALESCE(base_surge_multiplier, 1.0),
-		 COALESCE(royal_price_per_km, 3000), updated_at
+		 COALESCE(royal_price_per_km, 3000), COALESCE(service_share_pct, 10.0), updated_at
 		 FROM price_settings ORDER BY id LIMIT 1`,
 	).Scan(&ps.ID, &ps.PricePerKm, &ps.PricePerMinuteWait, &ps.FreeWaitMinutes,
 		&ps.ServiceFee, &ps.SurgeMultiplier, &ps.BaseSurgeMultiplier,
-		&ps.RoyalPricePerKm, &ps.UpdatedAt)
+		&ps.RoyalPricePerKm, &ps.ServiceSharePct, &ps.UpdatedAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch pricing"})
 		return
@@ -386,6 +393,7 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 		ServiceFee          *float64 `json:"service_fee"`
 		BaseSurgeMultiplier *float64 `json:"base_surge_multiplier"`
 		RoyalPricePerKm     *float64 `json:"royal_price_per_km"`
+		ServiceSharePct     *float64 `json:"service_share_pct"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -403,6 +411,12 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Royal price per km must be at least 100 sum"})
 		return
 	}
+	if req.ServiceSharePct != nil {
+		if *req.ServiceSharePct < 0 || *req.ServiceSharePct > 50 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Service share must be between 0 and 50%"})
+			return
+		}
+	}
 
 	_, err := h.db.Exec(context.Background(),
 		`UPDATE price_settings SET
@@ -412,9 +426,11 @@ func (h *AdminHandler) UpdatePricingSettings(c *gin.Context) {
 		 service_fee = COALESCE($4, service_fee),
 		 base_surge_multiplier = COALESCE($5, base_surge_multiplier),
 		 royal_price_per_km = COALESCE($6, royal_price_per_km),
+		 service_share_pct = COALESCE($7, service_share_pct),
 		 updated_at = NOW()`,
 		req.PricePerKm, req.PricePerMinuteWait, req.FreeWaitMinutes,
 		req.ServiceFee, req.BaseSurgeMultiplier, req.RoyalPricePerKm,
+		req.ServiceSharePct,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update pricing"})
@@ -564,6 +580,63 @@ func (h *AdminHandler) DeletePeakPeriod(c *gin.Context) {
 		`UPDATE peak_periods SET is_active = false WHERE id = $1`, id,
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Peak period removed"})
+}
+
+// ── Hourly Surge (Yandex-style) ───────────────────────────────────────────────
+
+func (h *AdminHandler) GetHourlySurge(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT hour, multiplier FROM hourly_surge ORDER BY hour ASC`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch hourly surge"})
+		return
+	}
+	defer rows.Close()
+
+	var hours []models.HourlySurge
+	for rows.Next() {
+		var h models.HourlySurge
+		rows.Scan(&h.Hour, &h.Multiplier)
+		hours = append(hours, h)
+	}
+	if hours == nil {
+		hours = []models.HourlySurge{}
+	}
+	c.JSON(http.StatusOK, gin.H{"hours": hours})
+}
+
+func (h *AdminHandler) UpdateHourlySurge(c *gin.Context) {
+	var req struct {
+		Hours []models.HourlySurge `json:"hours" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	for _, hs := range req.Hours {
+		if hs.Hour < 0 || hs.Hour > 23 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid hour: %d", hs.Hour)})
+			return
+		}
+		if hs.Multiplier < 0.5 || hs.Multiplier > 5.0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Multiplier for hour %d must be between 0.5 and 5.0", hs.Hour)})
+			return
+		}
+	}
+
+	for _, hs := range req.Hours {
+		_, err := h.db.Exec(context.Background(),
+			`INSERT INTO hourly_surge (hour, multiplier) VALUES ($1, $2)
+			 ON CONFLICT (hour) DO UPDATE SET multiplier = $2`,
+			hs.Hour, hs.Multiplier,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update hourly surge"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Hourly surge updated"})
 }
 
 // ── Royal Taxi Mode ───────────────────────────────────────────────────────────

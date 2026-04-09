@@ -216,6 +216,7 @@ type PriceSettings struct {
 	SurgeMultiplier     float64   `json:"surge_multiplier"`
 	BaseSurgeMultiplier float64   `json:"base_surge_multiplier"`
 	RoyalPricePerKm     float64   `json:"royal_price_per_km"`
+	ServiceSharePct     float64   `json:"service_share_pct"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
@@ -243,6 +244,11 @@ type PeakPeriod struct {
 	FallMinutes    int       `json:"fall_minutes"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+type HourlySurge struct {
+	Hour       int     `json:"hour"`
+	Multiplier float64 `json:"multiplier"`
 }
 
 type QuizScore struct {

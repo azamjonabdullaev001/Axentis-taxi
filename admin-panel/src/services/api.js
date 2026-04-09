@@ -35,6 +35,8 @@ export const adminAPI = {
   getPeakPeriods: () => api.get('/admin/peak-periods'),
   createPeakPeriod: (d) => api.post('/admin/peak-periods', d),
   deletePeakPeriod: (id) => api.delete(`/admin/peak-periods/${id}`),
+  getHourlySurge: () => api.get('/admin/hourly-surge'),
+  updateHourlySurge: (d) => api.put('/admin/hourly-surge', d),
   getAdmins: () => api.get('/admin/admins'),
   createAdmin: (d) => api.post('/admin/admins', d),
   // Royal Taxi Mode
