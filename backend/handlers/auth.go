@@ -49,7 +49,7 @@ type RegisterDriverRequest struct {
 	Password    string `json:"password" binding:"required,min=8"`
 	ConfirmPw   string `json:"confirm_password" binding:"required"`
 	CarNumber   string `json:"car_number" binding:"required"`
-	PINFL       string `json:"pinfl"`
+	PINFL       string `json:"pinfl" binding:"required"`
 	ReferredBy  string `json:"referred_by"`
 }
 
@@ -116,6 +116,7 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 			Password:   c.PostForm("password"),
 			ConfirmPw:  c.PostForm("confirm_password"),
 			CarNumber:  strings.TrimSpace(c.PostForm("car_number")),
+			PINFL:      strings.TrimSpace(c.PostForm("pinfl")),
 			ReferredBy: strings.TrimSpace(c.PostForm("referred_by")),
 		}
 
@@ -191,6 +192,13 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		return
 	}
 
+	// PINFL (JSHSHIR) must be exactly 14 digits
+	pinfl := strings.TrimSpace(req.PINFL)
+	if len(pinfl) != 14 || !isAllDigits(pinfl) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "PINFL must be exactly 14 digits"})
+		return
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
@@ -240,10 +248,10 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 
 	_, err = tx.Exec(context.Background(),
 		`INSERT INTO drivers
-		 (user_id, car_number, referral_code, referred_by, registration_status,
+		 (user_id, car_number, pinfl, referral_code, referred_by, registration_status,
 		  selfie_url, license_front_url, license_back_url, id_document_url)
-		 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)`,
-		userID, normalizedCarNumber, refCode, referredBy,
+		 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9)`,
+		userID, normalizedCarNumber, pinfl, refCode, referredBy,
 		selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL,
 	)
 	if err != nil {
@@ -591,6 +599,15 @@ func normalizePhone(phone string) string {
 		phone = "+" + phone
 	}
 	return phone
+}
+
+func isAllDigits(s string) bool {
+	for _, c := range s {
+		if !unicode.IsDigit(c) {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 func isValidUzPhone(phone string) bool {

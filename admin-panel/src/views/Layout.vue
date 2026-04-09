@@ -8,35 +8,35 @@
         <span>Axentis Taxi</span>
       </div>
       <nav class="sidebar-nav">
-        <router-link to="/dashboard" class="nav-item">
+        <router-link v-if="isRouteAllowed('/dashboard')" to="/dashboard" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           Dashboard
         </router-link>
-        <router-link to="/orders" class="nav-item">
+        <router-link v-if="isRouteAllowed('/orders')" to="/orders" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
           История заказов
         </router-link>
-        <router-link to="/dispatcher" class="nav-item">
+        <router-link v-if="isRouteAllowed('/dispatcher')" to="/dispatcher" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
           Диспетчер
         </router-link>
-        <router-link to="/revenue" class="nav-item">
+        <router-link v-if="isRouteAllowed('/revenue')" to="/revenue" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
           Выручка
         </router-link>
-        <router-link to="/pricing" class="nav-item">
+        <router-link v-if="isRouteAllowed('/pricing')" to="/pricing" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
           Цены
         </router-link>
-        <router-link to="/admins" class="nav-item">
+        <router-link v-if="isRouteAllowed('/admins')" to="/admins" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           Администраторы
         </router-link>
-        <router-link to="/users" class="nav-item">
+        <router-link v-if="isRouteAllowed('/users')" to="/users" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
           Пользователи
         </router-link>
-        <router-link to="/referrals" class="nav-item">
+        <router-link v-if="isRouteAllowed('/referrals')" to="/referrals" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><path d="M12 22V7M12 7H7.5a2.5 2.5 0 010-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 000-5C13 2 12 7 12 7z"/></svg>
           Рефералы / Бонусы
         </router-link>
@@ -54,9 +54,33 @@
 
 <script setup>
 import { useRouter } from 'vue-router'
+import { ref, computed } from 'vue'
+
 const router = useRouter()
+const adminRole = ref(localStorage.getItem('admin_role') || 'superadmin')
+
+// Role-to-allowed-routes mapping
+// superadmin has access to everything
+// other roles only see their specific section + dashboard
+const roleRoutes = {
+  superadmin: null, // null = all routes allowed
+  dispatcher: ['/dashboard', '/dispatcher'],
+  orders: ['/dashboard', '/orders'],
+  revenue: ['/dashboard', '/revenue'],
+  pricing: ['/dashboard', '/pricing'],
+  users: ['/dashboard', '/users'],
+  referrals: ['/dashboard', '/referrals'],
+}
+
+function isRouteAllowed(path) {
+  const allowed = roleRoutes[adminRole.value]
+  if (!allowed) return true // superadmin
+  return allowed.some(r => path.startsWith(r))
+}
+
 function logout() {
   localStorage.removeItem('admin_token')
+  localStorage.removeItem('admin_role')
   router.push('/login')
 }
 </script>

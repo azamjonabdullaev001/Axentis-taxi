@@ -59,9 +59,9 @@ func (h *AdminHandler) Login(c *gin.Context) {
 	phone := strings.TrimSpace(req.Phone)
 	var admin models.Admin
 	err := h.db.QueryRow(context.Background(),
-		`SELECT id, phone, password_hash, access_token, is_active
+		`SELECT id, phone, password_hash, access_token, is_active, COALESCE(role, 'superadmin')
 		 FROM admins WHERE phone = $1`, phone,
-	).Scan(&admin.ID, &admin.Phone, &admin.PasswordHash, &admin.AccessToken, &admin.IsActive)
+	).Scan(&admin.ID, &admin.Phone, &admin.PasswordHash, &admin.AccessToken, &admin.IsActive, &admin.Role)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
@@ -86,16 +86,17 @@ func (h *AdminHandler) Login(c *gin.Context) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"admin_id": admin.ID,
-		"role":     "admin",
-		"exp":      time.Now().Add(8 * time.Hour).Unix(),
+		"admin_id":   admin.ID,
+		"role":       "admin",
+		"admin_role": admin.Role,
+		"exp":        time.Now().Add(8 * time.Hour).Unix(),
 	})
 	tokenStr, err := token.SignedString([]byte(h.cfg.JWTSecret))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token generation failed"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": tokenStr, "admin_id": admin.ID})
+	c.JSON(http.StatusOK, gin.H{"token": tokenStr, "admin_id": admin.ID, "role": admin.Role})
 }
 
 func (h *AdminHandler) GetAllOrders(c *gin.Context) {
@@ -288,6 +289,7 @@ func (h *AdminHandler) CreateAdmin(c *gin.Context) {
 		Phone       string `json:"phone" binding:"required"`
 		Password    string `json:"password" binding:"required,min=8"`
 		AccessToken string `json:"access_token" binding:"required"`
+		Role        string `json:"role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -295,6 +297,19 @@ func (h *AdminHandler) CreateAdmin(c *gin.Context) {
 	}
 	if len(req.AccessToken) != 20 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Access token must be exactly 20 characters"})
+		return
+	}
+
+	// Validate role
+	validRoles := map[string]bool{
+		"superadmin": true, "dispatcher": true, "orders": true,
+		"revenue": true, "pricing": true, "users": true, "referrals": true,
+	}
+	if req.Role == "" {
+		req.Role = "dispatcher"
+	}
+	if !validRoles[req.Role] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role"})
 		return
 	}
 
@@ -306,8 +321,8 @@ func (h *AdminHandler) CreateAdmin(c *gin.Context) {
 
 	var adminID string
 	err = h.db.QueryRow(context.Background(),
-		`INSERT INTO admins (phone, password_hash, access_token) VALUES ($1, $2, $3) RETURNING id`,
-		req.Phone, string(hash), req.AccessToken,
+		`INSERT INTO admins (phone, password_hash, access_token, role) VALUES ($1, $2, $3, $4) RETURNING id`,
+		req.Phone, string(hash), req.AccessToken, req.Role,
 	).Scan(&adminID)
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -322,7 +337,7 @@ func (h *AdminHandler) CreateAdmin(c *gin.Context) {
 
 func (h *AdminHandler) GetAdmins(c *gin.Context) {
 	rows, err := h.db.Query(context.Background(),
-		`SELECT id, phone, is_active, created_at FROM admins ORDER BY created_at DESC`,
+		`SELECT id, phone, is_active, COALESCE(role, 'superadmin'), created_at FROM admins ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch admins"})
@@ -332,12 +347,12 @@ func (h *AdminHandler) GetAdmins(c *gin.Context) {
 
 	var admins []map[string]interface{}
 	for rows.Next() {
-		var id, phone string
+		var id, phone, role string
 		var isActive bool
 		var createdAt time.Time
-		rows.Scan(&id, &phone, &isActive, &createdAt)
+		rows.Scan(&id, &phone, &isActive, &role, &createdAt)
 		admins = append(admins, map[string]interface{}{
-			"id": id, "phone": phone, "is_active": isActive, "created_at": createdAt,
+			"id": id, "phone": phone, "is_active": isActive, "role": role, "created_at": createdAt,
 		})
 	}
 	if admins == nil {

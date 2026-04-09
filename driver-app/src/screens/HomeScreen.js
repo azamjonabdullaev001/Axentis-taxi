@@ -23,6 +23,24 @@ import {
 const CAR_ICON = require('../../assets/car-photo.png');
 const FINISH_ICON = require('../../assets/icons8-finish-96.png');
 
+// Обрезаем маршрут в ближайшей к пункту назначения точке (последний подход).
+function clipRouteAtDestination(coords, dest) {
+  if (!coords || coords.length < 2 || !dest) return coords;
+  const d = (p) => Math.abs(p.latitude - dest.latitude) + Math.abs(p.longitude - dest.longitude);
+  let minDist = d(coords[coords.length - 1]);
+  let clipIdx = coords.length - 1;
+  for (let i = coords.length - 2; i >= 0; i--) {
+    const dist = d(coords[i]);
+    if (dist <= minDist) {
+      minDist = dist;
+      clipIdx = i;
+    } else {
+      break;
+    }
+  }
+  return coords.slice(0, clipIdx + 1);
+}
+
 // Маршрут по реальным дорогам (OSRM, steps=true для точной геометрии)
 // Возвращает { coords, distanceKm }
 async function fetchRoadRoute(pickup, dest) {
@@ -45,7 +63,7 @@ async function fetchRoadRoute(pickup, dest) {
       }
     }
     if (coords.length < 2) return null;
-    return { coords, distanceKm };
+    return { coords: clipRouteAtDestination(coords, dest), distanceKm };
   }
 
   const ctrl = new AbortController();
@@ -215,9 +233,26 @@ export default function HomeScreen() {
       }
       // Automatically go online as soon as the screen loads
       try {
+        // Send initial location to server BEFORE going online
+        // so the matching query can find this driver immediately
+        if (locationRef.current) {
+          await driverAPI.updateLocation(
+            locationRef.current.latitude,
+            locationRef.current.longitude,
+            0,
+          ).catch(() => {});
+        }
         await driverAPI.updateAvailability(true);
         setDriverStatus(DRIVER_STATUS.AVAILABLE);
-      } catch {}
+      } catch (err) {
+        const msg = err?.response?.data?.error;
+        if (msg && msg.includes('not approved')) {
+          Alert.alert(
+            t(lang, 'registrationPending') || 'Регистрация на рассмотрении',
+            t(lang, 'waitForApproval') || 'Ваша регистрация ещё не подтверждена администратором. Пожалуйста, дождитесь одобрения.',
+          );
+        }
+      }
     })();
 
     (async () => {
@@ -445,6 +480,19 @@ export default function HomeScreen() {
       // Driver fallback: clear live pin; route will snap back to static pickup coords
       setPassengerLiveLocation(null);
     });
+    socket.on('destination_reached', (data) => {
+      // Server detected driver is within 100m of destination — prompt to complete
+      if (driverStatusRef.current === DRIVER_STATUS.IN_PROGRESS) {
+        Alert.alert(
+          'Вы прибыли',
+          'Вы находитесь вблизи места назначения. Завершить поездку?',
+          [
+            { text: 'Ещё нет', style: 'cancel' },
+            { text: 'Завершить', onPress: () => handleCompleteTrip() },
+          ],
+        );
+      }
+    });
 
     return () => {
       socket.off('new_order');
@@ -452,6 +500,7 @@ export default function HomeScreen() {
       socket.off('order_transferred');
       socket.off('passenger_location');
       socket.off('passenger_location_hidden');
+      socket.off('destination_reached');
     };
   }, [activeOrder, lang]);
 
@@ -775,6 +824,27 @@ export default function HomeScreen() {
             lineJoin="round"
           />
         )}
+        {/* Пунктир: конец дороги → точка назначения (последняя миля) */}
+        {routeCoords.length >= 2 && activeOrder && activeOrder.trip_type !== 'free' &&
+         activeOrder.destination_lat && activeOrder.destination_lng &&
+         driverStatus === DRIVER_STATUS.IN_PROGRESS && (() => {
+          const dest = { latitude: activeOrder.destination_lat, longitude: activeOrder.destination_lng };
+          const lastPt = routeCoords[routeCoords.length - 1];
+          const dist = Math.abs(lastPt.latitude - dest.latitude) +
+                       Math.abs(lastPt.longitude - dest.longitude);
+          if (dist < 0.00005) return null;
+          return (
+            <Polyline
+              coordinates={[lastPt, dest]}
+              strokeColor={routeColor}
+              strokeWidth={4}
+              lineDashPattern={[10, 8]}
+              geodesic
+              lineCap="round"
+              lineJoin="round"
+            />
+          );
+        })()}
       </MapView>
 
       {/* Find Me button — floats above bottom panel, right side */}

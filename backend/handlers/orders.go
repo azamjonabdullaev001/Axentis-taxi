@@ -706,14 +706,16 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 
 	// Broadcast location to passenger of active order
 	var passengerID *string
-	var orderID string
+	var orderID, orderStatus string
+	var destLat, destLng *float64
 	err := h.db.QueryRow(context.Background(),
-		`SELECT o.passenger_id, o.id FROM orders o
+		`SELECT o.passenger_id, o.id, o.status, o.destination_lat, o.destination_lng
+		 FROM orders o
 		 JOIN drivers d ON o.driver_id = d.id
 		 WHERE d.user_id = $1 AND o.status IN ('accepted', 'arrived', 'in_progress')
 		 ORDER BY o.created_at DESC LIMIT 1`,
 		userID,
-	).Scan(&passengerID, &orderID)
+	).Scan(&passengerID, &orderID, &orderStatus, &destLat, &destLng)
 	if err == nil && passengerID != nil {
 		msg, _ := json.Marshal(map[string]interface{}{
 			"type":     "driver_location",
@@ -723,6 +725,20 @@ func (h *OrderHandler) UpdateDriverLocation(c *gin.Context) {
 			"heading":  req.Heading,
 		})
 		h.hub.SendToUser(*passengerID, msg)
+
+		// Destination proximity check: notify when driver is within 100m of destination
+		if orderStatus == "in_progress" && destLat != nil && destLng != nil {
+			dist := haversineMeters(req.Lat, req.Lng, *destLat, *destLng)
+			if dist <= 100 {
+				reachedMsg, _ := json.Marshal(map[string]interface{}{
+					"type":     "destination_reached",
+					"order_id": orderID,
+					"distance": dist,
+				})
+				h.hub.SendToUser(*passengerID, reachedMsg)
+				h.hub.SendToUser(userID, reachedMsg)
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Location updated"})
@@ -819,7 +835,8 @@ func (h *OrderHandler) GetAvailableDrivers(c *gin.Context) {
 		 WHERE is_available = true
 		   AND current_lat IS NOT NULL
 		   AND current_lng IS NOT NULL
-		 AND last_seen > NOW() - INTERVAL '1 hour'
+		   AND registration_status = 'approved'
+		   AND last_seen > NOW() - INTERVAL '1 hour'
 		 ORDER BY last_seen DESC
 		 LIMIT 200`,
 	)
@@ -910,6 +927,19 @@ func (h *OrderHandler) UpdateDriverAvailability(c *gin.Context) {
 		return
 	}
 	userID := c.GetString("user_id")
+
+	// Only approved drivers can go online
+	if req.Available {
+		var regStatus string
+		err := h.db.QueryRow(context.Background(),
+			`SELECT COALESCE(registration_status, 'pending') FROM drivers WHERE user_id = $1`, userID,
+		).Scan(&regStatus)
+		if err != nil || regStatus != "approved" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Driver not approved yet"})
+			return
+		}
+	}
+
 	h.db.Exec(context.Background(),
 		`UPDATE drivers SET is_available = $1, last_seen = NOW() WHERE user_id = $2`,
 		req.Available, userID,
@@ -1196,5 +1226,18 @@ func (h *OrderHandler) applyCompletionBonuses(driverID, driverUserID, orderID st
 		})
 		h.hub.SendToUser(driverUserID, msg)
 	}
+}
+
+// haversineMeters calculates distance in meters between two coordinates.
+func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371000 // Earth radius in meters
+	phi1 := lat1 * math.Pi / 180
+	phi2 := lat2 * math.Pi / 180
+	dPhi := (lat2 - lat1) * math.Pi / 180
+	dLam := (lon2 - lon1) * math.Pi / 180
+	a := math.Sin(dPhi/2)*math.Sin(dPhi/2) +
+		math.Cos(phi1)*math.Cos(phi2)*math.Sin(dLam/2)*math.Sin(dLam/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return R * c
 }
 

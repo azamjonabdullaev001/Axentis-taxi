@@ -33,9 +33,32 @@ type DriverCandidate struct {
 // 3. If no response in 10 seconds or declined, try the next driver
 func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickupLng float64) {
 	log.Printf("[ORDER %s] Starting driver search: pickup=(%.6f, %.6f)", orderID, pickupLat, pickupLng)
-	candidates, err := s.findNearbyDrivers(pickupLat, pickupLng)
-	if err != nil || len(candidates) == 0 {
-		log.Printf("[ORDER %s] No candidates found (err=%v, count=%d)", orderID, err, len(candidates))
+
+	// Retry up to 6 times (30s total) — gives drivers time to go online / GPS to register
+	var candidates []DriverCandidate
+	var err error
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			if s.isOrderAccepted(orderID) {
+				return
+			}
+			// Check if order was cancelled while waiting
+			var status string
+			if e := s.db.QueryRow(context.Background(),
+				`SELECT status FROM orders WHERE id = $1`, orderID,
+			).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
+				return
+			}
+			time.Sleep(5 * time.Second)
+		}
+		candidates, err = s.findNearbyDrivers(pickupLat, pickupLng)
+		if err == nil && len(candidates) > 0 {
+			break
+		}
+		log.Printf("[ORDER %s] Attempt %d: no candidates (err=%v, count=%d)", orderID, attempt+1, err, len(candidates))
+	}
+	if len(candidates) == 0 {
+		log.Printf("[ORDER %s] No candidates found after retries", orderID)
 		s.notifyPassengerNoDrivers(orderID)
 		return
 	}
@@ -125,6 +148,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		 WHERE d.is_available = true
 		   AND d.current_lat IS NOT NULL
 		   AND d.current_lng IS NOT NULL
+		   AND d.registration_status = 'approved'
 		   AND NOT EXISTS (
 		     SELECT 1 FROM orders o
 		     WHERE o.driver_id = d.id AND o.status IN ('queued','accepted','arrived','in_progress')

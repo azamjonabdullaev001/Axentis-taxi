@@ -64,6 +64,26 @@ async function reverseGeocode(coords) {
   return `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
 }
 
+// Обрезаем маршрут в ближайшей к пункту назначения точке (последний подход).
+// Идём с конца маршрута назад: пока расстояние уменьшается — продолжаем.
+// Как только начинает расти — обрезаем. Это убирает «хвост» маршрута за точку назначения.
+function clipRouteAtDestination(coords, dest) {
+  if (!coords || coords.length < 2 || !dest) return coords;
+  const d = (p) => Math.abs(p.latitude - dest.latitude) + Math.abs(p.longitude - dest.longitude);
+  let minDist = d(coords[coords.length - 1]);
+  let clipIdx = coords.length - 1;
+  for (let i = coords.length - 2; i >= 0; i--) {
+    const dist = d(coords[i]);
+    if (dist <= minDist) {
+      minDist = dist;
+      clipIdx = i;
+    } else {
+      break;
+    }
+  }
+  return coords.slice(0, clipIdx + 1);
+}
+
 // Маршрут по реальным дорогам: два OSRM источника с актуальным покрытием ЦА
 // Использует steps=true для точной геометрии на каждом повороте (не упрощённый overview).
 // Возвращает { coords, distanceKm }.
@@ -89,7 +109,7 @@ async function fetchRoadRoute(pickup, dest) {
       }
     }
     if (coords.length < 2) return null;
-    return { coords, distanceKm };
+    return { coords: clipRouteAtDestination(coords, dest), distanceKm };
   }
 
   // 1. router.project-osrm.org — глобальное покрытие, быстрый ответ
@@ -656,9 +676,14 @@ export default function HomeScreen() {
       setOrderStatus(ORDER_STATUS.IDLE);
       Alert.alert(t(lang, 'noDriversTitle'), t(lang, 'noDriversFound'));
     });
+    socket.on('destination_reached', () => {
+      // Server detected driver is near destination — show notification to passenger
+      Alert.alert('Прибытие', 'Водитель приближается к месту назначения');
+    });
     return () => {
       socket.off('trip_completed');
       socket.off('driver_location');
+      socket.off('destination_reached');
     };
   }, [user?.id, pickupCoords, destCoords, lang]);
 
@@ -1038,6 +1063,24 @@ export default function HomeScreen() {
             lineJoin="round"
           />
         )}
+        {/* Пунктир: конец дороги → точка назначения (последняя миля активного маршрута) */}
+        {routeCoords.length >= 2 && destCoords && orderStatus === ORDER_STATUS.IN_PROGRESS && (() => {
+          const lastPt = routeCoords[routeCoords.length - 1];
+          const dist = Math.abs(lastPt.latitude - destCoords.latitude) +
+                       Math.abs(lastPt.longitude - destCoords.longitude);
+          if (dist < 0.00005) return null;
+          return (
+            <Polyline
+              coordinates={[lastPt, destCoords]}
+              strokeColor={routeColor}
+              strokeWidth={4}
+              lineDashPattern={[10, 8]}
+              geodesic
+              lineCap="round"
+              lineJoin="round"
+            />
+          );
+        })()}
       </MapView>
 
       {/* Center crosshair during map selection — PNG иконка с анимацией покачивания */}

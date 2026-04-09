@@ -20,14 +20,14 @@ const routes = [
     children: [
       { path: '', redirect: '/dashboard' },
       { path: 'dashboard', component: Dashboard },
-      { path: 'orders', component: Orders },
-      { path: 'revenue', component: Revenue },
-      { path: 'pricing', component: Pricing },
-      { path: 'admins', component: Admins },
-      { path: 'users', component: Users },
-      { path: 'dispatcher', component: Dispatcher },
-      { path: 'referrals', component: Referrals },
-      { path: 'drivers/:id', component: DriverDetail },
+      { path: 'orders', component: Orders, meta: { allowedRoles: ['superadmin', 'orders'] } },
+      { path: 'revenue', component: Revenue, meta: { allowedRoles: ['superadmin', 'revenue'] } },
+      { path: 'pricing', component: Pricing, meta: { allowedRoles: ['superadmin', 'pricing'] } },
+      { path: 'admins', component: Admins, meta: { allowedRoles: ['superadmin'] } },
+      { path: 'users', component: Users, meta: { allowedRoles: ['superadmin', 'users'] } },
+      { path: 'dispatcher', component: Dispatcher, meta: { allowedRoles: ['superadmin', 'dispatcher'] } },
+      { path: 'referrals', component: Referrals, meta: { allowedRoles: ['superadmin', 'referrals'] } },
+      { path: 'drivers/:id', component: DriverDetail, meta: { allowedRoles: ['superadmin', 'users'] } },
     ]
   },
   { path: '/:pathMatch(.*)*', redirect: '/' }
@@ -42,6 +42,15 @@ router.beforeEach((to) => {
   const token = localStorage.getItem('admin_token')
   if (!to.meta.public && !token) return '/login'
   if (to.path === '/login' && token) return '/dashboard'
+
+  // Role-based route guard
+  const allowedRoles = to.meta.allowedRoles
+  if (allowedRoles && token) {
+    const role = localStorage.getItem('admin_role') || 'superadmin'
+    if (!allowedRoles.includes(role)) {
+      return '/dashboard'
+    }
+  }
 })
 
 export default router

@@ -161,6 +161,12 @@ SELECT
     'Ax3nt1sAdm2026T0k3n7'
 WHERE NOT EXISTS (SELECT 1 FROM admins WHERE phone = '+998914751330');
 
+-- Admin role: 'superadmin' has full access, other roles see only their section
+-- Possible values: 'superadmin', 'dispatcher', 'orders', 'revenue', 'pricing', 'users', 'referrals'
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS role VARCHAR(30) DEFAULT 'superadmin';
+-- Set superadmin role for the seed admin
+UPDATE admins SET role = 'superadmin' WHERE phone = '+998914751330' AND (role IS NULL OR role = '');
+
 -- Royal Taxi Mode: new columns and tables (additive only, never alters existing behaviour)
 
 -- order_type: 'app' (passenger-initiated) | 'call' (dispatcher-initiated)

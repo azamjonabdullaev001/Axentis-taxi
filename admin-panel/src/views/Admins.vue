@@ -9,6 +9,7 @@
         <thead>
           <tr>
             <th>Телефон</th>
+            <th>Роль</th>
             <th>Создан</th>
             <th>Статус</th>
           </tr>
@@ -16,6 +17,7 @@
         <tbody>
           <tr v-for="a in admins" :key="a.id">
             <td>{{ a.phone }}</td>
+            <td><span class="role-badge">{{ roleLabel(a.role) }}</span></td>
             <td><small>{{ fmtDate(a.created_at) }}</small></td>
             <td>
               <span :class="['badge', a.is_active ? 'active' : 'inactive']">
@@ -24,7 +26,7 @@
             </td>
           </tr>
           <tr v-if="admins.length === 0">
-            <td colspan="3" class="empty">Нет данных</td>
+            <td colspan="4" class="empty">Нет данных</td>
           </tr>
         </tbody>
       </table>
@@ -63,6 +65,18 @@
             <button class="gen-btn" type="button" @click="generateToken">🔀 Генерировать</button>
           </div>
         </div>
+        <div class="field">
+          <label>Роль (раздел доступа)</label>
+          <select v-model="form.role" class="form-input">
+            <option value="superadmin">Суперадмин (полный доступ)</option>
+            <option value="dispatcher">Диспетчер</option>
+            <option value="orders">История заказов</option>
+            <option value="revenue">Выручка</option>
+            <option value="pricing">Цены</option>
+            <option value="users">Пользователи</option>
+            <option value="referrals">Рефералы / Бонусы</option>
+          </select>
+        </div>
         <div v-if="error" class="error-msg">{{ error }}</div>
         <div class="actions">
           <button class="save-btn" :disabled="saving || form.access_token.length !== 20" @click="createAdmin">
@@ -81,7 +95,7 @@ import { adminAPI } from '../services/api'
 
 const admins = ref([])
 const loading = ref(true)
-const form = ref({ phone: '', password: '', access_token: '' })
+const form = ref({ phone: '', password: '', access_token: '', role: 'dispatcher' })
 const saving = ref(false)
 const error = ref('')
 const created = ref(false)
@@ -113,7 +127,7 @@ async function createAdmin() {
   saving.value = true
   try {
     await adminAPI.createAdmin(form.value)
-    form.value = { phone: '', password: '', access_token: '' }
+    form.value = { phone: '', password: '', access_token: '', role: 'dispatcher' }
     created.value = true
     setTimeout(() => { created.value = false }, 3000)
     await loadAdmins()
@@ -125,6 +139,17 @@ async function createAdmin() {
 }
 
 function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '—' }
+
+const roleLabels = {
+  superadmin: 'Суперадмин',
+  dispatcher: 'Диспетчер',
+  orders: 'История заказов',
+  revenue: 'Выручка',
+  pricing: 'Цены',
+  users: 'Пользователи',
+  referrals: 'Рефералы',
+}
+function roleLabel(role) { return roleLabels[role] || role || 'Суперадмин' }
 </script>
 
 <style scoped>
@@ -142,6 +167,10 @@ function fmtDate(d) { return d ? new Date(d).toLocaleString('ru-RU') : '—' }
 }
 .badge.active { background: #e8f5e9; color: #2e7d32; }
 .badge.inactive { background: #f5f5f5; color: #999; }
+.role-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 20px;
+  font-size: 12px; font-weight: 600; background: #fff3e0; color: #e65100;
+}
 .create-form { display: flex; flex-direction: column; gap: 18px; }
 .field-row { display: flex; flex-wrap: wrap; gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 200px; }

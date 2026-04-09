@@ -166,6 +166,7 @@ type Admin struct {
 	Phone       string    `json:"phone"`
 	PasswordHash string   `json:"-"`
 	AccessToken string    `json:"access_token,omitempty"`
+	Role        string    `json:"role"`
 	IsActive    bool      `json:"is_active"`
 	CreatedAt   time.Time `json:"created_at"`
 }

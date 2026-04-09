@@ -105,6 +105,14 @@ func (h *WSHandler) readPump(client *services.Client) {
 			lng, _ := data["lng"].(float64)
 			heading := data["heading"] // may be nil
 
+			// Persist location to DB so matching service can find this driver.
+			// Throttled via the driver-side REST call, but WS also writes to cover the gap.
+			h.db.Exec(context.Background(),
+				`UPDATE drivers SET current_lat = $1, current_lng = $2, current_heading = $3, last_seen = NOW()
+				 WHERE user_id = $4`,
+				lat, lng, heading, client.ID,
+			)
+
 			locationMsg, _ := json.Marshal(map[string]interface{}{
 				"type":    "driver_location",
 				"lat":     lat,

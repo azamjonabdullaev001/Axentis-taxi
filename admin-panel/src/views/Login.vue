@@ -82,6 +82,7 @@ async function handleLogin() {
     }
     const { data } = await adminAPI.login(payload)
     localStorage.setItem('admin_token', data.token)
+    localStorage.setItem('admin_role', data.role || 'superadmin')
     router.push('/dashboard')
   } catch (e) {
     error.value = e.response?.data?.error || 'Неверные данные'
