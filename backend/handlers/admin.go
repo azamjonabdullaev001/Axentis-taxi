@@ -699,7 +699,6 @@ func (h *AdminHandler) CreateDriver(c *gin.Context) {
 		Phone     string `json:"phone" binding:"required"`
 		Password  string `json:"password" binding:"required,min=8"`
 		CarNumber string `json:"car_number" binding:"required"`
-		PINFL     string `json:"pinfl"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -748,12 +747,11 @@ func (h *AdminHandler) CreateDriver(c *gin.Context) {
 	}
 
 	carNumber := strings.ToUpper(strings.TrimSpace(req.CarNumber))
-	pinfl := strings.TrimSpace(req.PINFL)
 
 	_, err = tx.Exec(context.Background(),
-		`INSERT INTO drivers (user_id, car_number, pinfl, referral_code, registration_status, reviewed_at)
-		 VALUES ($1, $2, $3, $4, 'approved', NOW())`,
-		userID, carNumber, pinfl, refCode,
+		`INSERT INTO drivers (user_id, car_number, referral_code, registration_status, reviewed_at)
+		 VALUES ($1, $2, $3, 'approved', NOW())`,
+		userID, carNumber, refCode,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})

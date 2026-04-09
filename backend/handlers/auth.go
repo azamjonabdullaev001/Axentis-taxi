@@ -49,7 +49,6 @@ type RegisterDriverRequest struct {
 	Password    string `json:"password" binding:"required,min=8"`
 	ConfirmPw   string `json:"confirm_password" binding:"required"`
 	CarNumber   string `json:"car_number" binding:"required"`
-	PINFL       string `json:"pinfl"`
 	ReferredBy  string `json:"referred_by"`
 }
 
@@ -116,7 +115,6 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 			Password:   c.PostForm("password"),
 			ConfirmPw:  c.PostForm("confirm_password"),
 			CarNumber:  strings.TrimSpace(c.PostForm("car_number")),
-			PINFL:      strings.TrimSpace(c.PostForm("pinfl")),
 			ReferredBy: strings.TrimSpace(c.PostForm("referred_by")),
 		}
 
@@ -192,13 +190,6 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		return
 	}
 
-	// PINFL (JSHSHIR) — optional, but if provided must be exactly 14 digits
-	pinfl := strings.TrimSpace(req.PINFL)
-	if pinfl != "" && (len(pinfl) != 14 || !isAllDigits(pinfl)) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "PINFL must be exactly 14 digits"})
-		return
-	}
-
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
@@ -248,10 +239,10 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 
 	_, err = tx.Exec(context.Background(),
 		`INSERT INTO drivers
-		 (user_id, car_number, pinfl, referral_code, referred_by, registration_status,
+		 (user_id, car_number, referral_code, referred_by, registration_status,
 		  selfie_url, license_front_url, license_back_url, id_document_url)
-		 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9)`,
-		userID, normalizedCarNumber, pinfl, refCode, referredBy,
+		 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)`,
+		userID, normalizedCarNumber, refCode, referredBy,
 		selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL,
 	)
 	if err != nil {
@@ -422,7 +413,7 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 		var referralCode, referredBy, referralBenefitType *string
 		var reviewedByAdminID *string
 		err = h.db.QueryRow(context.Background(),
-			`SELECT id, car_number, COALESCE(pinfl,''), is_available, current_lat, current_lng, current_heading, last_seen,
+			`SELECT id, car_number, is_available, current_lat, current_lng, current_heading, last_seen,
 			 COALESCE(referral_code,''), COALESCE(referred_by,''), COALESCE(referral_benefit_type,''),
 			 COALESCE(balance,0), COALESCE(registration_status,'pending'),
 			 reviewed_by_admin_id::text, reviewed_at, COALESCE(review_comment,''),
@@ -430,7 +421,7 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 			 COALESCE(license_back_url,''), COALESCE(id_document_url,'')
 			 FROM drivers WHERE user_id = $1`,
 			userID,
-		).Scan(&driver.ID, &driver.CarNumber, &driver.PINFL, &driver.IsAvailable,
+		).Scan(&driver.ID, &driver.CarNumber, &driver.IsAvailable,
 			&driver.CurrentLat, &driver.CurrentLng, &driver.CurrentHeading, &driver.LastSeen,
 			&referralCode, &referredBy, &referralBenefitType, &driver.Balance,
 			&driver.RegistrationStatus, &reviewedByAdminID, &driver.ReviewedAt, &driver.ReviewComment,

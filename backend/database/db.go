@@ -210,7 +210,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS passenger_phone VARCHAR(30);
 CREATE INDEX IF NOT EXISTS idx_orders_passenger_id_created ON orders (passenger_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_driver_id_created ON orders (driver_id, created_at DESC);
 
--- PINFL (JSHSHIR) — 14-digit Uzbek personal ID, required for drivers only
+-- PINFL column — kept for backward compatibility, no longer used
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS pinfl VARCHAR(20) DEFAULT '';
 
 -- Driver verification workflow and registration documents
@@ -344,19 +344,23 @@ WHERE status IN ('searching', 'queued', 'accepted', 'arrived', 'in_progress')
 UPDATE drivers SET registration_status = 'approved'
 WHERE registration_status IS NULL OR registration_status = '';
 
--- FULL CLEANUP: delete all old test data so system starts fresh
--- Delete all orders first (foreign key to drivers/users)
-DELETE FROM orders;
-DELETE FROM ratings;
-DELETE FROM quiz_scores;
-DELETE FROM cashback_transactions;
-DELETE FROM driver_bonus_events;
-DELETE FROM referral_bonuses;
-DELETE FROM driver_friends;
--- Delete all drivers
-DELETE FROM drivers;
--- Delete all non-admin users (passengers + drivers)
-DELETE FROM users;
+-- One-time cleanup: delete all old test data so system starts fresh
+-- Uses a flag table to ensure this only runs ONCE (not on every restart)
+CREATE TABLE IF NOT EXISTS _migration_flags (key TEXT PRIMARY KEY, done_at TIMESTAMPTZ DEFAULT NOW());
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM _migration_flags WHERE key = 'cleanup_v1') THEN
+    DELETE FROM quiz_scores;
+    DELETE FROM cashback_transactions;
+    DELETE FROM driver_bonus_events;
+    DELETE FROM referral_bonuses;
+    DELETE FROM driver_friends;
+    DELETE FROM ratings;
+    DELETE FROM orders;
+    DELETE FROM drivers;
+    DELETE FROM users;
+    INSERT INTO _migration_flags (key) VALUES ('cleanup_v1');
+  END IF;
+END $$;
 
 -- Ban system: temporary or permanent ban with reason
 ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_until TIMESTAMPTZ;

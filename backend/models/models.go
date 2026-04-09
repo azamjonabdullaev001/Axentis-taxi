@@ -27,7 +27,6 @@ type Driver struct {
 	ID                  string     `json:"id"`
 	UserID              string     `json:"user_id"`
 	CarNumber           string     `json:"car_number"`
-	PINFL               string     `json:"pinfl,omitempty"`
 	IsAvailable         bool       `json:"is_available"`
 	CurrentLat          *float64   `json:"current_lat"`
 	CurrentLng          *float64   `json:"current_lng"`

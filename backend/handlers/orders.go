@@ -932,7 +932,7 @@ func (h *OrderHandler) UpdateDriverAvailability(c *gin.Context) {
 	if req.Available {
 		var regStatus string
 		err := h.db.QueryRow(context.Background(),
-			`SELECT COALESCE(registration_status, 'pending') FROM drivers WHERE user_id = $1`, userID,
+			`SELECT COALESCE(registration_status, 'approved') FROM drivers WHERE user_id = $1`, userID,
 		).Scan(&regStatus)
 		if err != nil || regStatus != "approved" {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Driver not approved yet"})
