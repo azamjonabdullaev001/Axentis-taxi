@@ -1200,15 +1200,13 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		return
 	}
 
-	// Fetch referral settings for commission %
-	var defaultPct, reducedPct float64
-	h.db.QueryRow(context.Background(),
-		`SELECT default_commission_pct, reduced_commission_pct FROM referral_settings ORDER BY id LIMIT 1`,
-	).Scan(&defaultPct, &reducedPct)
-
-	commissionPct := defaultPct
-	if benefitType == "commission" {
-		commissionPct = reducedPct
+	// Fetch commission % from price_settings (set in admin Pricing/Revenue panel)
+	var commissionPct float64
+	err = h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(service_share_pct, 10.0) FROM price_settings ORDER BY id LIMIT 1`,
+	).Scan(&commissionPct)
+	if err != nil || commissionPct <= 0 {
+		commissionPct = 10.0
 	}
 
 	period := c.DefaultQuery("period", "week") // day | week | month | custom
@@ -1281,6 +1279,12 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		`SELECT COUNT(*) FROM drivers WHERE referred_by = $1`, refCode,
 	).Scan(&referralCount)
 
+	// lifetime_trips for progress display
+	var lifetimeTrips int
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(lifetime_trips, 0) FROM drivers WHERE id = $1`, driverID,
+	).Scan(&lifetimeTrips)
+
 	c.JSON(http.StatusOK, gin.H{
 		"driver_id":    driverID,
 		"first_name":   firstName,
@@ -1300,6 +1304,7 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		"company_share":         companyShare,
 		"driver_earnings":       driverEarnings,
 		"referral_count":        referralCount,
+		"lifetime_trips":        lifetimeTrips,
 		"daily":                 daily,
 	})
 }

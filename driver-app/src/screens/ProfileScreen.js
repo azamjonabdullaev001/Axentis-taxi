@@ -56,6 +56,7 @@ export default function ProfileScreen() {
   useEffect(() => {
     driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
     loadHistory();
+    loadBonusHistory();
   }, []);
 
   async function loadFriendsData() {
@@ -264,10 +265,59 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>
-        <Ionicons name="log-out-outline" size={18} color={colors.error} />
-        <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
-      </TouchableOpacity>
+      {/* ── Order Progress section ── */}
+      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <View style={s.row}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#4CAF5020' }]}>
+              <Ionicons name="trending-up" size={18} color="#4CAF50" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowLabel, { color: colors.text }]}>Мой прогресс</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                {bonusStats.lifetime_trips} заказов выполнено
+              </Text>
+            </View>
+          </View>
+        </View>
+        <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          {(() => {
+            const trips = bonusStats.lifetime_trips;
+            const milestones = [10, 50, 100, 250, 500, 1000, 2500, 5000];
+            const currentMilestone = milestones.find(m => trips < m) || milestones[milestones.length - 1];
+            const prevMilestone = milestones[milestones.indexOf(currentMilestone) - 1] || 0;
+            const progress = currentMilestone > prevMilestone
+              ? Math.min((trips - prevMilestone) / (currentMilestone - prevMilestone), 1)
+              : 1;
+            const pct = Math.round(progress * 100);
+            const rank = trips >= 5000 ? '🏆 Легенда' : trips >= 2500 ? '🥇 Профи' : trips >= 1000 ? '🥈 Мастер' : trips >= 500 ? '🥉 Эксперт' : trips >= 250 ? '⭐ Опытный' : trips >= 100 ? '🚗 Водитель' : trips >= 50 ? '🔰 Активный' : '🆕 Новичок';
+            return (
+              <>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 14 }}>{rank}</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{trips} / {currentMilestone}</Text>
+                </View>
+                <View style={{ height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden' }}>
+                  <View style={{ height: '100%', width: `${pct}%`, backgroundColor: '#4CAF50', borderRadius: 5 }} />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{prevMilestone}</Text>
+                  <Text style={{ color: '#4CAF50', fontSize: 12, fontWeight: '700' }}>{pct}%</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{currentMilestone}</Text>
+                </View>
+                {bonusStats.streak_days > 0 && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 6 }}>
+                    <Text style={{ fontSize: 16 }}>🔥</Text>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                      {bonusStats.streak_days} дн. подряд
+                    </Text>
+                  </View>
+                )}
+              </>
+            );
+          })()}
+        </View>
+      </View>
 
       {/* Ratings section */}
       <View style={[s.section, { backgroundColor: colors.card, marginTop: 20 }]}>
@@ -680,6 +730,12 @@ export default function ProfileScreen() {
           </View>
         )}
       </View>
+
+      {/* ── Logout button (bottom) ── */}
+      <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error, marginTop: 20 }]} onPress={handleLogout}>
+        <Ionicons name="log-out-outline" size={18} color={colors.error} />
+        <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
+      </TouchableOpacity>
 
       {/* History modal */}
       <Modal visible={historyModalVisible} animationType="slide" onRequestClose={() => setHistoryModalVisible(false)}>
