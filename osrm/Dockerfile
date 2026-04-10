@@ -1,6 +1,11 @@
+FROM debian:bookworm-slim AS tools
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 FROM osrm/osrm-backend:latest
 
-RUN apt-get update -qq && apt-get install -y -qq wget && rm -rf /var/lib/apt/lists/*
+COPY --from=tools /usr/bin/wget /usr/bin/wget
+COPY --from=tools /etc/ssl/certs /etc/ssl/certs
 
 RUN mkdir -p /data
 

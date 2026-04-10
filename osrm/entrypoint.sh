@@ -9,8 +9,6 @@ PROFILE="/opt/car.lua"
 # Download and process data only if not already done
 if [ ! -f "$OSRM_FILE.cell_metrics" ]; then
   echo "=== OSRM: Downloading Uzbekistan OSM data ==="
-  apt-get update -qq && apt-get install -y -qq wget > /dev/null 2>&1 || true
-  apk add --no-cache wget > /dev/null 2>&1 || true
 
   wget -q -O "$PBF_FILE" \
     "https://download.geofabrik.de/asia/uzbekistan-latest.osm.pbf"
