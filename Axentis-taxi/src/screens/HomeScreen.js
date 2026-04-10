@@ -70,47 +70,54 @@ async function reverseGeocode(coords) {
 // затем обрезаем всё после неё. Это убирает петли OSRM вокруг точки назначения.
 function clipRouteAtDestination(coords, dest) {
   if (!coords || coords.length < 2 || !dest) return coords;
-  const d = (p) => Math.abs(p.latitude - dest.latitude) + Math.abs(p.longitude - dest.longitude);
+  const d = (p) => (p.latitude - dest.latitude) ** 2 + (p.longitude - dest.longitude) ** 2;
   let minDist = Infinity;
   let clipIdx = coords.length - 1;
   for (let i = 0; i < coords.length; i++) {
     const dist = d(coords[i]);
-    if (dist < minDist) {
-      minDist = dist;
-      clipIdx = i;
+    if (dist < minDist) { minDist = dist; clipIdx = i; }
+  }
+  const clipped = coords.slice(0, clipIdx + 1);
+  return clipped.length >= 2 ? clipped : coords;
+}
+
+// Извлекаем полную геометрию маршрута (overview=full).
+// Это цельная линия без стыков между шагами — чище ложится на дорогу.
+function extractRouteCoords(json, dest) {
+  if (!json.routes?.[0]) return null;
+  const route = json.routes[0];
+  const distanceKm = route.distance / 1000;
+
+  // overview geometry — single smooth polyline (overview=full)
+  const overviewGeo = route.geometry;
+  if (overviewGeo?.coordinates?.length >= 2) {
+    const coords = overviewGeo.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
+    return { coords: clipRouteAtDestination(coords, dest), distanceKm };
+  }
+
+  // Fallback: stitch step-level geometries
+  const coords = [];
+  for (const leg of route.legs || []) {
+    for (const step of leg.steps || []) {
+      for (const [lng, lat] of step.geometry?.coordinates || []) {
+        if (coords.length === 0 ||
+            lat !== coords[coords.length - 1].latitude ||
+            lng !== coords[coords.length - 1].longitude) {
+          coords.push({ latitude: lat, longitude: lng });
+        }
+      }
     }
   }
-  return coords.slice(0, clipIdx + 1);
+  if (coords.length < 2) return null;
+  return { coords: clipRouteAtDestination(coords, dest), distanceKm };
 }
 
 // Маршрут по реальным дорогам: сначала свой OSRM (через backend-прокси),
 // затем публичный OSRM, в крайнем случае — прямая линия.
-// Использует steps=true для точной геометрии на каждом повороте.
 // Возвращает { coords, distanceKm }.
 async function fetchRoadRoute(pickup, dest) {
   const lng1 = pickup.longitude, lat1 = pickup.latitude;
   const lng2 = dest.longitude,   lat2 = dest.latitude;
-
-  // Извлекаем координаты из пошаговой геометрии (не overview — она упрощена и режет углы).
-  function extractStepCoords(json) {
-    if (!json.routes?.[0]) return null;
-    const distanceKm = json.routes[0].distance / 1000;
-    const coords = [];
-    for (const leg of json.routes[0].legs) {
-      for (const step of leg.steps) {
-        for (const [lng, lat] of step.geometry.coordinates) {
-          // Дедупликация смежных одинаковых точек (стыки шагов)
-          if (coords.length === 0 ||
-              lat !== coords[coords.length - 1].latitude ||
-              lng !== coords[coords.length - 1].longitude) {
-            coords.push({ latitude: lat, longitude: lng });
-          }
-        }
-      }
-    }
-    if (coords.length < 2) return null;
-    return { coords: clipRouteAtDestination(coords, dest), distanceKm };
-  }
 
   // 1. Свой OSRM через backend-прокси (точные карты Узбекистана)
   const c0 = new AbortController();
@@ -120,7 +127,7 @@ async function fetchRoadRoute(pickup, dest) {
     const res = await fetch(url, { signal: c0.signal });
     clearTimeout(t0);
     if (res.ok) {
-      const result = extractStepCoords(await res.json());
+      const result = extractRouteCoords(await res.json(), dest);
       if (result) return result;
     }
   } catch { clearTimeout(t0); }
@@ -129,11 +136,10 @@ async function fetchRoadRoute(pickup, dest) {
   const c1 = new AbortController();
   const t1 = setTimeout(() => c1.abort(), 6000);
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true&annotations=true`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true`;
     const res = await fetch(url, { signal: c1.signal });
     clearTimeout(t1);
-    const json = await res.json();
-    const result = extractStepCoords(json);
+    const result = extractRouteCoords(await res.json(), dest);
     if (result) return result;
   } catch { clearTimeout(t1); }
 
