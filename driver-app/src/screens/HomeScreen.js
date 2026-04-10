@@ -19,6 +19,7 @@ import {
   startOrderAlarm,
   stopOrderAlarm,
 } from '../services/notifications';
+import { API_BASE } from '../config';
 
 const CAR_ICON = require('../../assets/car-photo.png');
 const FINISH_ICON = require('../../assets/icons8-finish-96.png');
@@ -67,14 +68,27 @@ async function fetchRoadRoute(pickup, dest) {
   }
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 6000);
+  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
+    const url = `${API_BASE}/route?pickup_lat=${lat1}&pickup_lng=${lng1}&dest_lat=${lat2}&dest_lng=${lng2}`;
     const res = await fetch(url, { signal: ctrl.signal });
     clearTimeout(timer);
+    if (res.ok) {
+      const result = extractStepCoords(await res.json());
+      if (result) return result;
+    }
+  } catch { clearTimeout(timer); }
+
+  // Fallback: публичный OSRM
+  const c2 = new AbortController();
+  const t2 = setTimeout(() => c2.abort(), 6000);
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true`;
+    const res = await fetch(url, { signal: c2.signal });
+    clearTimeout(t2);
     const result = extractStepCoords(await res.json());
     if (result) return result;
-  } catch { clearTimeout(timer); }
+  } catch { clearTimeout(t2); }
 
   return { coords: [pickup, dest], distanceKm: 0 };
 }

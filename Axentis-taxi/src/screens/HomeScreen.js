@@ -15,6 +15,7 @@ import { buildAvatarUrl } from '../services/api';
 import socket from '../services/socket';
 import { t } from '../i18n';
 import { initializeNotifications, getExpoPushToken } from '../services/notifications';
+import { API_BASE } from '../config';
 import PuzzleGame from '../components/PuzzleGame';
 
 const CAR_ICON    = require('../../assets/car-photo.png');
@@ -82,8 +83,9 @@ function clipRouteAtDestination(coords, dest) {
   return coords.slice(0, clipIdx + 1);
 }
 
-// Маршрут по реальным дорогам: два OSRM источника с актуальным покрытием ЦА
-// Использует steps=true для точной геометрии на каждом повороте (не упрощённый overview).
+// Маршрут по реальным дорогам: сначала свой OSRM (через backend-прокси),
+// затем публичный OSRM, в крайнем случае — прямая линия.
+// Использует steps=true для точной геометрии на каждом повороте.
 // Возвращает { coords, distanceKm }.
 async function fetchRoadRoute(pickup, dest) {
   const lng1 = pickup.longitude, lat1 = pickup.latitude;
@@ -110,7 +112,20 @@ async function fetchRoadRoute(pickup, dest) {
     return { coords: clipRouteAtDestination(coords, dest), distanceKm };
   }
 
-  // 1. router.project-osrm.org — глобальное покрытие, быстрый ответ
+  // 1. Свой OSRM через backend-прокси (точные карты Узбекистана)
+  const c0 = new AbortController();
+  const t0 = setTimeout(() => c0.abort(), 8000);
+  try {
+    const url = `${API_BASE}/route?pickup_lat=${lat1}&pickup_lng=${lng1}&dest_lat=${lat2}&dest_lng=${lng2}`;
+    const res = await fetch(url, { signal: c0.signal });
+    clearTimeout(t0);
+    if (res.ok) {
+      const result = extractStepCoords(await res.json());
+      if (result) return result;
+    }
+  } catch { clearTimeout(t0); }
+
+  // 2. Публичный OSRM (fallback)
   const c1 = new AbortController();
   const t1 = setTimeout(() => c1.abort(), 6000);
   try {

@@ -76,9 +76,13 @@ func main() {
 	wsHandler := handlers.NewWSHandler(hub, db)
 	quizHandler := handlers.NewQuizHandler(db)
 	friendsHandler := handlers.NewFriendsHandler(db, hub)
+	routeHandler := handlers.NewRouteHandler(cfg)
 
 	api := r.Group("/api/v1")
 	{
+		// OSRM route proxy (no auth — lightweight, needed before login too)
+		api.GET("/route", routeHandler.GetRoute)
+
 		auth := api.Group("/auth")
 		{
 			auth.POST("/register/passenger", authHandler.RegisterPassenger)

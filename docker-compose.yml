@@ -26,8 +26,25 @@ services:
       DATABASE_URL: postgres://axentis:axentis_secret_2026@db:5432/axentis_taxi?sslmode=disable
       JWT_SECRET: AxentisJWT2026SecretKey!
       PORT: "8080"
+      OSRM_URL: http://osrm:5000
     ports:
       - "8181:8080"
+
+  osrm:
+    build:
+      context: ./osrm
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - osrm_data:/data
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5000/nearest/v1/driving/69.2401,41.3111 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
 
   admin-panel:
     build:
@@ -41,3 +58,4 @@ services:
 
 volumes:
   postgres_data:
+  osrm_data:
