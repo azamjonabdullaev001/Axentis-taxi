@@ -18,18 +18,40 @@ type MatchingService struct {
 	push *PushService
 
 	// driverLocks prevents offering the same driver to multiple orders simultaneously.
-	// key = driverID, value = orderID currently being offered.
-	driverLocks   map[string]string
+	// key = driverID, value = lock info (orderID + creation time).
+	driverLocks   map[string]driverLockEntry
 	driverLocksMu sync.Mutex
 }
 
+type driverLockEntry struct {
+	orderID   string
+	createdAt time.Time
+}
+
 func NewMatchingService(db *pgxpool.Pool, hub *Hub, push *PushService) *MatchingService {
-	return &MatchingService{
+	ms := &MatchingService{
 		db:          db,
 		hub:         hub,
 		push:        push,
-		driverLocks: make(map[string]string),
+		driverLocks: make(map[string]driverLockEntry),
 	}
+	// Periodic cleanup of stale locks (every 2 minutes, expire locks older than 1 minute)
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ms.driverLocksMu.Lock()
+			now := time.Now()
+			for dID, entry := range ms.driverLocks {
+				if now.Sub(entry.createdAt) > 1*time.Minute {
+					log.Printf("[MATCHING] Cleaning stale lock: driver=%s order=%s age=%v", dID, entry.orderID, now.Sub(entry.createdAt))
+					delete(ms.driverLocks, dID)
+				}
+			}
+			ms.driverLocksMu.Unlock()
+		}
+	}()
+	return ms
 }
 
 type DriverCandidate struct {
@@ -43,10 +65,10 @@ type DriverCandidate struct {
 func (s *MatchingService) tryLockDriver(driverID, orderID string) bool {
 	s.driverLocksMu.Lock()
 	defer s.driverLocksMu.Unlock()
-	if existing, locked := s.driverLocks[driverID]; locked && existing != orderID {
+	if existing, locked := s.driverLocks[driverID]; locked && existing.orderID != orderID {
 		return false
 	}
-	s.driverLocks[driverID] = orderID
+	s.driverLocks[driverID] = driverLockEntry{orderID: orderID, createdAt: time.Now()}
 	return true
 }
 
@@ -54,7 +76,7 @@ func (s *MatchingService) tryLockDriver(driverID, orderID string) bool {
 func (s *MatchingService) unlockDriver(driverID, orderID string) {
 	s.driverLocksMu.Lock()
 	defer s.driverLocksMu.Unlock()
-	if s.driverLocks[driverID] == orderID {
+	if s.driverLocks[driverID].orderID == orderID {
 		delete(s.driverLocks, driverID)
 	}
 }
@@ -236,6 +258,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		   AND d.current_lat IS NOT NULL
 		   AND d.current_lng IS NOT NULL
 		   AND COALESCE(d.registration_status, 'approved') = 'approved'
+		   AND d.last_seen > NOW() - INTERVAL '2 hours'
 		   AND NOT EXISTS (
 		     SELECT 1 FROM orders o
 		     WHERE o.driver_id = d.id

@@ -343,7 +343,7 @@ export default function HomeScreen() {
       }, 10);
     }
 
-    // ── 2. 20ms display timer — syncs refs → React state + SINGLE camera update ──
+    // ── 2. 10ms display timer — syncs refs → React state + SINGLE camera update ──
     // All animateCamera calls go through here to prevent competing animations (flicker).
     displayTimerRef.current = setInterval(() => {
       const loc = locationRef.current;
@@ -351,8 +351,8 @@ export default function HomeScreen() {
       if (loc) {
         setLocation((prev) => {
           if (!prev) return { ...loc };
-          // Exponential smoothing (alpha=0.35) — car slides smoothly to GPS target
-          const ALPHA = 0.35;
+          // Exponential smoothing (alpha=0.15) — car slides smoothly to GPS target
+          const ALPHA = 0.15;
           const lat = prev.latitude  + (loc.latitude  - prev.latitude)  * ALPHA;
           const lng = prev.longitude + (loc.longitude - prev.longitude) * ALPHA;
           if (Math.abs(lat - prev.latitude) < 1e-10 && Math.abs(lng - prev.longitude) < 1e-10) return prev;
@@ -371,19 +371,19 @@ export default function HomeScreen() {
             // Nav mode: map rotates with heading, car icon appears pointing up
             mapRef.current?.animateCamera(
               { center: loc, heading: h, pitch: 0 },
-              { duration: 20 },
+              { duration: 150 },
             );
           } else {
             // North-up mode: map stays fixed, car icon rotates via rotation prop
             mapRef.current?.animateCamera(
               { center: loc, heading: 0, pitch: 0 },
-              { duration: 20 },
+              { duration: 150 },
             );
           }
         }
       }
       setHeading(h);
-    }, 20);
+    }, 10);
 
     // ── 3. GPS subscription ─────────────────────────────────────────────────────
     (async () => {
@@ -446,12 +446,12 @@ export default function HomeScreen() {
         const compassSub = await Location.watchHeadingAsync((data) => {
           const raw = data.trueHeading >= 0 ? data.trueHeading : data.magHeading;
           if (raw < 0) return;
-          // Low-pass filter alpha=0.4: fast response, kills sensor jitter
+          // Low-pass filter alpha=0.15: smooth response, kills sensor jitter
           const prev = headingRef.current;
           let diff = raw - prev;
           if (diff > 180) diff -= 360;
           if (diff < -180) diff += 360;
-          const h = (prev + diff * 0.4 + 360) % 360;
+          const h = (prev + diff * 0.15 + 360) % 360;
           headingRef.current = h;
           lastBroadcastDataRef.current.heading = h;
           // Camera update is handled exclusively by the 10ms display timer.
@@ -791,14 +791,15 @@ export default function HomeScreen() {
         await driverAPI.updateOrderDistance(activeOrder.id, meteredKmRef.current).catch(() => {});
       }
       const { data } = await driverAPI.completeTrip(activeOrder.id);
-      const rounded = Math.ceil((data.total_price || 0) / 200) * 200;
+      // Use server-calculated price directly (already rounded on backend)
+      const finalPrice = data.total_price || 0;
       setRouteCoords([]);
       routeTargetRef.current = null;
       routeOriginRef.current = null;
       lastRouteFetchAtRef.current = 0;
       // Remove the completed order from queued if present
       setQueuedOrders(prev => prev.filter(o => o.id !== activeOrder.id));
-      setCompletionModal({ price: rounded });
+      setCompletionModal({ price: finalPrice });
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
     } finally {

@@ -75,7 +75,7 @@ func main() {
 	adminHandler := handlers.NewAdminHandlerFull(db, cfg, pricingService, hub, pushService)
 	wsHandler := handlers.NewWSHandler(hub, db)
 	quizHandler := handlers.NewQuizHandler(db)
-	friendsHandler := handlers.NewFriendsHandler(db, hub)
+	friendsHandler := handlers.NewFriendsHandler(db, hub, pushService)
 	routeHandler := handlers.NewRouteHandler(cfg)
 
 	api := r.Group("/api/v1")

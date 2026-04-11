@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
+	"time"
 
 	"axentis-taxi/models"
 	"axentis-taxi/services"
@@ -13,12 +15,19 @@ import (
 )
 
 type FriendsHandler struct {
-	db  *pgxpool.Pool
-	hub *services.Hub
+	db              *pgxpool.Pool
+	hub             *services.Hub
+	matchingService *services.MatchingService
+	push            *services.PushService
 }
 
-func NewFriendsHandler(db *pgxpool.Pool, hub *services.Hub) *FriendsHandler {
-	return &FriendsHandler{db: db, hub: hub}
+func NewFriendsHandler(db *pgxpool.Pool, hub *services.Hub, push *services.PushService) *FriendsHandler {
+	return &FriendsHandler{
+		db:              db,
+		hub:             hub,
+		matchingService: services.NewMatchingService(db, hub, push),
+		push:            push,
+	}
 }
 
 // getMyDriverID resolves the caller's driver.id from their JWT user_id.
@@ -276,6 +285,10 @@ func (h *FriendsHandler) GetPendingRequests(c *gin.Context) {
 // Transfer an incoming (searching) order to a specific friend driver.
 // Body: { "friend_driver_id": "<uuid>" }
 func (h *FriendsHandler) TransferOrder(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only drivers can transfer orders"})
+		return
+	}
 	orderID := c.Param("id")
 	myDriverID, ok := h.getMyDriverID(c)
 	if !ok {
@@ -323,10 +336,10 @@ func (h *FriendsHandler) TransferOrder(c *gin.Context) {
 		return
 	}
 
-	// Reassign order to friend
+	// Reset order to 'searching' — friend must explicitly accept via AcceptOrder
 	_, err = h.db.Exec(context.Background(),
-		`UPDATE orders SET driver_id = $1, status = 'accepted', accepted_at = NOW() WHERE id = $2`,
-		req.FriendDriverID, orderID,
+		`UPDATE orders SET driver_id = NULL, status = 'searching' WHERE id = $1`,
+		orderID,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -335,27 +348,28 @@ func (h *FriendsHandler) TransferOrder(c *gin.Context) {
 
 	// Build new_order WS payload using the same query/format as the matching service
 	type orderPayload struct {
-		ID                string   `json:"id"`
-		PickupLat         float64  `json:"pickup_lat"`
-		PickupLng         float64  `json:"pickup_lng"`
-		PickupAddress     string   `json:"pickup_address"`
-		DestinationLat    float64  `json:"destination_lat"`
-		DestinationLng    float64  `json:"destination_lng"`
+		ID                 string  `json:"id"`
+		PickupLat          float64 `json:"pickup_lat"`
+		PickupLng          float64 `json:"pickup_lng"`
+		PickupAddress      string  `json:"pickup_address"`
+		DestinationLat     float64 `json:"destination_lat"`
+		DestinationLng     float64 `json:"destination_lng"`
 		DestinationAddress string  `json:"destination_address"`
-		DistanceKm        float64  `json:"distance_km"`
-		EstimatedPrice    float64  `json:"estimated_price"`
-		LockedPricePerKm  float64  `json:"locked_price_per_km"`
-		SurgeMultiplier   float64  `json:"surge_multiplier"`
-		PassengerPhone    string   `json:"passenger_phone"`
-		PassengerName     string   `json:"passenger_name"`
-		PassengerPhoto    string   `json:"passenger_photo"`
-		OrderType         string   `json:"order_type"`
-		TripType          string   `json:"trip_type"`
-		ServiceFee        float64  `json:"service_fee"`
-		AdditionalInfo    string   `json:"additional_info"`
+		DistanceKm         float64 `json:"distance_km"`
+		EstimatedPrice     float64 `json:"estimated_price"`
+		LockedPricePerKm   float64 `json:"locked_price_per_km"`
+		SurgeMultiplier    float64 `json:"surge_multiplier"`
+		PassengerPhone     string  `json:"passenger_phone"`
+		PassengerName      string  `json:"passenger_name"`
+		PassengerPhoto     string  `json:"passenger_photo"`
+		OrderType          string  `json:"order_type"`
+		TripType           string  `json:"trip_type"`
+		ServiceFee         float64 `json:"service_fee"`
+		AdditionalInfo     string  `json:"additional_info"`
 	}
 
 	var od orderPayload
+	var pickupLat, pickupLng float64
 	_ = h.db.QueryRow(context.Background(),
 		`SELECT o.id,
 		        o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''),
@@ -378,8 +392,10 @@ func (h *FriendsHandler) TransferOrder(c *gin.Context) {
 		&od.PassengerPhone, &od.PassengerName, &od.PassengerPhoto,
 		&od.OrderType, &od.TripType, &od.ServiceFee, &od.AdditionalInfo,
 	)
+	pickupLat = od.PickupLat
+	pickupLng = od.PickupLng
 
-	// Notify friend
+	// Notify friend via WS
 	var friendUserID string
 	_ = h.db.QueryRow(context.Background(),
 		`SELECT user_id FROM drivers WHERE id = $1`, req.FriendDriverID,
@@ -390,15 +406,37 @@ func (h *FriendsHandler) TransferOrder(c *gin.Context) {
 			"order": od,
 		})
 		h.hub.SendToUser(friendUserID, wsMsg)
+		// Also send push notification (works even if friend's app is killed)
+		go h.push.SendNewOrderPush(friendUserID, od.PickupAddress, od.DestinationAddress, od.ID)
 	}
 
-	// Notify original driver that the transfer was completed
+	// Notify original driver that the transfer was initiated
 	userID := c.GetString("user_id")
 	transferredMsg, _ := json.Marshal(map[string]interface{}{
 		"type":     "order_transferred",
 		"order_id": orderID,
 	})
 	h.hub.SendToUser(userID, transferredMsg)
+
+	// Start 20s timeout goroutine: if friend doesn't accept, re-search nearby drivers
+	go func() {
+		time.Sleep(20 * time.Second)
+		// Check if friend accepted the order
+		var currentStatus string
+		if e := h.db.QueryRow(context.Background(),
+			`SELECT status FROM orders WHERE id = $1`, orderID,
+		).Scan(&currentStatus); e != nil {
+			return
+		}
+		if currentStatus != "searching" {
+			// Friend accepted, declined, or order cancelled — nothing to do
+			log.Printf("[TRANSFER %s] Friend responded (status=%s), no re-search needed", orderID, currentStatus)
+			return
+		}
+		// Friend didn't respond in 20 seconds — re-search nearby drivers within 5 km
+		log.Printf("[TRANSFER %s] Friend did not accept in 20s, re-searching nearby drivers", orderID)
+		h.matchingService.FindAndNotifyDriversInRadius(orderID, pickupLat, pickupLng, 5000)
+	}()
 
 	c.JSON(http.StatusOK, gin.H{"status": "transferred"})
 }

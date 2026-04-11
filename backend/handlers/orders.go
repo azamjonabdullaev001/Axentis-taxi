@@ -64,9 +64,9 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 
 	// Reject orders with excessive distance (max 30 km)
 	const maxOrderDistanceKm = 30.0
-	if req.DistanceKm > maxOrderDistanceKm {
+	if req.DistanceKm < 0 || req.DistanceKm > maxOrderDistanceKm {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("Расстояние заказа (%.1f км) превышает максимум %d км", req.DistanceKm, int(maxOrderDistanceKm)),
+			"error": fmt.Sprintf("Расстояние заказа (%.1f км) некорректно (макс %d км)", req.DistanceKm, int(maxOrderDistanceKm)),
 		})
 		return
 	}
@@ -141,6 +141,16 @@ func (h *OrderHandler) UpdateOrderDistance(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.DrivenKm < 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid driven_km"})
+		return
+	}
+
+	// Only allow distance to increase (prevent fraud)
+	var currentDist float64
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(distance_km, 0) FROM orders WHERE id = $1`, orderID,
+	).Scan(&currentDist)
+	if req.DrivenKm < currentDist {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "distance cannot decrease"})
 		return
 	}
 
@@ -438,6 +448,24 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 }
 
 func (h *OrderHandler) DeclineOrder(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only drivers can decline orders"})
+		return
+	}
+	orderID := c.Param("id")
+	userID := c.GetString("user_id")
+
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID,
+	).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	// Release the per-driver lock so matching service can offer other orders
+	h.matchingService.UnlockDriverForOrder(driverID, orderID)
+
 	c.JSON(http.StatusOK, gin.H{"message": "Order declined"})
 }
 
@@ -522,14 +550,19 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 
 	var waitFee, storedTotalPrice, serviceFee, lockedPerKm, distKm float64
 	var waitStarted *time.Time
-	var tripType string
+	var tripType, currentStatus string
 	if err := h.db.QueryRow(context.Background(),
 		`SELECT wait_started_at, service_fee,
 		 COALESCE(locked_price_per_km,0), COALESCE(distance_km,0), COALESCE(trip_type,'standard'),
-		 COALESCE(total_price,0)
+		 COALESCE(total_price,0), status
 		 FROM orders WHERE id = $1`, orderID,
-	).Scan(&waitStarted, &serviceFee, &lockedPerKm, &distKm, &tripType, &storedTotalPrice); err != nil {
+	).Scan(&waitStarted, &serviceFee, &lockedPerKm, &distKm, &tripType, &storedTotalPrice, &currentStatus); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		return
+	}
+
+	if currentStatus == "cancelled" || currentStatus == "completed" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Order already " + currentStatus})
 		return
 	}
 
@@ -537,16 +570,12 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	var totalPrice float64
 	if tripType == "free" {
 		// Free tariff: use locked_price_per_km that was set at order creation.
-		// Fall back to current settings only if locked rate is missing.
+		// The locked rate already reflects the current tariff at creation time.
+		// Do NOT re-apply surge — it was already factored into locked_price_per_km.
 		var effectivePerKm, effectiveServiceFee float64
 		if lockedPerKm > 0 {
 			effectivePerKm = lockedPerKm
 			effectiveServiceFee = serviceFee
-			// Apply current surge on top of the locked rate
-			ps, psErr := h.pricingService.GetSettings()
-			if psErr == nil && ps.SurgeMultiplier > 0 {
-				effectivePerKm = lockedPerKm * ps.SurgeMultiplier
-			}
 		} else {
 			ps, psErr := h.pricingService.GetSettings()
 			if psErr == nil {
@@ -859,7 +888,7 @@ func (h *OrderHandler) GetAvailableDrivers(c *gin.Context) {
 		   AND current_lat IS NOT NULL
 		   AND current_lng IS NOT NULL
 		   AND COALESCE(registration_status, 'approved') = 'approved'
-		   AND last_seen > NOW() - INTERVAL '1 hour'
+		   AND last_seen > NOW() - INTERVAL '2 hours'
 		 ORDER BY last_seen DESC
 		 LIMIT 200`,
 	)
