@@ -766,25 +766,69 @@ func (h *AdminHandler) CreateCallOrder(c *gin.Context) {
 // ── Create Driver (admin/dispatcher creates driver account) ──────────────────
 
 func (h *AdminHandler) CreateDriver(c *gin.Context) {
-	var req struct {
-		FirstName string `json:"first_name" binding:"required"`
-		LastName  string `json:"last_name" binding:"required"`
-		Phone     string `json:"phone" binding:"required"`
-		Password  string `json:"password" binding:"required,min=8"`
-		CarNumber string `json:"car_number" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	var firstName, lastName, phone, password, carNumber, carBrand string
+	var selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL, idDocumentBackURL string
+
+	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+		firstName = strings.TrimSpace(c.PostForm("first_name"))
+		lastName = strings.TrimSpace(c.PostForm("last_name"))
+		phone = strings.TrimSpace(c.PostForm("phone"))
+		password = c.PostForm("password")
+		carNumber = strings.TrimSpace(c.PostForm("car_number"))
+		carBrand = strings.TrimSpace(c.PostForm("car_brand"))
+
+		if firstName == "" || lastName == "" || phone == "" || password == "" || carNumber == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "All required fields must be filled"})
+			return
+		}
+		if len(password) < 8 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at least 8 characters"})
+			return
+		}
+
+		// Optional photo uploads
+		if f, err := c.FormFile("selfie"); err == nil {
+			selfieURL, _ = saveUploadedImage(f, "driver-docs")
+		}
+		if f, err := c.FormFile("license_front"); err == nil {
+			licenseFrontURL, _ = saveUploadedImage(f, "driver-docs")
+		}
+		if f, err := c.FormFile("license_back"); err == nil {
+			licenseBackURL, _ = saveUploadedImage(f, "driver-docs")
+		}
+		if f, err := c.FormFile("id_document"); err == nil {
+			idDocumentURL, _ = saveUploadedImage(f, "driver-docs")
+		}
+		if f, err := c.FormFile("id_document_back"); err == nil {
+			idDocumentBackURL, _ = saveUploadedImage(f, "driver-docs")
+		}
+	} else {
+		var req struct {
+			FirstName string `json:"first_name" binding:"required"`
+			LastName  string `json:"last_name" binding:"required"`
+			Phone     string `json:"phone" binding:"required"`
+			Password  string `json:"password" binding:"required,min=8"`
+			CarNumber string `json:"car_number" binding:"required"`
+			CarBrand  string `json:"car_brand"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		firstName = req.FirstName
+		lastName = req.LastName
+		phone = strings.TrimSpace(req.Phone)
+		password = req.Password
+		carNumber = req.CarNumber
+		carBrand = req.CarBrand
 	}
 
-	phone := strings.TrimSpace(req.Phone)
 	if !strings.HasPrefix(phone, "+998") || len(strings.TrimPrefix(phone, "+")) != 12 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Uzbekistan phone number"})
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Hashing failed"})
 		return
@@ -801,7 +845,7 @@ func (h *AdminHandler) CreateDriver(c *gin.Context) {
 	err = tx.QueryRow(context.Background(),
 		`INSERT INTO users (first_name, last_name, phone, password_hash, role)
 		 VALUES ($1, $2, $3, $4, 'driver') RETURNING id`,
-		req.FirstName, req.LastName, phone, string(hash),
+		firstName, lastName, phone, string(hash),
 	).Scan(&userID)
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -819,12 +863,14 @@ func (h *AdminHandler) CreateDriver(c *gin.Context) {
 		return
 	}
 
-	carNumber := strings.ToUpper(strings.TrimSpace(req.CarNumber))
+	normalizedCarNumber := strings.ToUpper(strings.TrimSpace(carNumber))
 
 	_, err = tx.Exec(context.Background(),
-		`INSERT INTO drivers (user_id, car_number, referral_code, registration_status, reviewed_at)
-		 VALUES ($1, $2, $3, 'approved', NOW())`,
-		userID, carNumber, refCode,
+		`INSERT INTO drivers (user_id, car_number, car_brand, referral_code, registration_status, reviewed_at,
+		  selfie_url, license_front_url, license_back_url, id_document_url, id_document_back_url)
+		 VALUES ($1, $2, $3, $4, 'approved', NOW(), $5, $6, $7, $8, $9)`,
+		userID, normalizedCarNumber, carBrand, refCode,
+		selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL, idDocumentBackURL,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})
@@ -863,9 +909,10 @@ func generateReferralCodeAdmin(ctx context.Context, db *pgxpool.Pool) (string, e
 func (h *AdminHandler) GetPendingDriverRegistrations(c *gin.Context) {
 	rows, err := h.db.Query(context.Background(),
 		`SELECT d.id, d.user_id, u.first_name, u.last_name, u.phone,
-		        d.car_number, d.created_at,
+		        d.car_number, COALESCE(d.car_brand, ''), d.created_at,
 		        COALESCE(d.selfie_url, ''), COALESCE(d.license_front_url, ''),
 		        COALESCE(d.license_back_url, ''), COALESCE(d.id_document_url, ''),
+		        COALESCE(d.id_document_back_url, ''),
 		        COALESCE(d.registration_status, 'pending'), COALESCE(d.review_comment, '')
 		 FROM drivers d
 		 JOIN users u ON d.user_id = u.id
@@ -880,32 +927,34 @@ func (h *AdminHandler) GetPendingDriverRegistrations(c *gin.Context) {
 
 	var items []map[string]interface{}
 	for rows.Next() {
-		var driverID, userID, firstName, lastName, phone, carNumber string
-		var selfieURL, licenseFrontURL, licenseBackURL, idDocURL, status, reviewComment string
+		var driverID, userID, firstName, lastName, phone, carNumber, carBrand string
+		var selfieURL, licenseFrontURL, licenseBackURL, idDocURL, idDocBackURL, status, reviewComment string
 		var createdAt time.Time
 		if err := rows.Scan(
 			&driverID, &userID, &firstName, &lastName, &phone,
-			&carNumber, &createdAt,
-			&selfieURL, &licenseFrontURL, &licenseBackURL, &idDocURL,
+			&carNumber, &carBrand, &createdAt,
+			&selfieURL, &licenseFrontURL, &licenseBackURL, &idDocURL, &idDocBackURL,
 			&status, &reviewComment,
 		); err != nil {
 			continue
 		}
 
 		items = append(items, map[string]interface{}{
-			"driver_id":          driverID,
-			"user_id":            userID,
-			"first_name":         firstName,
-			"last_name":          lastName,
-			"phone":              phone,
-			"car_number":         carNumber,
-			"created_at":         createdAt,
-			"registration_status": status,
-			"review_comment":      reviewComment,
-			"selfie_url":          selfieURL,
-			"license_front_url":   licenseFrontURL,
-			"license_back_url":    licenseBackURL,
-			"id_document_url":     idDocURL,
+			"driver_id":            driverID,
+			"user_id":              userID,
+			"first_name":           firstName,
+			"last_name":            lastName,
+			"phone":                phone,
+			"car_number":           carNumber,
+			"car_brand":            carBrand,
+			"created_at":           createdAt,
+			"registration_status":  status,
+			"review_comment":       reviewComment,
+			"selfie_url":           selfieURL,
+			"license_front_url":    licenseFrontURL,
+			"license_back_url":     licenseBackURL,
+			"id_document_url":      idDocURL,
+			"id_document_back_url": idDocBackURL,
 		})
 	}
 	if items == nil {

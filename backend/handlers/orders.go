@@ -62,6 +62,26 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
+	// Reject orders with excessive distance (max 30 km)
+	const maxOrderDistanceKm = 30.0
+	if req.DistanceKm > maxOrderDistanceKm {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Расстояние заказа (%.1f км) превышает максимум %d км", req.DistanceKm, int(maxOrderDistanceKm)),
+		})
+		return
+	}
+
+	// If destination is provided, verify actual distance via Haversine
+	if req.DestinationLat != nil && req.DestinationLng != nil {
+		straightLineDist := haversineMeters(req.PickupLat, req.PickupLng, *req.DestinationLat, *req.DestinationLng) / 1000
+		if straightLineDist > maxOrderDistanceKm {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("Расстояние между точками (%.1f км) превышает максимум %d км", straightLineDist, int(maxOrderDistanceKm)),
+			})
+			return
+		}
+	}
+
 	passengerID := c.GetString("user_id")
 	basePrice, totalPrice, surge, serviceFee := h.pricingService.CalculatePrice(req.DistanceKm)
 	lockedPerKm := h.pricingService.GetEffectivePricePerKm()

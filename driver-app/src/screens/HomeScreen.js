@@ -982,10 +982,16 @@ export default function HomeScreen() {
             {/* Addresses */}
             <View style={s.addrRow}>
               <View style={[s.addrBadge, { backgroundColor: '#22C55E' }]}><Text style={s.addrBadgeText}>A</Text></View>
-              <Text style={s.addrText} numberOfLines={1}>
+              <Text style={s.addrText} numberOfLines={2}>
                 {activeOrder.pickup_address || `${activeOrder.pickup_lat?.toFixed(4)}, ${activeOrder.pickup_lng?.toFixed(4)}`}
               </Text>
             </View>
+            {activeOrder.additional_info ? (
+              <View style={s.addrRow}>
+                <View style={[s.addrBadge, { backgroundColor: '#FF9800' }]}><Text style={s.addrBadgeText}>📌</Text></View>
+                <Text style={[s.addrText, { fontStyle: 'italic' }]} numberOfLines={2}>{activeOrder.additional_info}</Text>
+              </View>
+            ) : null}
             {activeOrder.trip_type !== 'free' && activeOrder.destination_address ? (
               <View style={s.addrRow}>
                 <View style={[s.addrBadge, { backgroundColor: '#EF4444' }]}><Text style={s.addrBadgeText}>B</Text></View>
@@ -1146,11 +1152,19 @@ export default function HomeScreen() {
                 <View style={s.addrRow}>
                   <View style={[s.addrBadge, { backgroundColor: '#22C55E' }]}><Text style={s.addrBadgeText}>A</Text></View>
                   <Text style={s.addrTextModal} numberOfLines={2}>
-                    {incomingOrder.order_type === 'call'
-                      ? (incomingOrder.pickup_address || '') + (incomingOrder.additional_info ? `\n🏠 ${incomingOrder.additional_info}` : '')
-                      : (incomingOrder.pickup_address || t(lang, 'from'))}
+                    {incomingOrder.pickup_address || t(lang, 'from')}
                   </Text>
                 </View>
+
+                {/* Additional info / landmark */}
+                {incomingOrder.additional_info ? (
+                  <View style={s.addrRow}>
+                    <View style={[s.addrBadge, { backgroundColor: '#FF9800' }]}><Text style={s.addrBadgeText}>📌</Text></View>
+                    <Text style={[s.addrTextModal, { fontStyle: 'italic' }]} numberOfLines={2}>
+                      {incomingOrder.additional_info}
+                    </Text>
+                  </View>
+                ) : null}
 
                 {/* Address B */}
                 {incomingOrder.trip_type !== 'free' && incomingOrder.destination_address ? (

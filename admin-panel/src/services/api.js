@@ -45,6 +45,7 @@ export const adminAPI = {
   createCallOrder: (d) => api.post('/admin/call-orders', d),
   // Driver management
   createDriver: (d) => api.post('/admin/drivers', d),
+  createDriverFormData: (fd) => api.post('/admin/drivers', fd, { headers: { 'Content-Type': 'multipart/form-data' } }),
   getPendingDrivers: () => api.get('/admin/drivers/pending'),
   approveDriver: (id, comment = '') => api.post(`/admin/drivers/${id}/approve`, { comment }),
   rejectDriver: (id, comment) => api.post(`/admin/drivers/${id}/reject`, { comment }),

@@ -232,6 +232,8 @@ ALTER TABLE drivers ADD COLUMN IF NOT EXISTS selfie_url VARCHAR(500) DEFAULT '';
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS license_front_url VARCHAR(500) DEFAULT '';
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS license_back_url VARCHAR(500) DEFAULT '';
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS id_document_url VARCHAR(500) DEFAULT '';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS id_document_back_url VARCHAR(500) DEFAULT '';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS car_brand VARCHAR(100) DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_drivers_registration_status ON drivers (registration_status);
 
 -- 7-digit unique referral code assigned to each driver on registration

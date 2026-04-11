@@ -42,7 +42,6 @@ export default function ProfileScreen() {
   const { colors, isDark, toggleTheme, lang, setLang } = useTheme();
   const { user, logout, updateUser } = useAuth();
   const [langModalVisible, setLangModalVisible] = useState(false);
-  const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [puzzleModalVisible, setPuzzleModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const insets = useSafeAreaInsets();
@@ -52,6 +51,8 @@ export default function ProfileScreen() {
   const [puzzleScores, setPuzzleScores] = useState([]);
   const [puzzleTotal, setPuzzleTotal] = useState(0);
   const [loadingPuzzle, setLoadingPuzzle] = useState(false);
+  const [progressExpanded, setProgressExpanded] = useState(false);
+  const [bonusExpanded, setBonusExpanded] = useState(false);
 
   useEffect(() => {
     setSharingLocation(user?.share_live_location !== false);
@@ -149,6 +150,16 @@ export default function ProfileScreen() {
 
   const s = makeStyles(colors);
 
+  const completedOrders = orders.filter(o => o.status === 'completed');
+  const totalTrips = completedOrders.length;
+  const milestones = [10, 50, 100, 250, 500, 1000];
+  const currentMilestone = milestones.find(m => totalTrips < m) || milestones[milestones.length - 1];
+  const prevMilestone = milestones[milestones.indexOf(currentMilestone) - 1] || 0;
+  const progressPct = currentMilestone > prevMilestone
+    ? Math.min(Math.round(((totalTrips - prevMilestone) / (currentMilestone - prevMilestone)) * 100), 100)
+    : 100;
+  const rank = totalTrips >= 1000 ? '🏆 Легенда' : totalTrips >= 500 ? '🥇 Профи' : totalTrips >= 250 ? '🥈 Мастер' : totalTrips >= 100 ? '🥉 Эксперт' : totalTrips >= 50 ? '⭐ Опытный' : totalTrips >= 10 ? '🚗 Активный' : '🆕 Новичок';
+
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <ScrollView style={s.container} contentContainerStyle={[s.content, { paddingTop: Math.max(insets.top, 12), paddingBottom: 40 + insets.bottom }]}>
@@ -174,16 +185,19 @@ export default function ProfileScreen() {
         <Text style={[s.phone, { color: colors.textSecondary }]}>{user?.phone}</Text>
       </View>
 
-      {/* Settings */}
-      <Text style={[s.sectionTitle, { color: colors.textSecondary }]}>НАСТРОЙКИ</Text>
+      {/* ── Unified panel: all sections combined ── */}
       <View style={[s.section, { backgroundColor: colors.card }]}>
+
+        {/* Dark mode */}
         <Row label={t(lang,'darkMode')} colors={colors} icon={isDark ? 'sunny-outline' : 'moon-outline'} iconBg="#5E5CE6">
           <Switch
             value={isDark} onValueChange={toggleTheme}
             trackColor={{ true: colors.primary, false: colors.border }}
           />
         </Row>
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
 
+        {/* Language */}
         <TouchableOpacity style={s.row} onPress={() => setLangModalVisible(true)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#30D15820' }]}>
@@ -198,7 +212,9 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
           </View>
         </TouchableOpacity>
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
 
+        {/* Location sharing */}
         <Row label={t(lang, 'shareLocation')} colors={colors} icon="location-outline" iconBg="#FF3B3020">
           <Switch
             value={sharingLocation}
@@ -206,26 +222,9 @@ export default function ProfileScreen() {
             trackColor={{ true: colors.primary, false: colors.border }}
           />
         </Row>
-      </View>
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
 
-      {/* History & Support */}
-      <Text style={[s.sectionTitle, { color: colors.textSecondary }]}>ПОЕЗДКИ</Text>
-      <View style={[s.section, { backgroundColor: colors.card, marginBottom: 20 }]}>
-        <TouchableOpacity style={s.row} onPress={() => { loadHistory(); setHistoryModalVisible(true); }}>
-          <View style={s.rowLeft}>
-            <View style={[s.rowIconWrap, { backgroundColor: '#FFCC0020' }]}>
-              <Ionicons name="time-outline" size={18} color="#FFCC00" />
-            </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'tripHistory')}</Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            {loadingHistory
-              ? <ActivityIndicator size="small" color={colors.textSecondary} />
-              : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
-            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-          </View>
-        </TouchableOpacity>
-
+        {/* Support */}
         <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang,'support'), SUPPORT_PHONE)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#34C75920' }]}>
@@ -235,12 +234,144 @@ export default function ProfileScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
+
+        {/* ── My Progress (collapsible, closed by default, trip history inside) ── */}
+        <TouchableOpacity style={s.row} onPress={() => {
+          const next = !progressExpanded;
+          setProgressExpanded(next);
+          if (next) loadHistory();
+        }}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#4CAF5020' }]}>
+              <Ionicons name="trending-up" size={18} color="#4CAF50" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'myProgress') || 'Мой прогресс'}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                {totalTrips} {t(lang, 'ordersCompleted') || 'заказов выполнено'}
+              </Text>
+            </View>
+          </View>
+          <Ionicons name={progressExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        {progressExpanded && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+            {/* Level + progress bar */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+              <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 14 }}>{rank}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{totalTrips} / {currentMilestone}</Text>
+            </View>
+            <View style={{ height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden' }}>
+              <View style={{ height: '100%', width: `${progressPct}%`, backgroundColor: '#4CAF50', borderRadius: 5 }} />
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{prevMilestone}</Text>
+              <Text style={{ color: '#4CAF50', fontSize: 12, fontWeight: '700' }}>{progressPct}%</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{currentMilestone}</Text>
+            </View>
+
+            {/* Trip history inline */}
+            <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14, marginTop: 16, marginBottom: 10 }}>
+              {t(lang, 'tripHistory')}
+            </Text>
+            {loadingHistory ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
+            ) : orders.length === 0 ? (
+              <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 8 }}>
+                {lang === 'uz' ? "Sayohatlar yo'q" : 'Нет поездок'}
+              </Text>
+            ) : (
+              orders.slice(0, 10).map((order) => (
+                <View key={order.id} style={[s.historyCard, { backgroundColor: colors.background }]}>
+                  <View style={s.orderCardHeader}>
+                    <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[order.status] || '#9E9E9E' }]}>
+                      <Text style={s.statusBadgeText}>{STATUS_LABELS[order.status] || order.status}</Text>
+                    </View>
+                    <Text style={[s.orderDate, { color: colors.textSecondary }]}>{formatDate(order.created_at)}</Text>
+                  </View>
+                  <View style={s.orderRoute}>
+                    <Text style={{ fontSize: 10, color: '#43A047', marginRight: 6 }}>●</Text>
+                    <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.pickup_address || '—'}</Text>
+                  </View>
+                  <View style={s.orderRoute}>
+                    <Text style={{ fontSize: 10, color: '#E53935', marginRight: 6 }}>■</Text>
+                    <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.destination_address || '—'}</Text>
+                  </View>
+                  {order.car_number ? (
+                    <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 4 }}>🚗 {order.car_number}</Text>
+                  ) : null}
+                  {order.total_price != null && (
+                    <Text style={[s.orderPrice, { color: colors.primary }]}>
+                      {parseFloat(order.total_price).toLocaleString()} {t(lang, 'sum')}
+                    </Text>
+                  )}
+                </View>
+              ))
+            )}
+          </View>
+        )}
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
+
+        {/* ── Referral ── */}
+        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang, 'referral') || 'Рефералка', t(lang, 'referralInfo') || 'Пригласите друзей и получайте бонусы!')}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FF9F0A20' }]}>
+              <Ionicons name="gift-outline" size={18} color="#FF9F0A" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'referral') || 'Рефералка'}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
+
+        {/* ── Bonus History (collapsible) ── */}
+        <TouchableOpacity style={s.row} onPress={() => setBonusExpanded(!bonusExpanded)}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#F59E0B20' }]}>
+              <Ionicons name="trophy-outline" size={18} color="#F59E0B" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'bonusHistory') || 'История бонусов'}</Text>
+          </View>
+          <Ionicons name={bonusExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        {bonusExpanded && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 8 }}>
+              {lang === 'uz' ? 'Bonuslar hali mavjud emas' : 'Бонусы пока недоступны'}
+            </Text>
+          </View>
+        )}
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
+
+        {/* ── Friends placeholder ── */}
+        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang, 'friends') || 'Друзья', lang === 'uz' ? "Tez kunda" : 'Скоро будет доступно')}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#5B8DEE20' }]}>
+              <Ionicons name="people-outline" size={18} color="#5B8DEE" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'friends') || 'Друзья'}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <View style={[s.divider, { backgroundColor: colors.border }]} />
+
+        {/* ── Ratings ── */}
+        <View style={s.row}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FFC10720' }]}>
+              <Ionicons name="star" size={18} color="#FFC107" />
+            </View>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'myRatings') || 'Мои оценки'}</Text>
+          </View>
+        </View>
+
       </View>
 
       {/* Puzzle game scores section */}
-      <Text style={[s.sectionTitle, { color: colors.textSecondary }]}>ИГРЫ</Text>
-      <View style={[s.section, { backgroundColor: colors.card, marginBottom: 20 }]}>
-        {/* Total score banner */}
+      <View style={[s.section, { backgroundColor: colors.card, marginTop: 8 }]}>
         <View style={[s.puzzleBanner, { backgroundColor: colors.primary + '18' }]}>
           <Text style={{ fontSize: 28 }}>🧩</Text>
           <View style={{ flex: 1, marginLeft: 12 }}>
@@ -281,62 +412,10 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error }]} onPress={handleLogout}>        <Ionicons name="log-out-outline" size={18} color={colors.error} />
+      <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error, marginTop: 8 }]} onPress={handleLogout}>
+        <Ionicons name="log-out-outline" size={18} color={colors.error} />
         <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{t(lang,'logout')}</Text>
       </TouchableOpacity>
-
-      {/* History modal — full screen */}
-      <Modal visible={historyModalVisible} animationType="slide" onRequestClose={() => setHistoryModalVisible(false)}>
-        <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-            <TouchableOpacity onPress={() => setHistoryModalVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-              <Text style={{ color: colors.primary, fontSize: 16 }}>← {t(lang, 'back')}</Text>
-            </TouchableOpacity>
-            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1, textAlign: 'center', marginRight: 40 }}>
-              {t(lang, 'tripHistory')}
-            </Text>
-          </View>
-          {loadingHistory
-            ? <ActivityIndicator color={colors.primary} style={{ flex: 1 }} />
-            : <FlatList
-                data={orders}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
-                ListEmptyComponent={
-                  <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>
-                    {t(lang, 'uz') === 'uz' ? "Sayohatlar yo'q" : lang === 'uz' ? "Sayohatlar yo'q" : 'Нет поездок'}
-                  </Text>
-                }
-                renderItem={({ item: order }) => (
-                  <View style={[s.historyCard, { backgroundColor: colors.card }]}>
-                    <View style={s.orderCardHeader}>
-                      <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[order.status] || '#9E9E9E' }]}>
-                        <Text style={s.statusBadgeText}>{STATUS_LABELS[order.status] || order.status}</Text>
-                      </View>
-                      <Text style={[s.orderDate, { color: colors.textSecondary }]}>{formatDate(order.created_at)}</Text>
-                    </View>
-                    <View style={s.orderRoute}>
-                      <Text style={{ fontSize: 10, color: '#43A047', marginRight: 6 }}>●</Text>
-                      <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.pickup_address || '—'}</Text>
-                    </View>
-                    <View style={s.orderRoute}>
-                      <Text style={{ fontSize: 10, color: '#E53935', marginRight: 6 }}>■</Text>
-                      <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.destination_address || '—'}</Text>
-                    </View>
-                    {order.car_number ? (
-                      <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 4 }}>🚗 {order.car_number}</Text>
-                    ) : null}
-                    {order.total_price != null && (
-                      <Text style={[s.orderPrice, { color: colors.primary }]}>
-                        {parseFloat(order.total_price).toLocaleString()} {t(lang, 'sum')}
-                      </Text>
-                    )}
-                  </View>
-                )}
-              />
-          }
-        </SafeAreaView>
-      </Modal>
 
       {/* Puzzle scores modal */}
       <Modal visible={puzzleModalVisible} animationType="slide" onRequestClose={() => setPuzzleModalVisible(false)}>
@@ -349,7 +428,6 @@ export default function ProfileScreen() {
               🧩 История игр
             </Text>
           </View>
-          {/* Total in modal header */}
           <View style={[s.puzzleModalTotal, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
             <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Всего очков набрано</Text>
             <Text style={{ color: colors.primary, fontSize: 32, fontWeight: '900' }}>{puzzleTotal.toLocaleString()}</Text>
@@ -404,7 +482,8 @@ export default function ProfileScreen() {
       </Modal>
 
       {/* Language modal */}
-      <Modal visible={langModalVisible} transparent animationType="slide">        <View style={s.modalOverlay}>
+      <Modal visible={langModalVisible} transparent animationType="slide">
+        <View style={s.modalOverlay}>
           <View style={[s.modalSheet, { backgroundColor: colors.background }]}>
             <Text style={[s.modalTitle, { color: colors.text }]}>{t(lang,'selectLanguage')}</Text>
             {[
@@ -475,8 +554,8 @@ function makeStyles(colors) {
     },
     name: { fontSize: 20, fontWeight: '700' },
     phone: { fontSize: 15, marginTop: 4 },
-    sectionTitle: { fontSize: 12, fontWeight: '600', letterSpacing: 0.5, marginBottom: 8, marginTop: 4, paddingHorizontal: 4 },
     section: { borderRadius: 16, marginBottom: 12, overflow: 'hidden' },
+    divider: { height: 1, marginHorizontal: 16, opacity: 0.3 },
     row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
     rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
     rowIconWrap: { width: 32, height: 32, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
@@ -485,10 +564,7 @@ function makeStyles(colors) {
       borderWidth: 1.5, borderRadius: 14, padding: 14,
       alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
     },
-    sectionHeader: { fontSize: 15, fontWeight: '700', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
-    emptyText: { textAlign: 'center', padding: 16, fontSize: 14 },
-    orderCard: { borderTopWidth: 1, paddingHorizontal: 16, paddingVertical: 12 },
-    historyCard: { borderRadius: 14, padding: 14, marginBottom: 12 },
+    historyCard: { borderRadius: 14, padding: 14, marginBottom: 10 },
     orderCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
     statusBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
     statusBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
@@ -502,30 +578,12 @@ function makeStyles(colors) {
     langOption: { flexDirection: 'row', justifyContent: 'space-between', padding: 14 },
     langLabel: { fontSize: 16 },
     closeBtn: { alignItems: 'center', marginTop: 16, padding: 12 },
-
-    // Puzzle game section
     puzzleBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 16,
-      borderRadius: 16,
-      margin: 12,
-      marginBottom: 4,
+      flexDirection: 'row', alignItems: 'center', padding: 16,
+      borderRadius: 16, margin: 12, marginBottom: 4,
     },
-    puzzleTrophyBadge: {
-      borderRadius: 10,
-      paddingHorizontal: 9,
-      paddingVertical: 4,
-    },
-    puzzleModalTotal: {
-      alignItems: 'center',
-      padding: 16,
-      borderBottomWidth: 1,
-    },
-    puzzleCard: {
-      borderRadius: 14,
-      padding: 14,
-      marginBottom: 10,
-    },
+    puzzleTrophyBadge: { borderRadius: 10, paddingHorizontal: 9, paddingVertical: 4 },
+    puzzleModalTotal: { alignItems: 'center', padding: 16, borderBottomWidth: 1 },
+    puzzleCard: { borderRadius: 14, padding: 14, marginBottom: 10 },
   });
 }

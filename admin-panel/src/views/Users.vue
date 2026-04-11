@@ -109,8 +109,36 @@
             <input v-model="driverForm.password" type="password" class="form-input" placeholder="Password" minlength="8" />
           </div>
           <div class="field">
+            <label>Car brand</label>
+            <input v-model="driverForm.car_brand" class="form-input" placeholder="e.g. Chevrolet Cobalt" />
+          </div>
+          <div class="field">
             <label>Car number (e.g. 01A123BC)</label>
             <input v-model="driverForm.car_number" class="form-input" placeholder="01A123BC" maxlength="12" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Selfie</label>
+            <input type="file" accept="image/*" @change="e => driverFiles.selfie = e.target.files[0]" class="form-input" />
+          </div>
+          <div class="field">
+            <label>License (front)</label>
+            <input type="file" accept="image/*" @change="e => driverFiles.license_front = e.target.files[0]" class="form-input" />
+          </div>
+          <div class="field">
+            <label>License (back)</label>
+            <input type="file" accept="image/*" @change="e => driverFiles.license_back = e.target.files[0]" class="form-input" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Passport/ID (front)</label>
+            <input type="file" accept="image/*" @change="e => driverFiles.id_document = e.target.files[0]" class="form-input" />
+          </div>
+          <div class="field">
+            <label>Passport/ID (back)</label>
+            <input type="file" accept="image/*" @change="e => driverFiles.id_document_back = e.target.files[0]" class="form-input" />
           </div>
         </div>
         <div v-if="driverError" class="error-msg">{{ driverError }}</div>
@@ -148,7 +176,8 @@
                 <a v-if="d.selfie_url" :href="d.selfie_url" target="_blank">Selfie</a>
                 <a v-if="d.license_front_url" :href="d.license_front_url" target="_blank">License front</a>
                 <a v-if="d.license_back_url" :href="d.license_back_url" target="_blank">License back</a>
-                <a v-if="d.id_document_url" :href="d.id_document_url" target="_blank">Passport/ID</a>
+                <a v-if="d.id_document_url" :href="d.id_document_url" target="_blank">Passport/ID (front)</a>
+                <a v-if="d.id_document_back_url" :href="d.id_document_back_url" target="_blank">Passport/ID (back)</a>
               </div>
             </td>
             <td><small>{{ fmtDate(d.created_at) }}</small></td>
@@ -202,7 +231,8 @@ const processingId = ref('')
 const loading = ref(true)
 const search = ref('')
 
-const driverForm = ref({ first_name: '', last_name: '', phone: '', password: '', car_number: '' })
+const driverForm = ref({ first_name: '', last_name: '', phone: '', password: '', car_number: '', car_brand: '' })
+const driverFiles = ref({ selfie: null, license_front: null, license_back: null, id_document: null, id_document_back: null })
 const savingDriver = ref(false)
 const driverError = ref('')
 const driverCreated = ref('')
@@ -256,9 +286,26 @@ async function createDriver() {
   if (!driverForm.value.car_number) { driverError.value = 'Enter car number'; return }
   savingDriver.value = true
   try {
-    const { data } = await adminAPI.createDriver(driverForm.value)
-    driverCreated.value = data.referral_code || 'created'
-    driverForm.value = { first_name: '', last_name: '', phone: '', password: '', car_number: '' }
+    const hasFiles = Object.values(driverFiles.value).some(f => f != null)
+    let response
+    if (hasFiles) {
+      const fd = new FormData()
+      fd.append('first_name', driverForm.value.first_name)
+      fd.append('last_name', driverForm.value.last_name)
+      fd.append('phone', driverForm.value.phone)
+      fd.append('password', driverForm.value.password)
+      fd.append('car_number', driverForm.value.car_number)
+      if (driverForm.value.car_brand) fd.append('car_brand', driverForm.value.car_brand)
+      for (const [key, file] of Object.entries(driverFiles.value)) {
+        if (file) fd.append(key, file)
+      }
+      response = await adminAPI.createDriverFormData(fd)
+    } else {
+      response = await adminAPI.createDriver(driverForm.value)
+    }
+    driverCreated.value = response.data.referral_code || 'created'
+    driverForm.value = { first_name: '', last_name: '', phone: '', password: '', car_number: '', car_brand: '' }
+    driverFiles.value = { selfie: null, license_front: null, license_back: null, id_document: null, id_document_back: null }
     await loadUsers()
   } catch (e) {
     driverError.value = e.response?.data?.error || 'Creation failed'

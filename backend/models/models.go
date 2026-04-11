@@ -50,6 +50,8 @@ type Driver struct {
 	LicenseFrontURL     string     `json:"license_front_url,omitempty"`
 	LicenseBackURL      string     `json:"license_back_url,omitempty"`
 	IDDocumentURL       string     `json:"id_document_url,omitempty"`
+	IDDocumentBackURL   string     `json:"id_document_back_url,omitempty"`
+	CarBrand            string     `json:"car_brand,omitempty"`
 }
 
 type ReferralSettings struct {

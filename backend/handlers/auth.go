@@ -105,7 +105,7 @@ func (h *AuthHandler) RegisterPassenger(c *gin.Context) {
 
 func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 	var req RegisterDriverRequest
-	var selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL string
+	var selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL, idDocumentBackURL, carBrand string
 
 	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
 		req = RegisterDriverRequest{
@@ -117,6 +117,7 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 			CarNumber:  strings.TrimSpace(c.PostForm("car_number")),
 			ReferredBy: strings.TrimSpace(c.PostForm("referred_by")),
 		}
+		carBrand = strings.TrimSpace(c.PostForm("car_brand"))
 
 		selfie, err := c.FormFile("selfie")
 		if err != nil {
@@ -135,9 +136,10 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 		}
 		idDoc, err := c.FormFile("id_document")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Passport or ID card image is required"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Passport or ID card (front) is required"})
 			return
 		}
+		idDocBack, _ := c.FormFile("id_document_back")
 
 		selfieURL, err = saveUploadedImage(selfie, "driver-docs")
 		if err != nil {
@@ -159,8 +161,15 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if idDocBack != nil {
+			idDocumentBackURL, err = saveUploadedImage(idDocBack, "driver-docs")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Use multipart/form-data with selfie, license_front, license_back, id_document"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Use multipart/form-data with selfie, license_front, license_back, id_document, id_document_back"})
 		return
 	}
 
@@ -239,11 +248,11 @@ func (h *AuthHandler) RegisterDriver(c *gin.Context) {
 
 	_, err = tx.Exec(context.Background(),
 		`INSERT INTO drivers
-		 (user_id, car_number, referral_code, referred_by, registration_status,
-		  selfie_url, license_front_url, license_back_url, id_document_url)
-		 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)`,
-		userID, normalizedCarNumber, refCode, referredBy,
-		selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL,
+		 (user_id, car_number, car_brand, referral_code, referred_by, registration_status,
+		  selfie_url, license_front_url, license_back_url, id_document_url, id_document_back_url)
+		 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)`,
+		userID, normalizedCarNumber, carBrand, refCode, referredBy,
+		selfieURL, licenseFrontURL, licenseBackURL, idDocumentURL, idDocumentBackURL,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create driver profile"})
@@ -418,14 +427,16 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 			 COALESCE(balance,0), COALESCE(registration_status,'pending'),
 			 reviewed_by_admin_id::text, reviewed_at, COALESCE(review_comment,''),
 			 COALESCE(selfie_url,''), COALESCE(license_front_url,''),
-			 COALESCE(license_back_url,''), COALESCE(id_document_url,'')
+			 COALESCE(license_back_url,''), COALESCE(id_document_url,''),
+			 COALESCE(id_document_back_url,''), COALESCE(car_brand,'')
 			 FROM drivers WHERE user_id = $1`,
 			userID,
 		).Scan(&driver.ID, &driver.CarNumber, &driver.IsAvailable,
 			&driver.CurrentLat, &driver.CurrentLng, &driver.CurrentHeading, &driver.LastSeen,
 			&referralCode, &referredBy, &referralBenefitType, &driver.Balance,
 			&driver.RegistrationStatus, &reviewedByAdminID, &driver.ReviewedAt, &driver.ReviewComment,
-			&driver.SelfieURL, &driver.LicenseFrontURL, &driver.LicenseBackURL, &driver.IDDocumentURL)
+			&driver.SelfieURL, &driver.LicenseFrontURL, &driver.LicenseBackURL, &driver.IDDocumentURL,
+			&driver.IDDocumentBackURL, &driver.CarBrand)
 		if err == nil {
 			if referralCode != nil {
 				driver.ReferralCode = *referralCode

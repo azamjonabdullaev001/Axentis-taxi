@@ -29,12 +29,14 @@ export default function RegisterScreen({ navigation }) {
     first_name: '', last_name: '', phone: '',
     password: '', confirm_password: '',
     car_region: '01', car_number_suffix: '',
+    car_brand: '',
   });
   const [docs, setDocs] = useState({
     selfie: null,
     license_front: null,
     license_back: null,
     id_document: null,
+    id_document_back: null,
   });
   const [loading, setLoading] = useState(false);
   const [regionModal, setRegionModal] = useState(false);
@@ -86,8 +88,9 @@ export default function RegisterScreen({ navigation }) {
     if (!isValidCarSuffix(form.car_number_suffix)) {
       Alert.alert(t(lang,'error'), 'Введите номер автомобиля в едином формате: 4-6 символов, буквы и цифры вместе'); return;
     }
-    if (!docs.selfie || !docs.license_front || !docs.license_back || !docs.id_document) {
-      Alert.alert(t(lang, 'error'), 'Загрузите selfie, права (2 стороны) и паспорт/ID');
+    if (!form.car_brand.trim()) { Alert.alert(t(lang,'error'), 'Введите марку автомобиля'); return; }
+    if (!docs.selfie || !docs.license_front || !docs.license_back || !docs.id_document || !docs.id_document_back) {
+      Alert.alert(t(lang, 'error'), 'Загрузите все документы: selfie, права (2 стороны) и паспорт/ID (2 стороны)');
       return;
     }
 
@@ -101,10 +104,12 @@ export default function RegisterScreen({ navigation }) {
         password: form.password,
         confirm_password: form.confirm_password,
         car_number: buildCarNumber(),
+        car_brand: form.car_brand.trim(),
         selfie: docs.selfie,
         license_front: docs.license_front,
         license_back: docs.license_back,
         id_document: docs.id_document,
+        id_document_back: docs.id_document_back,
       });
 
       if (res?.registration_status === 'pending') {
@@ -203,9 +208,20 @@ export default function RegisterScreen({ navigation }) {
             })}
           </View>
 
-          {/* Car number card */}
+          {/* Car info card */}
           <View style={s.card}>
-            <Text style={s.sectionTitle}>{t(lang,'carNumber')}</Text>
+            <Text style={s.sectionTitle}>Автомобиль</Text>
+
+            <Text style={s.label}>Марка автомобиля</Text>
+            <TextInput
+              style={s.input}
+              value={form.car_brand}
+              onChangeText={(v) => setField('car_brand', v)}
+              placeholder="Например: Chevrolet Cobalt"
+              placeholderTextColor="#505068"
+            />
+
+            <Text style={s.label}>{t(lang,'carNumber')}</Text>
             <View style={s.carRow}>
               <TouchableOpacity style={s.regionBtn} onPress={() => setRegionModal(true)}>
                 <Text style={s.regionBtnText}>{form.car_region}</Text>
@@ -231,7 +247,8 @@ export default function RegisterScreen({ navigation }) {
               { key: 'selfie', icon: 'camera-outline', text: 'Selfie водителя' },
               { key: 'license_front', icon: 'card-outline', text: 'Права (лицевая сторона)' },
               { key: 'license_back', icon: 'card-outline', text: 'Права (обратная сторона)' },
-              { key: 'id_document', icon: 'document-outline', text: 'Паспорт или ID-карта' },
+              { key: 'id_document', icon: 'document-outline', text: 'Паспорт / ID (лицевая сторона)' },
+              { key: 'id_document_back', icon: 'document-outline', text: 'Паспорт / ID (обратная сторона)' },
             ].map(({ key, icon, text }) => (
               <TouchableOpacity
                 key={key}

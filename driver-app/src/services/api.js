@@ -41,9 +41,10 @@ export const authAPI = {
     formData.append('password', data.password || '');
     formData.append('confirm_password', data.confirm_password || '');
     formData.append('car_number', data.car_number || '');
+    if (data.car_brand) formData.append('car_brand', data.car_brand);
     if (data.referred_by) formData.append('referred_by', data.referred_by);
 
-    ['selfie', 'license_front', 'license_back', 'id_document'].forEach((key) => {
+    ['selfie', 'license_front', 'license_back', 'id_document', 'id_document_back'].forEach((key) => {
       const f = data[key];
       if (f?.uri) {
         formData.append(key, {

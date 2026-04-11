@@ -28,11 +28,12 @@ type DriverCandidate struct {
 }
 
 // FindAndNotifyDrivers implements the Yandex-style driver matching algorithm:
-// 1. Find all available drivers sorted by proximity
+// 1. Find all available drivers within 5 km radius sorted by proximity
 // 2. Notify the closest driver
 // 3. If no response in 10 seconds or declined, try the next driver
 func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickupLng float64) {
-	log.Printf("[ORDER %s] Starting driver search: pickup=(%.6f, %.6f)", orderID, pickupLat, pickupLng)
+	const maxRadiusMeters = 5000.0 // 5 km hard limit
+	log.Printf("[ORDER %s] Starting driver search: pickup=(%.6f, %.6f), radius=%.0fm", orderID, pickupLat, pickupLng, maxRadiusMeters)
 
 	// Retry up to 6 times (30s total) — gives drivers time to go online / GPS to register
 	var candidates []DriverCandidate
@@ -51,18 +52,29 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 			}
 			time.Sleep(5 * time.Second)
 		}
-		candidates, err = s.findNearbyDrivers(pickupLat, pickupLng)
-		if err == nil && len(candidates) > 0 {
-			break
+		all, findErr := s.findNearbyDrivers(pickupLat, pickupLng)
+		err = findErr
+		if err == nil {
+			// Filter to 5 km radius — no fallback
+			candidates = nil
+			for _, c := range all {
+				if c.Distance <= maxRadiusMeters {
+					candidates = append(candidates, c)
+				}
+			}
+			if len(candidates) > 0 {
+				break
+			}
 		}
-		log.Printf("[ORDER %s] Attempt %d: no candidates (err=%v, count=%d)", orderID, attempt+1, err, len(candidates))
+		log.Printf("[ORDER %s] Attempt %d: no candidates within %.0fm (err=%v, total=%d)", orderID, attempt+1, maxRadiusMeters, err, len(candidates))
 	}
 	if len(candidates) == 0 {
-		log.Printf("[ORDER %s] No candidates found after retries", orderID)
+		log.Printf("[ORDER %s] No candidates found within %.0fm after retries", orderID, maxRadiusMeters)
+		s.updateOrderStatus(orderID, "cancelled")
 		s.notifyPassengerNoDrivers(orderID)
 		return
 	}
-	log.Printf("[ORDER %s] Found %d candidates, starting sequential notifications", orderID, len(candidates))
+	log.Printf("[ORDER %s] Found %d candidates within %.0fm, starting sequential notifications", orderID, len(candidates), maxRadiusMeters)
 
 	go func() {
 		for _, candidate := range candidates {
@@ -83,7 +95,7 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 // FindAndNotifyDriversInRadius — same as FindAndNotifyDrivers but only
 // considers drivers within the given radius (meters) from the pickup point.
 // Used for call orders to limit search to the city area.
-// Falls back to ALL available drivers if none found within the radius.
+// Strictly enforces radius limit — no fallback to all drivers.
 func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat, pickupLng float64, radiusMeters float64) {
 	log.Printf("[CALL-ORDER %s] Starting driver search: pickup=(%.6f, %.6f), radius=%.0fm",
 		orderID, pickupLat, pickupLng, radiusMeters)
@@ -108,12 +120,6 @@ func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat
 		}
 	}
 	log.Printf("[CALL-ORDER %s] Drivers within %.0fm radius: %d", orderID, radiusMeters, len(candidates))
-
-	// Fallback: if no drivers within radius, use ALL available drivers
-	if len(candidates) == 0 && len(all) > 0 {
-		log.Printf("[CALL-ORDER %s] No drivers in radius, falling back to all %d available drivers", orderID, len(all))
-		candidates = all
-	}
 
 	if len(candidates) == 0 {
 		log.Printf("[CALL-ORDER %s] No available drivers at all — cancelling order", orderID)
