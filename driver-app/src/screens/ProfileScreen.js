@@ -178,10 +178,14 @@ export default function ProfileScreen() {
     ]);
   }
 
+  // Progress section expanded
+  const [progressExpanded, setProgressExpanded] = useState(false);
+
   const s = makeStyles(colors);
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <ScrollView style={s.container} contentContainerStyle={[s.content, { paddingTop: Math.max(insets.top, 12), paddingBottom: 40 + insets.bottom }]}>
+      {/* ── Avatar section ── */}
       <View style={s.avatarSection}>
         <TouchableOpacity onPress={handlePickImage} style={s.avatarWrap}>
           {user?.avatar_url
@@ -198,17 +202,60 @@ export default function ProfileScreen() {
         <Text style={[s.phone, { color: colors.textSecondary }]}>{user?.phone}</Text>
         {driver && (
           <View style={[s.carBadge, { backgroundColor: colors.card, borderColor: colors.primary }]}>
-            <Text style={{ color: colors.primary, fontWeight: '700' }}>🚗 {driver.car_brand ? `${driver.car_brand} · ` : ''}{driver.car_number}</Text>
+            <Text style={{ color: colors.primary, fontWeight: '700' }}>🚗 {driver.car_number}</Text>
           </View>
         )}
       </View>
 
+      {/* ══════ UNIFIED BLOCK ══════ */}
       <View style={[s.section, { backgroundColor: colors.card }]}>
+
+        {/* ── Referral code (top of block) ── */}
+        {driver?.referral_code ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6, textAlign: 'center' }}>🎁 {lang === 'uz' ? 'Mening referal kodam' : 'Мой реферальный код'}</Text>
+            <View style={{ backgroundColor: colors.primary, borderRadius: 14, padding: 14, alignItems: 'center' }}>
+              <Text style={{ color: '#000', fontSize: 26, fontWeight: '900', letterSpacing: 6 }}>{driver.referral_code}</Text>
+              <View style={{ flexDirection: 'row', marginTop: 10, gap: 12 }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    Clipboard.setString(driver.referral_code);
+                    Alert.alert('✅', lang === 'uz' ? 'Nusxalandi' : 'Скопировано');
+                  }}
+                  style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                >
+                  <Ionicons name="copy-outline" size={16} color="#000" />
+                  <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{lang === 'uz' ? 'Nusxalash' : 'Копировать'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      await Share.share({ message: `${lang === 'uz' ? "Mening referal kodam" : 'Мой реферальный код'}: ${driver.referral_code}` });
+                    } catch {}
+                  }}
+                  style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                >
+                  <Ionicons name="share-social-outline" size={16} color="#000" />
+                  <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{lang === 'uz' ? 'Ulashish' : 'Поделиться'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        {/* ── Divider ── */}
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Dark mode toggle ── */}
         <View style={s.row}>
           <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'darkMode')}</Text>
           <Switch value={isDark} onValueChange={toggleTheme}
             trackColor={{ true: colors.primary, false: colors.border }} />
         </View>
+
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Language ── */}
         <TouchableOpacity style={s.row} onPress={() => setLangModal(true)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#30D15820' }]}>
@@ -223,6 +270,10 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
           </View>
         </TouchableOpacity>
+
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Support ── */}
         <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang,'support'), SUPPORT_PHONE)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#34C75920' }]}>
@@ -232,138 +283,122 @@ export default function ProfileScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
-      </View>
 
-      {/* ── Order Progress section ── */}
-      <View style={[s.section, { backgroundColor: colors.card }]}>
-        <View style={s.row}>
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── My Progress (collapsible) ── */}
+        <TouchableOpacity style={s.row} onPress={() => setProgressExpanded(v => !v)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#4CAF5020' }]}>
               <Ionicons name="trending-up" size={18} color="#4CAF50" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={[s.rowLabel, { color: colors.text }]}>Мой прогресс</Text>
+              <Text style={[s.rowLabel, { color: colors.text }]}>{lang === 'uz' ? 'Mening taraqqiyotim' : 'Мой прогресс'}</Text>
               <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                {bonusStats.lifetime_trips} заказов выполнено
+                {bonusStats.lifetime_trips} {lang === 'uz' ? 'buyurtma bajarildi' : 'заказов выполнено'}
               </Text>
             </View>
           </View>
-        </View>
-        <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-          {(() => {
-            const trips = bonusStats.lifetime_trips;
-            const milestones = [10, 50, 100, 250, 500, 1000, 2500, 5000];
-            const currentMilestone = milestones.find(m => trips < m) || milestones[milestones.length - 1];
-            const prevMilestone = milestones[milestones.indexOf(currentMilestone) - 1] || 0;
-            const progress = currentMilestone > prevMilestone
-              ? Math.min((trips - prevMilestone) / (currentMilestone - prevMilestone), 1)
-              : 1;
-            const pct = Math.round(progress * 100);
-            const rank = trips >= 5000 ? '🏆 Легенда' : trips >= 2500 ? '🥇 Профи' : trips >= 1000 ? '🥈 Мастер' : trips >= 500 ? '🥉 Эксперт' : trips >= 250 ? '⭐ Опытный' : trips >= 100 ? '🚗 Водитель' : trips >= 50 ? '🔰 Активный' : '🆕 Новичок';
-            return (
-              <>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 14 }}>{rank}</Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{trips} / {currentMilestone}</Text>
-                </View>
-                <View style={{ height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden' }}>
-                  <View style={{ height: '100%', width: `${pct}%`, backgroundColor: '#4CAF50', borderRadius: 5 }} />
-                </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{prevMilestone}</Text>
-                  <Text style={{ color: '#4CAF50', fontSize: 12, fontWeight: '700' }}>{pct}%</Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{currentMilestone}</Text>
-                </View>
-                {bonusStats.streak_days > 0 && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 6 }}>
-                    <Text style={{ fontSize: 16 }}>🔥</Text>
-                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                      {bonusStats.streak_days} дн. подряд
-                    </Text>
-                  </View>
-                )}
-              </>
-            );
-          })()}
-        </View>
-      </View>
+          <Ionicons name={progressExpanded ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
+        </TouchableOpacity>
 
-      {/* Ratings section */}
-      <View style={[s.section, { backgroundColor: colors.card, marginTop: 20 }]}>
+        {progressExpanded && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+            {(() => {
+              const trips = bonusStats.lifetime_trips;
+              const milestones = [10, 50, 100, 250, 500, 1000, 2500, 5000];
+              const currentMilestone = milestones.find(m => trips < m) || milestones[milestones.length - 1];
+              const prevMilestone = milestones[milestones.indexOf(currentMilestone) - 1] || 0;
+              const progress = currentMilestone > prevMilestone
+                ? Math.min((trips - prevMilestone) / (currentMilestone - prevMilestone), 1)
+                : 1;
+              const pct = Math.round(progress * 100);
+              const rank = trips >= 5000 ? '🏆 Легенда' : trips >= 2500 ? '🥇 Профи' : trips >= 1000 ? '🥈 Мастер' : trips >= 500 ? '🥉 Эксперт' : trips >= 250 ? '⭐ Опытный' : trips >= 100 ? '🚗 Водитель' : trips >= 50 ? '🔰 Активный' : '🆕 Новичок';
+              return (
+                <>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 14 }}>{rank}</Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{trips} / {currentMilestone}</Text>
+                  </View>
+                  <View style={{ height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${pct}%`, backgroundColor: '#4CAF50', borderRadius: 5 }} />
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{prevMilestone}</Text>
+                    <Text style={{ color: '#4CAF50', fontSize: 12, fontWeight: '700' }}>{pct}%</Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{currentMilestone}</Text>
+                  </View>
+                  {bonusStats.streak_days > 0 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 6 }}>
+                      <Text style={{ fontSize: 16 }}>🔥</Text>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                        {bonusStats.streak_days} {lang === 'uz' ? "kun ketma-ket" : 'дн. подряд'}
+                      </Text>
+                    </View>
+                  )}
+                </>
+              );
+            })()}
+
+            {/* ── Trip history inside progress ── */}
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, backgroundColor: colors.background, borderRadius: 10, padding: 12 }}
+              onPress={() => { loadHistory(); setHistoryModalVisible(true); }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="time-outline" size={18} color="#FFCC00" />
+                <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>{t(lang,'tripHistory') || 'История поездок'}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                {loadingHistory
+                  ? <ActivityIndicator size="small" color={colors.textSecondary} />
+                  : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
+                <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Ratings ── */}
         <View style={s.row}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#FFC10720' }]}>
               <Ionicons name="star" size={18} color="#FFC107" />
             </View>
-            <View>
-              <Text style={[s.rowLabel, { color: colors.text }]}>Мои оценки</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowLabel, { color: colors.text }]}>{lang === 'uz' ? 'Mening baholarim' : 'Мои оценки'}</Text>
               <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
-                {ratingsData.average_rating.toFixed(1)} / 5.0 ({ratingsData.rating_count} оценок)
+                {ratingsData.average_rating.toFixed(1)} / 5.0 ({ratingsData.rating_count} {lang === 'uz' ? 'baho' : 'оценок'})
               </Text>
             </View>
           </View>
-        </View>
-        <View style={s.ratingSummaryRow}>
-          {[1,2,3,4,5].map((star) => (
-            <Ionicons key={star} name={star <= Math.round(ratingsData.average_rating) ? 'star' : 'star-outline'} size={26} color={star <= Math.round(ratingsData.average_rating) ? '#FFC107' : colors.border} />
-          ))}
-          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800', marginLeft: 8 }}>
-            {ratingsData.average_rating.toFixed(1)}
-          </Text>
-        </View>
-      </View>
-
-      {/* Trip history */}
-      <View style={[s.section, { backgroundColor: colors.card }]}>
-        <TouchableOpacity style={s.row} onPress={() => { loadHistory(); setHistoryModalVisible(true); }}>
-          <View style={s.rowLeft}>
-            <View style={[s.rowIconWrap, { backgroundColor: '#FFCC0020' }]}>
-              <Ionicons name="time-outline" size={18} color="#FFCC00" />
-            </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang,'tripHistory') || 'История поездок'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+            {[1,2,3,4,5].map((star) => (
+              <Ionicons key={star} name={star <= Math.round(ratingsData.average_rating) ? 'star' : 'star-outline'} size={16} color={star <= Math.round(ratingsData.average_rating) ? '#FFC107' : colors.border} />
+            ))}
+            <Text style={{ color: colors.text, fontSize: 14, fontWeight: '800', marginLeft: 4 }}>
+              {ratingsData.average_rating.toFixed(1)}
+            </Text>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            {loadingHistory
-              ? <ActivityIndicator size="small" color={colors.textSecondary} />
-              : <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{orders.length}</Text>}
-            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-          </View>
-        </TouchableOpacity>
-      </View>
+        </View>
 
-      {/* ── Referral section ── */}
-      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Referral apply (collapsible) ── */}
         <TouchableOpacity style={s.row} onPress={() => setReferralExpanded((v) => !v)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#FF9F0A20' }]}>
               <Ionicons name="gift-outline" size={18} color="#FF9F0A" />
             </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>Рефералка</Text>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{lang === 'uz' ? 'Referalka' : 'Рефералка'}</Text>
           </View>
           <Ionicons name={referralExpanded ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
         </TouchableOpacity>
 
         {referralExpanded && (
-          <View style={{ paddingHorizontal: 4, paddingBottom: 12 }}>
-
-            {/* My unique referral code */}
-            {driver?.referral_code ? (
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 4 }}>Мой реферальный код</Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    Clipboard.setString(driver.referral_code);
-                    Alert.alert('Скопировано', `Код ${driver.referral_code} скопирован в буфер обмена`);
-                  }}
-                  style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: colors.primary }}
-                >
-                  <Text style={{ color: colors.primary, fontSize: 22, fontWeight: '900', letterSpacing: 4, flex: 1 }}>{driver.referral_code}</Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>📋 Копировать</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-
-            {/* Applied benefit display */}
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
             {driver?.referral_benefit_type ? (
               <View style={{ backgroundColor: '#E8F5E9', borderRadius: 10, padding: 12, marginBottom: 8 }}>
                 <Text style={{ color: '#2E7D32', fontWeight: '700', fontSize: 14 }}>
@@ -378,11 +413,10 @@ export default function ProfileScreen() {
                 ) : null}
               </View>
             ) : (
-              /* Input + benefit selector */
               <>
                 {referralStep === 'input' && (
                   <View>
-                    <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6 }}>Введите реферальный код друга</Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6 }}>{lang === 'uz' ? "Do'stingizning referal kodini kiriting" : 'Введите реферальный код друга'}</Text>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <TextInput
                         style={[s.referralInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background, flex: 1 }]}
@@ -398,7 +432,7 @@ export default function ProfileScreen() {
                         disabled={referralInput.length !== 7}
                         onPress={() => setReferralStep('choose')}
                       >
-                        <Text style={{ color: '#000', fontWeight: '700' }}>Далее</Text>
+                        <Text style={{ color: '#000', fontWeight: '700' }}>{lang === 'uz' ? 'Keyingi' : 'Далее'}</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -406,77 +440,59 @@ export default function ProfileScreen() {
 
                 {referralStep === 'choose' && (
                   <View>
-                    <Text style={{ color: colors.text, fontWeight: '700', marginBottom: 10 }}>Выберите тип бонуса</Text>
-
-                    <TouchableOpacity
-                      style={[s.benefitCard, { borderColor: colors.primary }]}
-                      disabled={applyingReferral}
+                    <Text style={{ color: colors.text, fontWeight: '700', marginBottom: 10 }}>{lang === 'uz' ? 'Bonus turini tanlang' : 'Выберите тип бонуса'}</Text>
+                    <TouchableOpacity style={[s.benefitCard, { borderColor: colors.primary }]} disabled={applyingReferral}
                       onPress={async () => {
                         setApplyingReferral(true);
                         try {
                           await driverAPI.applyReferral(referralInput, 'commission');
                           const profile = await authAPI.getProfile();
                           setUser(profile.data.user);
-                          // Refresh driver data
-                          Alert.alert('Готово', 'Сниженная комиссия активирована!');
+                          Alert.alert('✅', lang === 'uz' ? 'Komissiya kamaytirildi!' : 'Сниженная комиссия активирована!');
                           setReferralStep('input');
                         } catch (e) {
-                          Alert.alert('Ошибка', e?.response?.data?.error || 'Не удалось применить');
-                        } finally {
-                          setApplyingReferral(false);
-                        }
+                          Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+                        } finally { setApplyingReferral(false); }
                       }}
                     >
-                      <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 15 }}>💸 Сниженная комиссия</Text>
-                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>Ваш % с поездок уменьшится (вместо стандартных 8% — всего 6%)</Text>
+                      <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 15 }}>💸 {lang === 'uz' ? 'Komissiya kamaytirish' : 'Сниженная комиссия'}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>{lang === 'uz' ? '8% o\'rniga 6% komissiya' : 'Ваш % с поездок уменьшится (вместо стандартных 8% — всего 6%)'}</Text>
                     </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[s.benefitCard, { borderColor: '#43A047', marginTop: 10 }]}
-                      disabled={applyingReferral}
+                    <TouchableOpacity style={[s.benefitCard, { borderColor: '#43A047', marginTop: 10 }]} disabled={applyingReferral}
                       onPress={async () => {
                         setApplyingReferral(true);
                         try {
                           await driverAPI.applyReferral(referralInput, 'bonus');
-                          Alert.alert('Готово', 'Еженедельный бонус активирован!');
+                          Alert.alert('✅', lang === 'uz' ? 'Haftalik bonus faollashtirildi!' : 'Еженедельный бонус активирован!');
                           setReferralStep('input');
                         } catch (e) {
-                          Alert.alert('Ошибка', e?.response?.data?.error || 'Не удалось применить');
-                        } finally {
-                          setApplyingReferral(false);
-                        }
+                          Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+                        } finally { setApplyingReferral(false); }
                       }}
                     >
-                      <Text style={{ color: '#43A047', fontWeight: '800', fontSize: 15 }}>🎁 Еженедельный бонус</Text>
-                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>Получайте фиксированный бонус каждую неделю на баланс</Text>
+                      <Text style={{ color: '#43A047', fontWeight: '800', fontSize: 15 }}>🎁 {lang === 'uz' ? 'Haftalik bonus' : 'Еженедельный бонус'}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>{lang === 'uz' ? 'Har hafta balansingizga bonus tushadi' : 'Получайте фиксированный бонус каждую неделю на баланс'}</Text>
                     </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[s.benefitCard, { borderColor: '#10B981', marginTop: 10 }]}
-                      disabled={applyingReferral}
+                    <TouchableOpacity style={[s.benefitCard, { borderColor: '#10B981', marginTop: 10 }]} disabled={applyingReferral}
                       onPress={async () => {
                         setApplyingReferral(true);
                         try {
                           await driverAPI.applyReferral(referralInput, 'cashback');
                           const profile = await authAPI.getProfile();
                           setUser(profile.data.user);
-                          Alert.alert('Готово', 'Кэшбэк активирован!');
+                          Alert.alert('✅', lang === 'uz' ? 'Keshbek faollashtirildi!' : 'Кэшбэк активирован!');
                           setReferralStep('input');
                         } catch (e) {
-                          Alert.alert('Ошибка', e?.response?.data?.error || 'Не удалось применить');
-                        } finally {
-                          setApplyingReferral(false);
-                        }
+                          Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+                        } finally { setApplyingReferral(false); }
                       }}
                     >
                       <Text style={{ color: '#10B981', fontWeight: '800', fontSize: 15 }}>💰 {t(lang, 'cashback')}</Text>
                       <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>{t(lang, 'cashbackDesc')}</Text>
                     </TouchableOpacity>
-
                     {applyingReferral && <ActivityIndicator color={colors.primary} style={{ marginTop: 12 }} />}
-
                     <TouchableOpacity onPress={() => setReferralStep('input')} style={{ marginTop: 10, alignItems: 'center' }}>
-                      <Text style={{ color: colors.textSecondary, fontSize: 13 }}>← Изменить код</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 13 }}>← {lang === 'uz' ? "Kodni o'zgartirish" : 'Изменить код'}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -484,10 +500,10 @@ export default function ProfileScreen() {
             )}
           </View>
         )}
-      </View>
 
-      {/* ── Bonus History section ── */}
-      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Bonus History (collapsible) ── */}
         <TouchableOpacity
           style={s.row}
           onPress={() => {
@@ -513,8 +529,7 @@ export default function ProfileScreen() {
         </TouchableOpacity>
 
         {bonusExpanded && (
-          <View style={{ paddingHorizontal: 4, paddingBottom: 12 }}>
-            {/* Stats cards */}
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
             <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
               <View style={{ flex: 1, backgroundColor: colors.background, borderRadius: 10, padding: 12, alignItems: 'center' }}>
                 <Text style={{ color: '#F59E0B', fontSize: 24, fontWeight: '900' }}>{bonusStats.streak_days}</Text>
@@ -546,10 +561,10 @@ export default function ProfileScreen() {
             )}
           </View>
         )}
-      </View>
 
-      {/* ── Friends section ── */}
-      <View style={[s.section, { backgroundColor: colors.card }]}>
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Friends (collapsible) ── */}
         <TouchableOpacity
           style={s.row}
           onPress={() => {
@@ -576,8 +591,6 @@ export default function ProfileScreen() {
 
         {friendsExpanded && (
           <View style={{ paddingHorizontal: 12, paddingBottom: 16 }}>
-
-            {/* Search input */}
             <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6 }}>{t(lang, 'searchByPhone')}</Text>
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
               <TextInput
@@ -601,7 +614,6 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Search result */}
             {friendSearchResult && (
               friendSearchResult.notFound
                 ? <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 12 }}>
@@ -629,7 +641,6 @@ export default function ProfileScreen() {
                   </View>
             )}
 
-            {/* Pending incoming requests */}
             {friendsLoading
               ? <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
               : (
@@ -651,16 +662,12 @@ export default function ProfileScreen() {
                             </View>
                           </View>
                           <View style={{ flexDirection: 'row', gap: 6 }}>
-                            <TouchableOpacity
-                              onPress={() => handleAcceptFriendRequest(req.request_id)}
-                              style={{ backgroundColor: '#22C55E', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}
-                            >
+                            <TouchableOpacity onPress={() => handleAcceptFriendRequest(req.request_id)}
+                              style={{ backgroundColor: '#22C55E', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}>
                               <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>✓</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => handleDeclineFriendRequest(req.request_id)}
-                              style={{ backgroundColor: '#EF4444', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}
-                            >
+                            <TouchableOpacity onPress={() => handleDeclineFriendRequest(req.request_id)}
+                              style={{ backgroundColor: '#EF4444', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}>
                               <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>✕</Text>
                             </TouchableOpacity>
                           </View>
@@ -669,7 +676,6 @@ export default function ProfileScreen() {
                     </>
                   )}
 
-                  {/* Accepted friends list */}
                   {friendsList.length === 0 && pendingRequests.length === 0 ? (
                     <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 8 }}>{t(lang, 'noFriends')}</Text>
                   ) : friendsList.length > 0 ? (
@@ -699,6 +705,7 @@ export default function ProfileScreen() {
           </View>
         )}
       </View>
+      {/* ══════ END UNIFIED BLOCK ══════ */}
 
       {/* ── Logout button (bottom) ── */}
       <TouchableOpacity style={[s.logoutBtn, { borderColor: colors.error, marginTop: 20 }]} onPress={handleLogout}>

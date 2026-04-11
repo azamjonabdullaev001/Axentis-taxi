@@ -77,6 +77,7 @@ export const driverAPI = {
   updateOrderDistance: (id, driven_km) => api.put(`/orders/${id}/distance`, { driven_km }),
   getHistory: () => api.get('/orders/history'),
   getDriverRatings: () => api.get('/driver/ratings'),
+  getQueuedOrders: () => api.get('/driver/queued-orders'),
   applyReferral: (referral_code, benefit_type) =>
     api.post('/referral/apply', { referral_code, benefit_type }),
   getBonusHistory: () => api.get('/driver/bonus-history'),

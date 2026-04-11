@@ -124,6 +124,9 @@ export const translations = {
     milestone: 'Достижение',
     streak: 'Стрик-бонус',
     noBonuses: 'Нет бонусов',
+    pendingOrders: 'Ожидаемые заказы',
+    noPendingOrders: 'Нет ожидаемых заказов',
+    queuedOrderAccepted: 'Заказ добавлен в очередь',
   },
   uz: {
     register: "Ro'yxatdan o'tish",
@@ -234,6 +237,9 @@ export const translations = {
     milestone: "Yutuq",
     streak: 'Strik-bonus',
     noBonuses: "Bonuslar yo'q",
+    pendingOrders: 'Kutilayotgan buyurtmalar',
+    noPendingOrders: "Kutilayotgan buyurtmalar yo'q",
+    queuedOrderAccepted: "Buyurtma navbatga qo'shildi",
   },
 };
 

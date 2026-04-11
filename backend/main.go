@@ -111,6 +111,7 @@ func main() {
 			protected.PUT("/orders/:id/distance", orderHandler.UpdateOrderDistance)
 			protected.POST("/orders/:id/rate", orderHandler.RateDriver)
 			protected.GET("/driver/ratings", orderHandler.GetDriverRatings)
+			protected.GET("/driver/queued-orders", orderHandler.GetQueuedOrders)
 
 			protected.PUT("/driver/location", orderHandler.UpdateDriverLocation)
 			protected.PUT("/driver/availability", orderHandler.UpdateDriverAvailability)

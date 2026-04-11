@@ -363,6 +363,9 @@ func (h *OrderHandler) AcceptOrder(c *gin.Context) {
 		return
 	}
 
+	// Release the per-driver lock in the matching service (order is accepted, no longer pending)
+	h.matchingService.UnlockDriverForOrder(driverID, orderID)
+
 	// Mark driver unavailable only when taking the first order (the active one)
 	if !isQueued {
 		h.db.Exec(ctx, `UPDATE drivers SET is_available = false WHERE id = $1`, driverID)
@@ -1073,6 +1076,71 @@ func (h *OrderHandler) GetDriverRatings(c *gin.Context) {
 		"average_rating": avgRating,
 		"rating_count":   ratingCount,
 	})
+}
+
+// GET /driver/queued-orders — returns queued orders for the current driver
+func (h *OrderHandler) GetQueuedOrders(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID,
+	).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	rows, err := h.db.Query(context.Background(),
+		`SELECT o.id, o.pickup_lat, o.pickup_lng, COALESCE(o.pickup_address,''),
+		 o.destination_lat, o.destination_lng, COALESCE(o.destination_address,''),
+		 COALESCE(o.distance_km,0), COALESCE(o.total_price,0),
+		 COALESCE(u.phone, o.passenger_phone,''), COALESCE(u.first_name || ' ' || u.last_name, 'Клиент'),
+		 COALESCE(o.additional_info,''), COALESCE(o.trip_type,'standard'), COALESCE(o.order_type,'app'),
+		 o.created_at
+		 FROM orders o LEFT JOIN users u ON o.passenger_id = u.id
+		 WHERE o.driver_id = $1 AND o.status = 'queued'
+		 ORDER BY o.created_at ASC`,
+		driverID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get queued orders"})
+		return
+	}
+	defer rows.Close()
+
+	var orders []map[string]interface{}
+	for rows.Next() {
+		var id, pickupAddr, destAddr, phone, name, info, tripType, orderType string
+		var pickLat, pickLng, dist, price float64
+		var destLat, destLng *float64
+		var created time.Time
+		rows.Scan(&id, &pickLat, &pickLng, &pickupAddr,
+			&destLat, &destLng, &destAddr,
+			&dist, &price, &phone, &name, &info, &tripType, &orderType, &created)
+		orders = append(orders, map[string]interface{}{
+			"id":                  id,
+			"pickup_lat":          pickLat,
+			"pickup_lng":          pickLng,
+			"pickup_address":      pickupAddr,
+			"destination_lat":     destLat,
+			"destination_lng":     destLng,
+			"destination_address": destAddr,
+			"distance_km":         dist,
+			"estimated_price":     price,
+			"passenger_phone":     phone,
+			"passenger_name":      name,
+			"additional_info":     info,
+			"trip_type":           tripType,
+			"order_type":          orderType,
+			"created_at":          created,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"orders": orders})
 }
 
 // GET /driver/bonus-history — returns last 50 bonus events + cashback for the caller

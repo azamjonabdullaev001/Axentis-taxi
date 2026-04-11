@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  Alert, Modal, Image, Vibration, Linking, Animated, PanResponder,
+  Alert, Modal, Image, Vibration, Linking, Animated, PanResponder, FlatList,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -225,6 +225,10 @@ export default function HomeScreen() {
   const [showTransferPicker, setShowTransferPicker] = useState(false);
   const [transferFriends, setTransferFriends] = useState([]);
   const [transferring, setTransferring] = useState(false);
+
+  // Queued (pending) orders
+  const [queuedOrders, setQueuedOrders] = useState([]);
+  const [showQueuedPanel, setShowQueuedPanel] = useState(false);
 
   // 100m metering: accumulate driven distance and calculate running price
   const [meteredKm, setMeteredKm] = useState(0);
@@ -476,7 +480,12 @@ export default function HomeScreen() {
   useEffect(() => {
     socket.on('new_order', (data) => {
       setIncomingOrder(data.order);
-      setDriverStatus(DRIVER_STATUS.INCOMING);
+      // Allow incoming orders even during active trips — they'll be queued on accept
+      if (driverStatusRef.current !== DRIVER_STATUS.ACCEPTED &&
+          driverStatusRef.current !== DRIVER_STATUS.ARRIVED &&
+          driverStatusRef.current !== DRIVER_STATUS.IN_PROGRESS) {
+        setDriverStatus(DRIVER_STATUS.INCOMING);
+      }
       startCountdown(data.order);
       startOrderAlarm(data.order);
       // Pre-load friends list for possible transfer
@@ -484,7 +493,10 @@ export default function HomeScreen() {
     });
     socket.on('order_cancelled', () => {
       Alert.alert(t(lang,'orderCancelled'), t(lang,'orderCancelledByPassenger'));
-      resetToAvailable();
+      // Only reset if no active order running
+      if (driverStatusRef.current === DRIVER_STATUS.INCOMING) {
+        resetToAvailable();
+      }
     });
     socket.on('order_transferred', () => {
       // Our transfer succeeded — dismiss incoming order modal
@@ -492,7 +504,28 @@ export default function HomeScreen() {
       stopOrderAlarm();
       setIncomingOrder(null);
       setShowTransferPicker(false);
-      resetToAvailable();
+      if (driverStatusRef.current === DRIVER_STATUS.INCOMING) {
+        resetToAvailable();
+      }
+    });
+    socket.on('queued_order_activated', (data) => {
+      // A queued order is now active (previous trip completed server-side)
+      // Set it as the active order
+      setQueuedOrders(prev => prev.filter(o => o.id !== data.order_id));
+      setActiveOrder(data.order);
+      setPassengerLiveLocation(null);
+      setDriverStatus(DRIVER_STATUS.ACCEPTED);
+      meteredKmRef.current = 0;
+      setMeteredKm(0);
+      prevMeterPosRef.current = null;
+      if (data.order?.pickup_lat && data.order?.order_type !== 'call') {
+        mapRef.current?.animateToRegion({
+          latitude: data.order.pickup_lat,
+          longitude: data.order.pickup_lng,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        });
+      }
     });
     socket.on('passenger_location', (data) => {
       setPassengerLiveLocation({ latitude: data.lat, longitude: data.lng });
@@ -519,6 +552,7 @@ export default function HomeScreen() {
       socket.off('new_order');
       socket.off('order_cancelled');
       socket.off('order_transferred');
+      socket.off('queued_order_activated');
       socket.off('passenger_location');
       socket.off('passenger_location_hidden');
       socket.off('destination_reached');
@@ -582,7 +616,10 @@ export default function HomeScreen() {
           clearInterval(countdownRef.current);
           stopOrderAlarm();
           setIncomingOrder(null);
-          resetToAvailable();
+          // Don't reset if we have an active order
+          if (!activeOrder) {
+            resetToAvailable();
+          }
           return 0;
         }
         return n - 1;
@@ -608,36 +645,53 @@ export default function HomeScreen() {
     Vibration.vibrate(60);
     setIsProcessing(true);
     clearInterval(countdownRef.current);
+
+    const hadActiveOrder = activeOrder != null;
+
     try {
-      await driverAPI.acceptOrder(incomingOrder.id);
-      // For free-mode or call orders, wipe destination coords so no marker/route is ever drawn
-      const orderToStore = (incomingOrder.trip_type === 'free' || incomingOrder.order_type === 'call')
-        ? { ...incomingOrder, destination_lat: null, destination_lng: null, destination_address: '' }
-        : incomingOrder;
-      setActiveOrder(orderToStore);
-      setIncomingOrder(null);
-      setPassengerLiveLocation(null); // Will be populated by socket if passenger is sharing live location
-      setDriverStatus(DRIVER_STATUS.ACCEPTED);
-      // Store locked price per km and surge for metering (sent from backend)
-      meteredPricePerKm.current = incomingOrder.locked_price_per_km || 3000;
-      meteredSurge.current = incomingOrder.surge_multiplier || 1;
-      // For call orders: no exact pickup pin — don't animate to pickup, just stay on driver location
-      if (incomingOrder.order_type !== 'call') {
-        mapRef.current?.animateToRegion({
-          latitude: incomingOrder.pickup_lat,
-          longitude: incomingOrder.pickup_lng,
-          latitudeDelta: 0.02,
-          longitudeDelta: 0.02,
-        });
-      }
-      // For call orders: clear route since driver has no destination to navigate to
-      if (incomingOrder.order_type === 'call') {
-        setRouteCoords([]);
+      const { data } = await driverAPI.acceptOrder(incomingOrder.id);
+      const isQueued = data.queued || hadActiveOrder;
+
+      if (isQueued) {
+        // Order accepted as queued — add to pending list, don't change active order
+        setQueuedOrders(prev => [...prev, {
+          ...incomingOrder,
+          id: incomingOrder.id,
+        }]);
+        setIncomingOrder(null);
+        // Restore driver status to what it was before the incoming order
+        if (hadActiveOrder) {
+          // Don't change status, keep the active trip state
+        }
+      } else {
+        // For free-mode or call orders, wipe destination coords so no marker/route is ever drawn
+        const orderToStore = (incomingOrder.trip_type === 'free' || incomingOrder.order_type === 'call')
+          ? { ...incomingOrder, destination_lat: null, destination_lng: null, destination_address: '' }
+          : incomingOrder;
+        setActiveOrder(orderToStore);
+        setIncomingOrder(null);
+        setPassengerLiveLocation(null);
+        setDriverStatus(DRIVER_STATUS.ACCEPTED);
+        meteredPricePerKm.current = incomingOrder.locked_price_per_km || 3000;
+        meteredSurge.current = incomingOrder.surge_multiplier || 1;
+        if (incomingOrder.order_type !== 'call') {
+          mapRef.current?.animateToRegion({
+            latitude: incomingOrder.pickup_lat,
+            longitude: incomingOrder.pickup_lng,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
+          });
+        }
+        if (incomingOrder.order_type === 'call') {
+          setRouteCoords([]);
+        }
       }
     } catch (e) {
       Alert.alert(t(lang,'error'), t(lang,'orderBusy'));
       setIncomingOrder(null);
-      resetToAvailable();
+      if (!hadActiveOrder) {
+        resetToAvailable();
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -647,7 +701,10 @@ export default function HomeScreen() {
     stopOrderAlarm();
     clearInterval(countdownRef.current);
     setIncomingOrder(null);
-    resetToAvailable();
+    // Only reset to available if there's no active order running
+    if (!activeOrder) {
+      resetToAvailable();
+    }
   }
 
   async function handleTransferToFriend(friendDriverID) {
@@ -739,6 +796,8 @@ export default function HomeScreen() {
       routeTargetRef.current = null;
       routeOriginRef.current = null;
       lastRouteFetchAtRef.current = 0;
+      // Remove the completed order from queued if present
+      setQueuedOrders(prev => prev.filter(o => o.id !== activeOrder.id));
       setCompletionModal({ price: rounded });
     } catch (e) {
       Alert.alert(t(lang,'error'), e.message);
@@ -762,6 +821,7 @@ export default function HomeScreen() {
     prevMeterPosRef.current = null;
     meteredPricePerKm.current = 0;
     meteredSurge.current = 1;
+    setQueuedOrders([]);
   }
 
   // Wait fee calculation
@@ -1113,6 +1173,19 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* Queued orders badge — shown when driver has pending orders */}
+      {queuedOrders.length > 0 && !incomingOrder && (
+        <TouchableOpacity
+          style={[s.queuedBadgeBtn, { bottom: driverPanelHeight + 12, left: 16 }]}
+          onPress={() => setShowQueuedPanel(true)}
+          activeOpacity={0.8}
+        >
+          <Text style={{ fontSize: 14, color: '#000', fontWeight: '800' }}>
+            📋 {queuedOrders.length} {t(lang, 'pendingOrders')}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {/* Incoming order modal — slides up from bottom, map stays visible */}
       <Modal visible={!!incomingOrder} transparent animationType="slide">
         <View style={s.modalOverlay}>
@@ -1251,6 +1324,70 @@ export default function HomeScreen() {
               onPress={() => setShowTransferPicker(false)}
             >
               <Text style={{ color: '#9CA3AF', fontSize: 14 }}>{t(lang, 'cancel')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Queued orders modal */}
+      <Modal visible={showQueuedPanel} transparent animationType="slide" onRequestClose={() => setShowQueuedPanel(false)}>
+        <View style={s.modalOverlay}>
+          <View style={[s.orderModal, { paddingBottom: 24, maxHeight: '70%' }]}>
+            <Text style={s.newOrderTitle}>📋 {t(lang, 'pendingOrders')}</Text>
+            {queuedOrders.length === 0 ? (
+              <Text style={{ color: '#9CA3AF', textAlign: 'center', marginVertical: 16 }}>{t(lang, 'noPendingOrders')}</Text>
+            ) : (
+              <FlatList
+                data={queuedOrders}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <View style={{ backgroundColor: '#1F2937', borderRadius: 14, padding: 14, marginBottom: 10 }}>
+                    {/* Pickup address */}
+                    <View style={s.addrRow}>
+                      <View style={[s.addrBadge, { backgroundColor: '#22C55E' }]}><Text style={s.addrBadgeText}>A</Text></View>
+                      <Text style={s.addrTextModal} numberOfLines={2}>
+                        {item.pickup_address || `${item.pickup_lat?.toFixed(4)}, ${item.pickup_lng?.toFixed(4)}`}
+                      </Text>
+                    </View>
+                    {/* Additional info */}
+                    {item.additional_info ? (
+                      <View style={s.addrRow}>
+                        <View style={[s.addrBadge, { backgroundColor: '#FF9800' }]}><Text style={s.addrBadgeText}>📌</Text></View>
+                        <Text style={[s.addrTextModal, { fontStyle: 'italic' }]} numberOfLines={2}>{item.additional_info}</Text>
+                      </View>
+                    ) : null}
+                    {/* Destination */}
+                    {item.trip_type !== 'free' && item.destination_address ? (
+                      <View style={s.addrRow}>
+                        <View style={[s.addrBadge, { backgroundColor: '#EF4444' }]}><Text style={s.addrBadgeText}>B</Text></View>
+                        <Text style={s.addrTextModal} numberOfLines={2}>{item.destination_address}</Text>
+                      </View>
+                    ) : item.trip_type === 'free' ? (
+                      <View style={s.addrRow}>
+                        <View style={[s.addrBadge, { backgroundColor: '#6B7280' }]}><Text style={s.addrBadgeText}>B</Text></View>
+                        <Text style={s.addrTextModal}>{t(lang,'byMeter')}</Text>
+                      </View>
+                    ) : null}
+                    {/* Passenger info */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
+                      <Text style={{ color: '#9CA3AF', fontSize: 13 }}>📱 {item.passenger_phone || '—'}</Text>
+                      <Text style={{ color: '#9CA3AF', fontSize: 13 }}>👤 {item.passenger_name || ''}</Text>
+                    </View>
+                    {/* Price */}
+                    {item.trip_type !== 'free' && item.estimated_price ? (
+                      <Text style={{ color: '#FFCC00', fontSize: 16, fontWeight: '800', marginTop: 6 }}>
+                        {(item.estimated_price || 0).toLocaleString()} {t(lang,'sum')}
+                      </Text>
+                    ) : null}
+                  </View>
+                )}
+              />
+            )}
+            <TouchableOpacity
+              style={{ marginTop: 8, alignItems: 'center', padding: 10 }}
+              onPress={() => setShowQueuedPanel(false)}
+            >
+              <Text style={{ color: '#9CA3AF', fontSize: 14 }}>{t(lang, 'close')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1445,6 +1582,18 @@ function makeStyles(colors) {
 
     // ── Incoming order modal ─────────────────────────────────────
     modalOverlay: { flex: 1, justifyContent: 'flex-end' },  // no dim — map stays visible
+
+    // ── Queued orders badge button ───────────────────────────────
+    queuedBadgeBtn: {
+      position: 'absolute',
+      backgroundColor: '#FFCC00',
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      elevation: 6,
+      shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6,
+    },
+
     orderModal: {
       backgroundColor: '#000000',
       borderTopLeftRadius: 28, borderTopRightRadius: 28,
