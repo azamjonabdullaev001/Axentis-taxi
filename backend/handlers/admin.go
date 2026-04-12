@@ -1522,12 +1522,12 @@ func (h *AdminHandler) GetBonusSettings(c *gin.Context) {
 		`SELECT id, night_bonus_pct, night_bonus_enabled,
 		        streak_days_required, streak_bonus_amount, streak_bonus_enabled,
 		        milestone_50_amount, milestone_100_amount, milestone_500_amount, milestone_1000_amount,
-		        milestones_enabled, updated_at
+		        milestones_enabled, COALESCE(weekly_bonus_enabled, false), updated_at
 		 FROM bonus_settings ORDER BY id LIMIT 1`,
 	).Scan(&bs.ID, &bs.NightBonusPct, &bs.NightBonusEnabled,
 		&bs.StreakDaysRequired, &bs.StreakBonusAmount, &bs.StreakBonusEnabled,
 		&bs.Milestone50Amount, &bs.Milestone100Amount, &bs.Milestone500Amount, &bs.Milestone1000Amount,
-		&bs.MilestonesEnabled, &bs.UpdatedAt)
+		&bs.MilestonesEnabled, &bs.WeeklyBonusEnabled, &bs.UpdatedAt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch bonus settings"})
 		return
@@ -1547,6 +1547,7 @@ func (h *AdminHandler) UpdateBonusSettings(c *gin.Context) {
 		Milestone500Amount *float64 `json:"milestone_500_amount"`
 		Milestone1000Amount *float64 `json:"milestone_1000_amount"`
 		MilestonesEnabled  *bool    `json:"milestones_enabled"`
+		WeeklyBonusEnabled *bool    `json:"weekly_bonus_enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1568,11 +1569,12 @@ func (h *AdminHandler) UpdateBonusSettings(c *gin.Context) {
 		 milestone_500_amount  = COALESCE($8,  milestone_500_amount),
 		 milestone_1000_amount = COALESCE($9,  milestone_1000_amount),
 		 milestones_enabled    = COALESCE($10, milestones_enabled),
+		 weekly_bonus_enabled  = COALESCE($11, weekly_bonus_enabled),
 		 updated_at = NOW()`,
 		req.NightBonusPct, req.NightBonusEnabled,
 		req.StreakDaysRequired, req.StreakBonusAmount, req.StreakBonusEnabled,
 		req.Milestone50Amount, req.Milestone100Amount, req.Milestone500Amount, req.Milestone1000Amount,
-		req.MilestonesEnabled,
+		req.MilestonesEnabled, req.WeeklyBonusEnabled,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update bonus settings"})
@@ -1607,4 +1609,221 @@ func (h *AdminHandler) GetBonusEvents(c *gin.Context) {
 		events = append(events, e)
 	}
 	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// GET /admin/weekly-bonus-tiers — returns all 7 weekly bonus tier configurations
+func (h *AdminHandler) GetWeeklyBonusTiers(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT week_number, required_trips, bonus_amount FROM weekly_bonus_tiers ORDER BY week_number`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	tiers := []models.WeeklyBonusTier{}
+	for rows.Next() {
+		var t models.WeeklyBonusTier
+		if err := rows.Scan(&t.WeekNumber, &t.RequiredTrips, &t.BonusAmount); err != nil {
+			continue
+		}
+		tiers = append(tiers, t)
+	}
+	c.JSON(http.StatusOK, gin.H{"tiers": tiers})
+}
+
+// PUT /admin/weekly-bonus-tiers — update all 7 tiers at once
+func (h *AdminHandler) UpdateWeeklyBonusTiers(c *gin.Context) {
+	var req struct {
+		Tiers []models.WeeklyBonusTier `json:"tiers" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.Tiers) > 7 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Maximum 7 tiers allowed"})
+		return
+	}
+	for _, t := range req.Tiers {
+		if t.WeekNumber < 1 || t.WeekNumber > 7 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("week_number must be 1-7, got %d", t.WeekNumber)})
+			return
+		}
+		if t.RequiredTrips < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "required_trips must be >= 1"})
+			return
+		}
+		if t.BonusAmount < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bonus_amount must be >= 0"})
+			return
+		}
+	}
+	ctx := context.Background()
+	for _, t := range req.Tiers {
+		_, err := h.db.Exec(ctx,
+			`INSERT INTO weekly_bonus_tiers (week_number, required_trips, bonus_amount)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (week_number) DO UPDATE SET required_trips = $2, bonus_amount = $3`,
+			t.WeekNumber, t.RequiredTrips, t.BonusAmount)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Weekly bonus tiers updated"})
+}
+
+// ── Driver Balance Management ─────────────────────────────────────────────────
+
+// GET /admin/driver-balances — list all drivers with balance info
+func (h *AdminHandler) GetDriverBalances(c *gin.Context) {
+	rows, err := h.db.Query(context.Background(),
+		`SELECT d.id, u.first_name || ' ' || u.last_name AS name, u.phone,
+		        COALESCE(d.balance, 0), COALESCE(d.balance_exempt, false),
+		        d.is_available, COALESCE(d.registration_status, 'approved')
+		 FROM drivers d
+		 JOIN users u ON u.id = d.user_id
+		 ORDER BY d.balance ASC, u.first_name`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type driverBalance struct {
+		DriverID   string  `json:"driver_id"`
+		Name       string  `json:"name"`
+		Phone      string  `json:"phone"`
+		Balance    float64 `json:"balance"`
+		Exempt     bool    `json:"exempt"`
+		Available  bool    `json:"is_available"`
+		RegStatus  string  `json:"registration_status"`
+	}
+	list := []driverBalance{}
+	for rows.Next() {
+		var d driverBalance
+		if err := rows.Scan(&d.DriverID, &d.Name, &d.Phone, &d.Balance, &d.Exempt, &d.Available, &d.RegStatus); err != nil {
+			continue
+		}
+		list = append(list, d)
+	}
+	c.JSON(http.StatusOK, gin.H{"drivers": list})
+}
+
+// POST /admin/driver-balances/:id/top-up — admin adds money to a driver's balance
+func (h *AdminHandler) TopUpDriverBalance(c *gin.Context) {
+	driverID := c.Param("id")
+	adminID := c.GetString("admin_id")
+	var req struct {
+		Amount      float64 `json:"amount" binding:"required"`
+		Description string  `json:"description"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Amount must be positive"})
+		return
+	}
+	if req.Description == "" {
+		req.Description = "Пополнение администратором"
+	}
+	ctx := context.Background()
+	_, err := h.db.Exec(ctx,
+		`UPDATE drivers SET balance = balance + $1 WHERE id = $2`, req.Amount, driverID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update balance"})
+		return
+	}
+	h.db.Exec(ctx,
+		`INSERT INTO balance_transactions (driver_id, amount, tx_type, description, admin_id)
+		 VALUES ($1, $2, 'top_up', $3, $4)`,
+		driverID, req.Amount, req.Description, adminID)
+
+	// Fetch new balance
+	var newBalance float64
+	h.db.QueryRow(ctx, `SELECT COALESCE(balance, 0) FROM drivers WHERE id = $1`, driverID).Scan(&newBalance)
+
+	// Notify driver via WebSocket
+	var driverUserID string
+	if err := h.db.QueryRow(ctx, `SELECT user_id FROM drivers WHERE id = $1`, driverID).Scan(&driverUserID); err == nil {
+		msg := fmt.Sprintf(`{"type":"balance_updated","balance":%.2f,"amount":%.2f,"tx_type":"top_up"}`, newBalance, req.Amount)
+		h.hub.SendToUser(driverUserID, []byte(msg))
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Balance topped up", "new_balance": newBalance})
+}
+
+// PUT /admin/driver-balances/:id/exempt — toggle balance_exempt flag
+func (h *AdminHandler) SetDriverExempt(c *gin.Context) {
+	driverID := c.Param("id")
+	var req struct {
+		Exempt bool `json:"exempt"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_, err := h.db.Exec(context.Background(),
+		`UPDATE drivers SET balance_exempt = $1 WHERE id = $2`, req.Exempt, driverID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update exempt status"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Exempt status updated", "exempt": req.Exempt})
+}
+
+// GET /admin/balance-transactions — all balance transactions, latest first
+func (h *AdminHandler) GetBalanceTransactions(c *gin.Context) {
+	driverID := c.Query("driver_id")
+	var query string
+	var args []interface{}
+	if driverID != "" {
+		query = `SELECT bt.id, bt.driver_id, u.first_name || ' ' || u.last_name AS driver_name,
+		         u.phone, bt.amount, bt.tx_type, COALESCE(bt.description,''), bt.order_id, bt.admin_id, bt.created_at
+		         FROM balance_transactions bt
+		         JOIN drivers d ON d.id = bt.driver_id
+		         JOIN users u ON u.id = d.user_id
+		         WHERE bt.driver_id = $1
+		         ORDER BY bt.created_at DESC LIMIT 200`
+		args = append(args, driverID)
+	} else {
+		query = `SELECT bt.id, bt.driver_id, u.first_name || ' ' || u.last_name AS driver_name,
+		         u.phone, bt.amount, bt.tx_type, COALESCE(bt.description,''), bt.order_id, bt.admin_id, bt.created_at
+		         FROM balance_transactions bt
+		         JOIN drivers d ON d.id = bt.driver_id
+		         JOIN users u ON u.id = d.user_id
+		         ORDER BY bt.created_at DESC LIMIT 200`
+	}
+	rows, err := h.db.Query(context.Background(), query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type txRow struct {
+		ID          string     `json:"id"`
+		DriverID    string     `json:"driver_id"`
+		DriverName  string     `json:"driver_name"`
+		DriverPhone string     `json:"driver_phone"`
+		Amount      float64    `json:"amount"`
+		TxType      string     `json:"tx_type"`
+		Description string     `json:"description"`
+		OrderID     *string    `json:"order_id"`
+		AdminID     *string    `json:"admin_id"`
+		CreatedAt   time.Time  `json:"created_at"`
+	}
+	list := []txRow{}
+	for rows.Next() {
+		var t txRow
+		if err := rows.Scan(&t.ID, &t.DriverID, &t.DriverName, &t.DriverPhone,
+			&t.Amount, &t.TxType, &t.Description, &t.OrderID, &t.AdminID, &t.CreatedAt); err != nil {
+			continue
+		}
+		list = append(list, t)
+	}
+	c.JSON(http.StatusOK, gin.H{"transactions": list})
 }

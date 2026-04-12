@@ -11,9 +11,8 @@ import { t } from '../i18n';
 import { getAPIErrorMessage } from '../services/api';
 
 export default function RegisterScreen({ navigation }) {
-  const { colors } = useTheme();
+  const { colors, lang } = useTheme();
   const { register } = useAuth();
-  const [lang] = useState('ru');
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', phone: '',
@@ -29,9 +28,9 @@ export default function RegisterScreen({ navigation }) {
   }
 
   async function handleRegister() {
-    if (!form.first_name.trim()) { Alert.alert(t(lang,'error'), 'Введите имя'); return; }
-    if (!form.last_name.trim()) { Alert.alert(t(lang,'error'), 'Введите фамилию'); return; }
-    if (!form.phone.trim()) { Alert.alert(t(lang,'error'), 'Введите телефон'); return; }
+    if (!form.first_name.trim()) { Alert.alert(t(lang,'error'), t(lang,'enterFirstName')); return; }
+    if (!form.last_name.trim()) { Alert.alert(t(lang,'error'), t(lang,'enterLastName')); return; }
+    if (!form.phone.trim()) { Alert.alert(t(lang,'error'), t(lang,'enterPhone')); return; }
     if (form.password.length < 8) { Alert.alert(t(lang,'error'), t(lang,'passwordMin')); return; }
     if (form.password !== form.confirm_password) {
       Alert.alert(t(lang,'error'), t(lang,'passwordMismatch'));
@@ -44,7 +43,7 @@ export default function RegisterScreen({ navigation }) {
     try {
       await register({ ...form, phone });
     } catch (e) {
-      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Ошибка регистрации'));
+      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, t(lang,'registrationError')));
     } finally {
       setLoading(false);
     }

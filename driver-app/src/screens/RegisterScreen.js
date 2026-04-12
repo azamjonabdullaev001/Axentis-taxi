@@ -17,7 +17,9 @@ function normalizeCarSuffix(value) {
 }
 
 function isValidCarSuffix(value) {
-  return value.length >= 4 && /[A-Z]/.test(value) && /\d/.test(value);
+  const letters = (value.match(/[A-Z]/g) || []).length;
+  const digits = (value.match(/\d/g) || []).length;
+  return value.length === 6 && letters === 3 && digits === 3;
 }
 
 export default function RegisterScreen({ navigation }) {
@@ -86,7 +88,7 @@ export default function RegisterScreen({ navigation }) {
       Alert.alert(t(lang,'error'), t(lang,'passwordMismatch')); return;
     }
     if (!isValidCarSuffix(form.car_number_suffix)) {
-      Alert.alert(t(lang,'error'), 'Введите номер автомобиля в едином формате: 4-6 символов, буквы и цифры вместе'); return;
+      Alert.alert(t(lang,'error'), 'Номер автомобиля должен содержать ровно 3 буквы и 3 цифры (например: A123BC, AB123C, ABC123)'); return;
     }
     if (!form.car_brand.trim()) { Alert.alert(t(lang,'error'), 'Введите марку автомобиля'); return; }
     if (!docs.selfie || !docs.license_front || !docs.license_back || !docs.id_document || !docs.id_document_back) {
@@ -237,7 +239,7 @@ export default function RegisterScreen({ navigation }) {
               />
             </View>
             <Text style={s.carPreview}>Номер: {buildCarNumber() || '—'}</Text>
-            <Text style={s.carHint}>После кода региона вводите номер слитно: например A123BC, AB123C или ABC123</Text>
+            <Text style={s.carHint}>Ровно 3 буквы и 3 цифры в любом порядке: A123BC, AB123C, ABC123, 123ABC и т.д.</Text>
           </View>
 
           {/* Documents card */}

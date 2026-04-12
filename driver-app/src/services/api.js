@@ -81,6 +81,7 @@ export const driverAPI = {
   applyReferral: (referral_code, benefit_type) =>
     api.post('/referral/apply', { referral_code, benefit_type }),
   getBonusHistory: () => api.get('/driver/bonus-history'),
+  getBalance: () => api.get('/driver/balance'),
 };
 
 export const friendsAPI = {

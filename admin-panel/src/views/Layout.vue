@@ -40,6 +40,10 @@
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><path d="M12 22V7M12 7H7.5a2.5 2.5 0 010-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 000-5C13 2 12 7 12 7z"/></svg>
           Рефералы / Бонусы
         </router-link>
+        <router-link v-if="isRouteAllowed('/balance')" to="/balance" class="nav-item">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 10h20"/><path d="M6 16h4"/></svg>
+          Баланс водителей
+        </router-link>
       </nav>
       <button class="logout-btn" @click="logout">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
@@ -66,7 +70,7 @@ const roleRoutes = {
   superadmin: null, // null = all routes allowed
   dispatcher: ['/dashboard', '/dispatcher'],
   orders: ['/dashboard', '/orders'],
-  revenue: ['/dashboard', '/revenue'],
+  revenue: ['/dashboard', '/revenue', '/balance'],
   pricing: ['/dashboard', '/pricing'],
   users: ['/dashboard', '/users'],
   referrals: ['/dashboard', '/referrals'],

@@ -11,9 +11,8 @@ import { t } from '../i18n';
 import { getAPIErrorMessage } from '../services/api';
 
 export default function LoginScreen({ navigation }) {
-  const { colors } = useTheme();
+  const { colors, lang } = useTheme();
   const { login } = useAuth();
-  const [lang] = useState('ru');
 
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -22,7 +21,7 @@ export default function LoginScreen({ navigation }) {
   const insets = useSafeAreaInsets();
 
   async function handleLogin() {
-    if (!phone.trim()) { Alert.alert(t(lang,'error'), 'Введите телефон'); return; }
+    if (!phone.trim()) { Alert.alert(t(lang,'error'), t(lang,'enterPhone')); return; }
     if (password.length < 8) { Alert.alert(t(lang,'error'), t(lang,'passwordMin')); return; }
 
     const fullPhone = phone.startsWith('+998') ? phone : `+998${phone}`;
@@ -30,7 +29,7 @@ export default function LoginScreen({ navigation }) {
     try {
       await login(fullPhone, password);
     } catch (e) {
-      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, 'Неверный телефон или пароль'));
+      Alert.alert(t(lang,'error'), getAPIErrorMessage(e, t(lang,'wrongCredentials')));
     } finally {
       setLoading(false);
     }

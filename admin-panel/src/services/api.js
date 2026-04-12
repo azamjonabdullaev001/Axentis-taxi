@@ -65,6 +65,13 @@ export const adminAPI = {
   getBonusSettings: () => api.get('/admin/bonus-settings'),
   updateBonusSettings: (d) => api.put('/admin/bonus-settings', d),
   getBonusEvents: () => api.get('/admin/bonus-events'),
+  getWeeklyBonusTiers: () => api.get('/admin/weekly-bonus-tiers'),
+  updateWeeklyBonusTiers: (d) => api.put('/admin/weekly-bonus-tiers', d),
+  // Driver balance management
+  getDriverBalances: () => api.get('/admin/driver-balances'),
+  topUpDriverBalance: (id, amount, description) => api.post(`/admin/driver-balances/${id}/top-up`, { amount, description }),
+  setDriverExempt: (id, exempt) => api.put(`/admin/driver-balances/${id}/exempt`, { exempt }),
+  getBalanceTransactions: (driverId) => api.get('/admin/balance-transactions', { params: driverId ? { driver_id: driverId } : {} }),
 }
 
 export default api

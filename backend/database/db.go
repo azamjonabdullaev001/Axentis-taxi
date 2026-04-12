@@ -380,4 +380,46 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason TEXT DEFAULT '';
 
 -- Persistent service share percentage (admin sets in Revenue panel)
 ALTER TABLE price_settings ADD COLUMN IF NOT EXISTS service_share_pct DECIMAL(5,2) DEFAULT 10.0;
+
+-- Weekly bonus (Yandex-style progressive challenge): 7 weeks with configurable trips & amounts
+ALTER TABLE bonus_settings ADD COLUMN IF NOT EXISTS weekly_bonus_enabled BOOLEAN DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS weekly_bonus_tiers (
+    week_number INTEGER PRIMARY KEY CHECK (week_number >= 1 AND week_number <= 7),
+    required_trips INTEGER NOT NULL DEFAULT 50,
+    bonus_amount DECIMAL(14,2) NOT NULL DEFAULT 50000
+);
+-- Seed default 7 tiers (progressive: 50→100→150→200→250→300→400 trips)
+INSERT INTO weekly_bonus_tiers (week_number, required_trips, bonus_amount)
+VALUES (1,50,100000),(2,100,150000),(3,150,200000),(4,200,250000),(5,250,300000),(6,300,350000),(7,400,500000)
+ON CONFLICT (week_number) DO NOTHING;
+
+-- Per-driver weekly progress tracker
+CREATE TABLE IF NOT EXISTS driver_weekly_progress (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    week_start DATE NOT NULL,
+    week_number INTEGER NOT NULL DEFAULT 1 CHECK (week_number >= 1 AND week_number <= 7),
+    trips_completed INTEGER NOT NULL DEFAULT 0,
+    bonus_paid BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(driver_id, week_start)
+);
+CREATE INDEX IF NOT EXISTS idx_driver_weekly_progress ON driver_weekly_progress (driver_id, week_start DESC);
+
+-- Driver balance system: exempt flag (free drivers skip balance check)
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS balance_exempt BOOLEAN DEFAULT false;
+
+-- Balance transactions log (top-ups, commission deductions, bonuses, admin adjustments)
+CREATE TABLE IF NOT EXISTS balance_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    amount DECIMAL(14,2) NOT NULL,
+    tx_type VARCHAR(30) NOT NULL CHECK (tx_type IN ('top_up','commission','bonus','admin_adjustment')),
+    description TEXT DEFAULT '',
+    order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+    admin_id UUID REFERENCES admins(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_balance_tx_driver ON balance_transactions (driver_id, created_at DESC);
 `

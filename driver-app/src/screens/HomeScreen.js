@@ -237,6 +237,10 @@ export default function HomeScreen() {
   const meteredPricePerKm = useRef(0);
   const meteredSurge = useRef(1);
 
+  // Driver balance state
+  const [driverBalance, setDriverBalance] = useState(null);  // { balance, balance_exempt, service_share_pct }
+  const [balanceLoading, setBalanceLoading] = useState(false);
+
   useEffect(() => {
     driverStatusRef.current = driverStatus;
   }, [driverStatus]);
@@ -271,13 +275,20 @@ export default function HomeScreen() {
         setDriverStatus(DRIVER_STATUS.AVAILABLE);
       } catch (err) {
         const msg = err?.response?.data?.error;
-        if (msg && msg.includes('not approved')) {
+        if (msg === 'insufficient_balance') {
+          // Stay offline, will show balance warning in the offline panel
+        } else if (msg && msg.includes('not approved')) {
           Alert.alert(
             t(lang, 'registrationPending') || 'Регистрация на рассмотрении',
             t(lang, 'waitForApproval') || 'Ваша регистрация ещё не подтверждена администратором. Пожалуйста, дождитесь одобрения.',
           );
         }
       }
+      // Fetch driver balance
+      try {
+        const { data } = await driverAPI.getBalance();
+        setDriverBalance(data);
+      } catch {}
     })();
 
     (async () => {
@@ -547,6 +558,9 @@ export default function HomeScreen() {
         );
       }
     });
+    socket.on('balance_updated', (data) => {
+      setDriverBalance(prev => prev ? { ...prev, balance: data.balance } : { balance: data.balance, balance_exempt: false, service_share_pct: 10 });
+    });
 
     return () => {
       socket.off('new_order');
@@ -556,6 +570,7 @@ export default function HomeScreen() {
       socket.off('passenger_location');
       socket.off('passenger_location_hidden');
       socket.off('destination_reached');
+      socket.off('balance_updated');
     };
   }, [activeOrder, lang]);
 
@@ -628,8 +643,35 @@ export default function HomeScreen() {
   }
 
   async function toggleOnline(val) {
-    await driverAPI.updateAvailability(val);
-    setDriverStatus(val ? DRIVER_STATUS.AVAILABLE : DRIVER_STATUS.OFFLINE);
+    try {
+      await driverAPI.updateAvailability(val);
+      setDriverStatus(val ? DRIVER_STATUS.AVAILABLE : DRIVER_STATUS.OFFLINE);
+      if (val) fetchBalance();
+    } catch (e) {
+      const errMsg = e?.response?.data?.error;
+      if (errMsg === 'insufficient_balance') {
+        Alert.alert(
+          t(lang, 'balance') || 'Баланс',
+          t(lang, 'insufficientBalance') || 'Недостаточный баланс для выхода на линию',
+        );
+        fetchBalance();
+      } else if (errMsg && errMsg.includes('not approved')) {
+        Alert.alert(
+          t(lang, 'registrationPending') || 'Регистрация на рассмотрении',
+          t(lang, 'waitForApproval') || 'Ваша регистрация ещё не подтверждена администратором.',
+        );
+      } else {
+        Alert.alert(t(lang, 'error'), errMsg || 'Ошибка');
+      }
+    }
+  }
+
+  async function fetchBalance() {
+    try {
+      setBalanceLoading(true);
+      const { data } = await driverAPI.getBalance();
+      setDriverBalance(data);
+    } catch {} finally { setBalanceLoading(false); }
   }
 
   function goToMyLocation() {
@@ -996,8 +1038,31 @@ export default function HomeScreen() {
               <View style={[s.statusDot, { backgroundColor: '#888' }]} />
               <Text style={s.statusTitle}>{t(lang,'youOffline')}</Text>
             </View>
-            <Text style={s.statusSub}>{t(lang,'enableOnline')}</Text>
-            <TouchableOpacity style={s.primaryBtn} onPress={() => toggleOnline(true)}>
+            {driverBalance && driverBalance.balance <= 0 && !driverBalance.balance_exempt && (
+              <View style={s.balanceWarning}>
+                <Text style={s.balanceWarningIcon}>⚠️</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.balanceWarningText}>{t(lang,'balanceWarning')}</Text>
+                  <Text style={s.balanceWarningAmount}>{t(lang,'balance')}: {Math.round(driverBalance.balance).toLocaleString()} {t(lang,'sum')}</Text>
+                </View>
+              </View>
+            )}
+            {driverBalance && (driverBalance.balance > 0 || driverBalance.balance_exempt) && (
+              <Text style={s.statusSub}>{t(lang,'enableOnline')}</Text>
+            )}
+            {/* Balance display */}
+            {driverBalance && (
+              <View style={s.balanceRow}>
+                <Text style={s.balanceLabel}>💰 {t(lang,'balance')}:</Text>
+                <Text style={[s.balanceValue, driverBalance.balance <= 0 && !driverBalance.balance_exempt && { color: '#EF4444' }]}>
+                  {Math.round(driverBalance.balance).toLocaleString()} {t(lang,'sum')}
+                </Text>
+                {driverBalance.balance_exempt && (
+                  <View style={s.exemptBadge}><Text style={s.exemptBadgeText}>{t(lang,'balanceExempt')}</Text></View>
+                )}
+              </View>
+            )}
+            <TouchableOpacity style={[s.primaryBtn, driverBalance && driverBalance.balance <= 0 && !driverBalance.balance_exempt && { opacity: 0.5 }]} onPress={() => toggleOnline(true)}>
               <Text style={s.primaryBtnText}>{t(lang,'goOnline')}</Text>
             </TouchableOpacity>
           </View>
@@ -1010,6 +1075,18 @@ export default function HomeScreen() {
               <View style={[s.statusDot, { backgroundColor: '#22C55E' }]} />
               <Text style={s.statusTitle}>{t(lang,'youOnline')}</Text>
             </View>
+            {/* Inline balance display */}
+            {driverBalance && (
+              <View style={s.balanceRow}>
+                <Text style={s.balanceLabel}>💰 {t(lang,'balance')}:</Text>
+                <Text style={[s.balanceValue, driverBalance.balance <= 20000 && !driverBalance.balance_exempt && { color: '#FF9800' }]}>
+                  {Math.round(driverBalance.balance).toLocaleString()} {t(lang,'sum')}
+                </Text>
+                {driverBalance.balance_exempt && (
+                  <View style={s.exemptBadge}><Text style={s.exemptBadgeText}>{t(lang,'balanceExempt')}</Text></View>
+                )}
+              </View>
+            )}
             <Text style={s.statusSub}>{t(lang,'searchingClients')}{'\n'}{t(lang,'keepAppOpen')}</Text>
             <TouchableOpacity style={s.offlineBtn} onPress={() => toggleOnline(false)}>
               <Text style={s.offlineBtnText}>{t(lang,'goOffline')}</Text>
@@ -1658,5 +1735,23 @@ function makeStyles(colors) {
       shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4,
     },
     swipeSubLabel: { fontSize: 12, color: '#6B7280', marginTop: 8 },
+
+    // ── Balance display ──────────────────────────────────────────
+    balanceWarning: {
+      flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF3E0',
+      borderRadius: 12, padding: 12, marginBottom: 10, gap: 10,
+    },
+    balanceWarningIcon: { fontSize: 24 },
+    balanceWarningText: { fontSize: 13, color: '#E65100', fontWeight: '600', lineHeight: 18 },
+    balanceWarningAmount: { fontSize: 14, color: '#BF360C', fontWeight: '800', marginTop: 2 },
+    balanceRow: {
+      flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8,
+    },
+    balanceLabel: { fontSize: 14, color: '#9CA3AF', fontWeight: '600' },
+    balanceValue: { fontSize: 16, fontWeight: '800', color: '#F9FAFB' },
+    exemptBadge: {
+      backgroundColor: '#22C55E22', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2,
+    },
+    exemptBadgeText: { fontSize: 11, color: '#22C55E', fontWeight: '700' },
   });
 }

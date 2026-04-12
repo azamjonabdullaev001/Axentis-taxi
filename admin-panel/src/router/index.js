@@ -10,6 +10,7 @@ import Users from '../views/Users.vue'
 import Dispatcher from '../views/Dispatcher.vue'
 import Referrals from '../views/Referrals.vue'
 import DriverDetail from '../views/DriverDetail.vue'
+import Balance from '../views/Balance.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
@@ -27,6 +28,7 @@ const routes = [
       { path: 'users', component: Users, meta: { allowedRoles: ['superadmin', 'users'] } },
       { path: 'dispatcher', component: Dispatcher, meta: { allowedRoles: ['superadmin', 'dispatcher'] } },
       { path: 'referrals', component: Referrals, meta: { allowedRoles: ['superadmin', 'referrals'] } },
+      { path: 'balance', component: Balance, meta: { allowedRoles: ['superadmin', 'revenue'] } },
       { path: 'drivers/:id', component: DriverDetail, meta: { allowedRoles: ['superadmin', 'users'] } },
     ]
   },

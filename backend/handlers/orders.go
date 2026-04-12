@@ -628,6 +628,33 @@ func (h *OrderHandler) CompleteOrder(c *gin.Context) {
 	// ── Bonus processing ─────────────────────────────────────────────────────
 	h.applyCompletionBonuses(driverID, userID, orderID, totalPrice, now)
 
+	// ── Commission deduction from driver balance ─────────────────────────────
+	var serviceSharePct float64
+	var balanceExempt bool
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(service_share_pct, 10.0) FROM price_settings ORDER BY id LIMIT 1`,
+	).Scan(&serviceSharePct)
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(balance_exempt, false) FROM drivers WHERE id = $1`, driverID,
+	).Scan(&balanceExempt)
+	if !balanceExempt && serviceSharePct > 0 {
+		commission := totalPrice * serviceSharePct / 100
+		h.db.Exec(context.Background(),
+			`UPDATE drivers SET balance = balance - $1 WHERE id = $2`, commission, driverID)
+		h.db.Exec(context.Background(),
+			`INSERT INTO balance_transactions (driver_id, amount, tx_type, description, order_id)
+			 VALUES ($1, $2, 'commission', $3, $4)`,
+			driverID, -commission,
+			fmt.Sprintf("Комиссия %.0f%% — %.0f сум", serviceSharePct, commission), orderID)
+		// Notify driver about balance change
+		var newBalance float64
+		h.db.QueryRow(context.Background(), `SELECT COALESCE(balance,0) FROM drivers WHERE id = $1`, driverID).Scan(&newBalance)
+		balMsg, _ := json.Marshal(map[string]interface{}{
+			"type": "balance_updated", "balance": newBalance, "commission": commission, "tx_type": "commission",
+		})
+		h.hub.SendToUser(userID, balMsg)
+	}
+
 	var passengerID *string
 	h.db.QueryRow(context.Background(),
 		`SELECT passenger_id FROM orders WHERE id = $1`, orderID,
@@ -983,11 +1010,17 @@ func (h *OrderHandler) UpdateDriverAvailability(c *gin.Context) {
 	// Only approved drivers can go online
 	if req.Available {
 		var regStatus string
+		var balance float64
+		var balanceExempt bool
 		err := h.db.QueryRow(context.Background(),
-			`SELECT COALESCE(registration_status, 'approved') FROM drivers WHERE user_id = $1`, userID,
-		).Scan(&regStatus)
+			`SELECT COALESCE(registration_status, 'approved'), COALESCE(balance, 0), COALESCE(balance_exempt, false) FROM drivers WHERE user_id = $1`, userID,
+		).Scan(&regStatus, &balance, &balanceExempt)
 		if err != nil || regStatus != "approved" {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Driver not approved yet"})
+			return
+		}
+		if balance <= 0 && !balanceExempt {
+			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient_balance", "balance": balance})
 			return
 		}
 	}
@@ -1172,7 +1205,7 @@ func (h *OrderHandler) GetQueuedOrders(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"orders": orders})
 }
 
-// GET /driver/bonus-history — returns last 50 bonus events + cashback for the caller
+// GET /driver/bonus-history — returns last 50 bonus events + cashback + active settings + weekly progress
 func (h *OrderHandler) GetBonusHistory(c *gin.Context) {
 	if c.GetString("user_role") != "driver" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
@@ -1187,7 +1220,9 @@ func (h *OrderHandler) GetBonusHistory(c *gin.Context) {
 		return
 	}
 
-	rows, err := h.db.Query(context.Background(),
+	ctx := context.Background()
+
+	rows, err := h.db.Query(ctx,
 		`SELECT id, bonus_type, amount, COALESCE(description,''), created_at
 		 FROM driver_bonus_events WHERE driver_id = $1
 		 ORDER BY created_at DESC LIMIT 50`, driverID)
@@ -1211,14 +1246,166 @@ func (h *OrderHandler) GetBonusHistory(c *gin.Context) {
 	}
 
 	var streakDays, lifetimeTrips int
-	h.db.QueryRow(context.Background(),
+	h.db.QueryRow(ctx,
 		`SELECT COALESCE(streak_days,0), COALESCE(lifetime_trips,0) FROM drivers WHERE id = $1`, driverID,
 	).Scan(&streakDays, &lifetimeTrips)
 
+	// Active bonus settings
+	var bs models.BonusSettings
+	h.db.QueryRow(ctx,
+		`SELECT COALESCE(night_bonus_pct,0), COALESCE(night_bonus_enabled,false),
+		        COALESCE(streak_days_required,7), COALESCE(streak_bonus_amount,0), COALESCE(streak_bonus_enabled,false),
+		        COALESCE(milestone_50_amount,0), COALESCE(milestone_100_amount,0),
+		        COALESCE(milestone_500_amount,0), COALESCE(milestone_1000_amount,0),
+		        COALESCE(milestones_enabled,false), COALESCE(weekly_bonus_enabled,false)
+		 FROM bonus_settings ORDER BY id LIMIT 1`,
+	).Scan(&bs.NightBonusPct, &bs.NightBonusEnabled,
+		&bs.StreakDaysRequired, &bs.StreakBonusAmount, &bs.StreakBonusEnabled,
+		&bs.Milestone50Amount, &bs.Milestone100Amount, &bs.Milestone500Amount, &bs.Milestone1000Amount,
+		&bs.MilestonesEnabled, &bs.WeeklyBonusEnabled)
+
+	// Referral info
+	var referralBenefitType, referredBy string
+	h.db.QueryRow(ctx,
+		`SELECT COALESCE(referral_benefit_type,''), COALESCE(referred_by,'') FROM drivers WHERE id = $1`, driverID,
+	).Scan(&referralBenefitType, &referredBy)
+
+	// Weekly bonus progress
+	type weeklyProgress struct {
+		WeekNumber     int     `json:"week_number"`
+		RequiredTrips  int     `json:"required_trips"`
+		BonusAmount    float64 `json:"bonus_amount"`
+		TripsCompleted int     `json:"trips_completed"`
+		BonusPaid      bool    `json:"bonus_paid"`
+		WeekStart      string  `json:"week_start"`
+	}
+	var wp *weeklyProgress
+
+	if bs.WeeklyBonusEnabled {
+		// Current ISO week start (Monday)
+		now := time.Now().UTC()
+		weekday := int(now.Weekday())
+		if weekday == 0 { weekday = 7 }
+		monday := now.AddDate(0, 0, -(weekday - 1)).Truncate(24 * time.Hour)
+		weekStartStr := monday.Format("2006-01-02")
+
+		var tripsCompleted int
+		var bonusPaid bool
+		var weekNum int
+		err := h.db.QueryRow(ctx,
+			`SELECT week_number, trips_completed, bonus_paid FROM driver_weekly_progress
+			 WHERE driver_id = $1 AND week_start = $2`, driverID, weekStartStr,
+		).Scan(&weekNum, &tripsCompleted, &bonusPaid)
+		if err != nil {
+			weekNum = 1
+			tripsCompleted = 0
+			bonusPaid = false
+		}
+
+		var reqTrips int
+		var bonusAmt float64
+		err = h.db.QueryRow(ctx,
+			`SELECT required_trips, bonus_amount FROM weekly_bonus_tiers WHERE week_number = $1`, weekNum,
+		).Scan(&reqTrips, &bonusAmt)
+		if err != nil {
+			reqTrips = 50
+			bonusAmt = 100000
+		}
+		wp = &weeklyProgress{
+			WeekNumber:     weekNum,
+			RequiredTrips:  reqTrips,
+			BonusAmount:    bonusAmt,
+			TripsCompleted: tripsCompleted,
+			BonusPaid:      bonusPaid,
+			WeekStart:      weekStartStr,
+		}
+	}
+
+	// Weekly bonus tiers
+	type tier struct {
+		WeekNumber    int     `json:"week_number"`
+		RequiredTrips int     `json:"required_trips"`
+		BonusAmount   float64 `json:"bonus_amount"`
+	}
+	tiers := []tier{}
+	if bs.WeeklyBonusEnabled {
+		tRows, _ := h.db.Query(ctx,
+			`SELECT week_number, required_trips, bonus_amount FROM weekly_bonus_tiers ORDER BY week_number`)
+		if tRows != nil {
+			defer tRows.Close()
+			for tRows.Next() {
+				var t tier
+				tRows.Scan(&t.WeekNumber, &t.RequiredTrips, &t.BonusAmount)
+				tiers = append(tiers, t)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"events":         events,
-		"streak_days":    streakDays,
-		"lifetime_trips": lifetimeTrips,
+		"events":               events,
+		"streak_days":          streakDays,
+		"lifetime_trips":       lifetimeTrips,
+		"bonus_settings":       bs,
+		"referral_benefit_type": referralBenefitType,
+		"referred_by":          referredBy,
+		"weekly_progress":      wp,
+		"weekly_tiers":         tiers,
+	})
+}
+
+// GET /driver/balance — returns driver's balance, exempt status, and recent transactions
+func (h *OrderHandler) GetDriverBalance(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+	var driverID string
+	var balance float64
+	var exempt bool
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id, COALESCE(balance, 0), COALESCE(balance_exempt, false) FROM drivers WHERE user_id = $1`, userID,
+	).Scan(&driverID, &balance, &exempt); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+
+	// Service share percentage
+	var serviceSharePct float64
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(service_share_pct, 10.0) FROM price_settings ORDER BY id LIMIT 1`,
+	).Scan(&serviceSharePct)
+
+	// Last 30 transactions
+	rows, err := h.db.Query(context.Background(),
+		`SELECT id, amount, tx_type, COALESCE(description,''), created_at
+		 FROM balance_transactions WHERE driver_id = $1
+		 ORDER BY created_at DESC LIMIT 30`, driverID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type tx struct {
+		ID          string    `json:"id"`
+		Amount      float64   `json:"amount"`
+		TxType      string    `json:"tx_type"`
+		Description string    `json:"description"`
+		CreatedAt   time.Time `json:"created_at"`
+	}
+	txs := []tx{}
+	for rows.Next() {
+		var t tx
+		rows.Scan(&t.ID, &t.Amount, &t.TxType, &t.Description, &t.CreatedAt)
+		txs = append(txs, t)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"balance":           balance,
+		"balance_exempt":    exempt,
+		"service_share_pct": serviceSharePct,
+		"transactions":      txs,
 	})
 }
 
@@ -1342,6 +1529,78 @@ func (h *OrderHandler) applyCompletionBonuses(driverID, driverUserID, orderID st
 			"type": "streak_bonus_credited", "streak_days": newStreak, "amount": streakAmt,
 		})
 		h.hub.SendToUser(driverUserID, msg)
+	}
+
+	// ── 5. Weekly bonus (Yandex-style progressive challenge) ─────────────────
+	var weeklyBonusEnabled bool
+	h.db.QueryRow(ctx, `SELECT COALESCE(weekly_bonus_enabled, false) FROM bonus_settings ORDER BY id LIMIT 1`).
+		Scan(&weeklyBonusEnabled)
+	if weeklyBonusEnabled {
+		now := completedAt.UTC()
+		weekday := int(now.Weekday())
+		if weekday == 0 { weekday = 7 }
+		monday := now.AddDate(0, 0, -(weekday - 1)).Truncate(24 * time.Hour)
+		weekStartStr := monday.Format("2006-01-02")
+
+		// Upsert driver weekly progress: increment trips, determine week_number
+		var weekNum int
+		var tripsCompleted int
+		var bonusPaid bool
+		err := h.db.QueryRow(ctx,
+			`SELECT week_number, trips_completed, bonus_paid FROM driver_weekly_progress
+			 WHERE driver_id = $1 AND week_start = $2`, driverID, weekStartStr,
+		).Scan(&weekNum, &tripsCompleted, &bonusPaid)
+
+		if err != nil {
+			// First trip this week — determine week number from previous week
+			var prevWeekNum int
+			lastMonday := monday.AddDate(0, 0, -7).Format("2006-01-02")
+			err2 := h.db.QueryRow(ctx,
+				`SELECT week_number FROM driver_weekly_progress
+				 WHERE driver_id = $1 AND week_start = $2 AND bonus_paid = true`,
+				driverID, lastMonday,
+			).Scan(&prevWeekNum)
+			if err2 != nil {
+				weekNum = 1 // first time or missed last week — start from week 1
+			} else {
+				weekNum = prevWeekNum + 1
+				if weekNum > 7 { weekNum = 7 } // cap at 7
+			}
+			h.db.Exec(ctx,
+				`INSERT INTO driver_weekly_progress (driver_id, week_start, week_number, trips_completed, bonus_paid)
+				 VALUES ($1, $2::date, $3, 1, false)
+				 ON CONFLICT (driver_id, week_start) DO UPDATE SET trips_completed = driver_weekly_progress.trips_completed + 1`,
+				driverID, weekStartStr, weekNum)
+			tripsCompleted = 1
+			bonusPaid = false
+		} else {
+			// Already have a row — increment
+			h.db.Exec(ctx,
+				`UPDATE driver_weekly_progress SET trips_completed = trips_completed + 1 WHERE driver_id = $1 AND week_start = $2`,
+				driverID, weekStartStr)
+			tripsCompleted++
+		}
+
+		if !bonusPaid {
+			var reqTrips int
+			var bonusAmt float64
+			h.db.QueryRow(ctx,
+				`SELECT required_trips, bonus_amount FROM weekly_bonus_tiers WHERE week_number = $1`, weekNum,
+			).Scan(&reqTrips, &bonusAmt)
+			if reqTrips > 0 && bonusAmt > 0 && tripsCompleted >= reqTrips {
+				h.db.Exec(ctx, `UPDATE drivers SET balance = balance + $1 WHERE id = $2`, bonusAmt, driverID)
+				h.db.Exec(ctx,
+					`UPDATE driver_weekly_progress SET bonus_paid = true WHERE driver_id = $1 AND week_start = $2`,
+					driverID, weekStartStr)
+				h.db.Exec(ctx,
+					`INSERT INTO driver_bonus_events (driver_id, bonus_type, amount, description) VALUES ($1,'weekly_bonus',$2,$3)`,
+					driverID, bonusAmt, fmt.Sprintf("🎯 Недельный бонус (неделя %d): %d поездок — %.0f сум", weekNum, reqTrips, bonusAmt))
+				msg, _ := json.Marshal(map[string]interface{}{
+					"type": "weekly_bonus_credited", "week_number": weekNum, "amount": bonusAmt,
+				})
+				h.hub.SendToUser(driverUserID, msg)
+			}
+		}
 	}
 }
 

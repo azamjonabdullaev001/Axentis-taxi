@@ -98,17 +98,19 @@ func (s *MatchingService) UnlockDriverForOrder(driverID, orderID string) {
 // FindAndNotifyDrivers implements concurrency-safe driver matching:
 // 1. Find all available drivers within 5 km radius sorted by proximity
 // 2. Lock and notify the closest available (unlocked) driver
-// 3. If no response in 15 seconds or declined, unlock and try the next driver
+// 3. If no response in 25 seconds or declined, unlock and try the next driver
 // 4. Per-driver locking prevents the same driver from being offered multiple orders simultaneously
+// 5. After exhausting all candidates, re-search up to 3 more rounds before cancelling
 func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickupLng float64) {
 	const maxRadiusMeters = 5000.0 // 5 km hard limit
-	const offerTimeout = 15 * time.Second
+	const offerTimeout = 25 * time.Second
+	const maxSearchRounds = 3 // additional full search rounds after initial candidates exhausted
 	log.Printf("[ORDER %s] Starting driver search: pickup=(%.6f, %.6f), radius=%.0fm", orderID, pickupLat, pickupLng, maxRadiusMeters)
 
-	// Retry up to 6 times (30s total) — gives drivers time to go online / GPS to register
+	// Retry up to 12 times (60s total) — gives drivers time to go online / GPS to register
 	var candidates []DriverCandidate
 	var err error
-	for attempt := 0; attempt < 6; attempt++ {
+	for attempt := 0; attempt < 12; attempt++ {
 		if attempt > 0 {
 			if s.isOrderAccepted(orderID) {
 				return
@@ -147,31 +149,67 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 	log.Printf("[ORDER %s] Found %d candidates within %.0fm, starting sequential notifications", orderID, len(candidates), maxRadiusMeters)
 
 	go func() {
-		for _, candidate := range candidates {
-			if s.isOrderAccepted(orderID) {
-				return
-			}
-			// Check if order was cancelled
-			var status string
-			if e := s.db.QueryRow(context.Background(),
-				`SELECT status FROM orders WHERE id = $1`, orderID,
-			).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
-				return
+		notifiedDrivers := make(map[string]bool) // track already-notified drivers across rounds
+
+		for round := 0; round <= maxSearchRounds; round++ {
+			if round > 0 {
+				// Re-search for new candidates (drivers may have come online or finished other trips)
+				log.Printf("[ORDER %s] Round %d: re-searching for drivers", orderID, round+1)
+				time.Sleep(5 * time.Second)
+				if s.isOrderAccepted(orderID) {
+					return
+				}
+				var status string
+				if e := s.db.QueryRow(context.Background(),
+					`SELECT status FROM orders WHERE id = $1`, orderID,
+				).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
+					return
+				}
+				all, findErr := s.findNearbyDrivers(pickupLat, pickupLng)
+				if findErr != nil {
+					continue
+				}
+				candidates = nil
+				for _, c := range all {
+					if c.Distance <= maxRadiusMeters && !s.isDriverLocked(c.DriverID) && !notifiedDrivers[c.DriverID] {
+						candidates = append(candidates, c)
+					}
+				}
+				if len(candidates) == 0 {
+					log.Printf("[ORDER %s] Round %d: no new candidates", orderID, round+1)
+					continue
+				}
+				log.Printf("[ORDER %s] Round %d: found %d new candidates", orderID, round+1, len(candidates))
 			}
 
-			// Try to lock the driver for this order
-			if !s.tryLockDriver(candidate.DriverID, orderID) {
-				log.Printf("[ORDER %s] Driver %s locked by another order, skipping", orderID, candidate.DriverID)
-				continue
+			for _, candidate := range candidates {
+				if s.isOrderAccepted(orderID) {
+					return
+				}
+				// Check if order was cancelled
+				var status string
+				if e := s.db.QueryRow(context.Background(),
+					`SELECT status FROM orders WHERE id = $1`, orderID,
+				).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
+					return
+				}
+
+				// Try to lock the driver for this order
+				if !s.tryLockDriver(candidate.DriverID, orderID) {
+					log.Printf("[ORDER %s] Driver %s locked by another order, skipping", orderID, candidate.DriverID)
+					continue
+				}
+
+				notifiedDrivers[candidate.DriverID] = true
+				s.notifyDriver(candidate.UserID, orderID)
+				timer := time.NewTimer(offerTimeout)
+				<-timer.C
+
+				// Unlock the driver after timeout (if order not accepted by this driver)
+				s.unlockDriver(candidate.DriverID, orderID)
 			}
-
-			s.notifyDriver(candidate.UserID, orderID)
-			timer := time.NewTimer(offerTimeout)
-			<-timer.C
-
-			// Unlock the driver after timeout (if order not accepted by this driver)
-			s.unlockDriver(candidate.DriverID, orderID)
 		}
+
 		if !s.isOrderAccepted(orderID) {
 			s.updateOrderStatus(orderID, "cancelled")
 			s.notifyPassengerNoDrivers(orderID)
@@ -184,7 +222,8 @@ func (s *MatchingService) FindAndNotifyDrivers(orderID string, pickupLat, pickup
 // Used for call orders to limit search to the city area.
 // Uses per-driver locking to prevent conflicts with concurrent orders.
 func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat, pickupLng float64, radiusMeters float64) {
-	const offerTimeout = 15 * time.Second
+	const offerTimeout = 25 * time.Second
+	const maxSearchRounds = 3
 	log.Printf("[CALL-ORDER %s] Starting driver search: pickup=(%.6f, %.6f), radius=%.0fm",
 		orderID, pickupLat, pickupLng, radiusMeters)
 
@@ -217,31 +256,66 @@ func (s *MatchingService) FindAndNotifyDriversInRadius(orderID string, pickupLat
 	}
 
 	go func() {
-		for i, candidate := range candidates {
-			if s.isOrderAccepted(orderID) {
-				log.Printf("[CALL-ORDER %s] Order accepted, stopping search", orderID)
-				return
-			}
-			// Check cancellation
-			var status string
-			if e := s.db.QueryRow(context.Background(),
-				`SELECT status FROM orders WHERE id = $1`, orderID,
-			).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
-				return
+		notifiedDrivers := make(map[string]bool)
+
+		for round := 0; round <= maxSearchRounds; round++ {
+			if round > 0 {
+				log.Printf("[CALL-ORDER %s] Round %d: re-searching for drivers", orderID, round+1)
+				time.Sleep(5 * time.Second)
+				if s.isOrderAccepted(orderID) {
+					return
+				}
+				var status string
+				if e := s.db.QueryRow(context.Background(),
+					`SELECT status FROM orders WHERE id = $1`, orderID,
+				).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
+					return
+				}
+				newAll, findErr := s.findNearbyDrivers(pickupLat, pickupLng)
+				if findErr != nil {
+					continue
+				}
+				candidates = nil
+				for _, c := range newAll {
+					if c.Distance <= radiusMeters && !s.isDriverLocked(c.DriverID) && !notifiedDrivers[c.DriverID] {
+						candidates = append(candidates, c)
+					}
+				}
+				if len(candidates) == 0 {
+					log.Printf("[CALL-ORDER %s] Round %d: no new candidates", orderID, round+1)
+					continue
+				}
+				log.Printf("[CALL-ORDER %s] Round %d: found %d new candidates", orderID, round+1, len(candidates))
 			}
 
-			if !s.tryLockDriver(candidate.DriverID, orderID) {
-				log.Printf("[CALL-ORDER %s] Driver %s locked by another order, skipping", orderID, candidate.DriverID)
-				continue
+			for i, candidate := range candidates {
+				if s.isOrderAccepted(orderID) {
+					log.Printf("[CALL-ORDER %s] Order accepted, stopping search", orderID)
+					return
+				}
+				// Check cancellation
+				var status string
+				if e := s.db.QueryRow(context.Background(),
+					`SELECT status FROM orders WHERE id = $1`, orderID,
+				).Scan(&status); e == nil && (status == "cancelled" || status == "completed") {
+					return
+				}
+
+				if !s.tryLockDriver(candidate.DriverID, orderID) {
+					log.Printf("[CALL-ORDER %s] Driver %s locked by another order, skipping", orderID, candidate.DriverID)
+					continue
+				}
+
+				notifiedDrivers[candidate.DriverID] = true
+				log.Printf("[CALL-ORDER %s] Notifying driver %d/%d: user=%s", orderID, i+1, len(candidates), candidate.UserID)
+				s.notifyDriver(candidate.UserID, orderID)
+				timer := time.NewTimer(offerTimeout)
+				<-timer.C
+
+				s.unlockDriver(candidate.DriverID, orderID)
 			}
-
-			log.Printf("[CALL-ORDER %s] Notifying driver %d/%d: user=%s", orderID, i+1, len(candidates), candidate.UserID)
-			s.notifyDriver(candidate.UserID, orderID)
-			timer := time.NewTimer(offerTimeout)
-			<-timer.C
-
-			s.unlockDriver(candidate.DriverID, orderID)
 		}
+
 		if !s.isOrderAccepted(orderID) {
 			log.Printf("[CALL-ORDER %s] All drivers notified, none accepted — cancelling", orderID)
 			s.updateOrderStatus(orderID, "cancelled")
@@ -259,6 +333,7 @@ func (s *MatchingService) findNearbyDrivers(lat, lng float64) ([]DriverCandidate
 		   AND d.current_lng IS NOT NULL
 		   AND COALESCE(d.registration_status, 'approved') = 'approved'
 		   AND d.last_seen > NOW() - INTERVAL '2 hours'
+		   AND (COALESCE(d.balance, 0) > 0 OR COALESCE(d.balance_exempt, false) = true)
 		   AND NOT EXISTS (
 		     SELECT 1 FROM orders o
 		     WHERE o.driver_id = d.id

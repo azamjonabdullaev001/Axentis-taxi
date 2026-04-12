@@ -51,6 +51,10 @@ export default function ProfileScreen() {
   const [bonusExpanded, setBonusExpanded] = useState(false);
   const [bonusEvents, setBonusEvents] = useState([]);
   const [bonusStats, setBonusStats] = useState({ streak_days: 0, lifetime_trips: 0 });
+  const [bonusSettings, setBonusSettings] = useState(null);
+  const [weeklyProgress, setWeeklyProgress] = useState(null);
+  const [weeklyTiers, setWeeklyTiers] = useState([]);
+  const [referralBenefitInfo, setReferralBenefitInfo] = useState({ type: '', referred_by: '' });
   const [loadingBonuses, setLoadingBonuses] = useState(false);
 
   useEffect(() => {
@@ -78,6 +82,13 @@ export default function ProfileScreen() {
       const { data } = await driverAPI.getBonusHistory();
       setBonusEvents(data.events || []);
       setBonusStats({ streak_days: data.streak_days || 0, lifetime_trips: data.lifetime_trips || 0 });
+      if (data.bonus_settings) setBonusSettings(data.bonus_settings);
+      if (data.weekly_progress) setWeeklyProgress(data.weekly_progress);
+      if (data.weekly_tiers) setWeeklyTiers(data.weekly_tiers);
+      setReferralBenefitInfo({
+        type: data.referral_benefit_type || '',
+        referred_by: data.referred_by || '',
+      });
     } catch {}
     setLoadingBonuses(false);
   }
@@ -256,7 +267,7 @@ export default function ProfileScreen() {
         <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
 
         {/* ── Language ── */}
-        <TouchableOpacity style={s.row} onPress={() => setLangModal(true)}>
+        <TouchableOpacity style={s.row} onPress={() => setLangModal(!langModal)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#30D15820' }]}>
               <Ionicons name="language-outline" size={18} color="#30D158" />
@@ -267,9 +278,25 @@ export default function ProfileScreen() {
             <Text style={{ color: colors.textSecondary, fontSize: 14 }}>
               {lang === 'ru' ? 'Русский' : "O'zbek"}
             </Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+            <Ionicons name={langModal ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
           </View>
         </TouchableOpacity>
+
+        {langModal && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+            {[{ code:'ru', label:'🇷🇺 Русский' }, { code:'uz', label:"🇺🇿 O'zbek" }].map((item) => (
+              <TouchableOpacity key={item.code}
+                style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12, borderRadius: 10, backgroundColor: lang === item.code ? (isDark ? 'rgba(255,204,0,0.1)' : '#FFF8E1') : 'transparent', marginBottom: 4 }}
+                onPress={() => {
+                  setLang(item.code);
+                  setLangModal(false);
+                }}>
+                <Text style={{ color: colors.text, fontSize: 16 }}>{item.label}</Text>
+                {lang === item.code && <Ionicons name="checkmark" size={20} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
 
@@ -503,7 +530,7 @@ export default function ProfileScreen() {
 
         <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
 
-        {/* ── Bonus History (collapsible) ── */}
+        {/* ── Bonuses (collapsible) ── */}
         <TouchableOpacity
           style={s.row}
           onPress={() => {
@@ -541,6 +568,141 @@ export default function ProfileScreen() {
               </View>
             </View>
 
+            {/* ── Active bonuses list ── */}
+            {bonusSettings && (
+              <View style={{ marginBottom: 12 }}>
+                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14, marginBottom: 8 }}>{t(lang, 'activeBonuses')}</Text>
+
+                {bonusSettings.night_bonus_enabled && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <Text style={{ fontSize: 16 }}>🌙</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{t(lang, 'nightBonus')}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 11 }}>22:00–06:00 · +{bonusSettings.night_bonus_pct}%</Text>
+                    </View>
+                    <View style={{ backgroundColor: '#4CAF5020', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                      <Text style={{ color: '#4CAF50', fontSize: 11, fontWeight: '700' }}>ON</Text>
+                    </View>
+                  </View>
+                )}
+
+                {bonusSettings.streak_bonus_enabled && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <Text style={{ fontSize: 16 }}>🔥</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{t(lang, 'streak')}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 11 }}>
+                        {bonusSettings.streak_days_required} {t(lang, 'streakDays')} → +{Number(bonusSettings.streak_bonus_amount).toLocaleString('ru-RU')} {t(lang, 'sum')}
+                      </Text>
+                    </View>
+                    <View style={{ backgroundColor: '#4CAF5020', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                      <Text style={{ color: '#4CAF50', fontSize: 11, fontWeight: '700' }}>ON</Text>
+                    </View>
+                  </View>
+                )}
+
+                {bonusSettings.milestones_enabled && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <Text style={{ fontSize: 16 }}>🏆</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{t(lang, 'milestone')}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 11 }}>
+                        50 / 100 / 500 / 1000 {t(lang, 'lifetimeTrips')}
+                      </Text>
+                    </View>
+                    <View style={{ backgroundColor: '#4CAF5020', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                      <Text style={{ color: '#4CAF50', fontSize: 11, fontWeight: '700' }}>ON</Text>
+                    </View>
+                  </View>
+                )}
+
+                {referralBenefitInfo.type !== '' && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <Text style={{ fontSize: 16 }}>🎁</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{t(lang, 'referralBonus')}</Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 11 }}>
+                        {referralBenefitInfo.type === 'commission'
+                          ? (lang === 'uz' ? 'Komissiya kamaytirish' : 'Сниженная комиссия')
+                          : referralBenefitInfo.type === 'cashback'
+                          ? t(lang, 'cashback')
+                          : (lang === 'uz' ? 'Haftalik bonus' : 'Еженедельный бонус')}
+                        {referralBenefitInfo.referred_by ? ` · ${lang === 'uz' ? 'Kod' : 'Код'}: ${referralBenefitInfo.referred_by}` : ''}
+                      </Text>
+                    </View>
+                    <View style={{ backgroundColor: '#FF9F0A20', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                      <Text style={{ color: '#FF9F0A', fontSize: 11, fontWeight: '700' }}>✓</Text>
+                    </View>
+                  </View>
+                )}
+
+                {!bonusSettings.night_bonus_enabled && !bonusSettings.streak_bonus_enabled && !bonusSettings.milestones_enabled && !bonusSettings.weekly_bonus_enabled && referralBenefitInfo.type === '' && (
+                  <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 6 }}>
+                    {lang === 'uz' ? "Hozircha faol bonuslar yo'q" : 'Пока нет активных бонусов'}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {/* ── Weekly bonus challenge ── */}
+            {bonusSettings?.weekly_bonus_enabled && weeklyProgress && (
+              <View style={{ backgroundColor: colors.background, borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1.5, borderColor: '#F59E0B30' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <Text style={{ fontSize: 18 }}>🎯</Text>
+                  <Text style={{ color: colors.text, fontWeight: '800', fontSize: 15 }}>{t(lang, 'weeklyBonus')}</Text>
+                </View>
+                <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 10 }}>{t(lang, 'weeklyBonusDesc')}</Text>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>
+                    {t(lang, 'weekLabel')} {weeklyProgress.week_number}
+                  </Text>
+                  <Text style={{ color: weeklyProgress.bonus_paid ? '#4CAF50' : colors.primary, fontWeight: '700', fontSize: 13 }}>
+                    {weeklyProgress.bonus_paid ? t(lang, 'completed') : `${weeklyProgress.trips_completed} / ${weeklyProgress.required_trips}`}
+                  </Text>
+                </View>
+
+                <View style={{ height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden', marginBottom: 6 }}>
+                  <View style={{
+                    height: '100%',
+                    width: `${Math.min((weeklyProgress.trips_completed / weeklyProgress.required_trips) * 100, 100)}%`,
+                    backgroundColor: weeklyProgress.bonus_paid ? '#4CAF50' : '#F59E0B',
+                    borderRadius: 5,
+                  }} />
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>0</Text>
+                  <Text style={{ color: '#F59E0B', fontSize: 12, fontWeight: '700' }}>
+                    +{Number(weeklyProgress.bonus_amount).toLocaleString('ru-RU')} {t(lang, 'sum')}
+                  </Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{weeklyProgress.required_trips}</Text>
+                </View>
+
+                {/* Mini tier preview */}
+                {weeklyTiers.length > 0 && (
+                  <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8 }}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {weeklyTiers.map((tier) => (
+                        <View key={tier.week_number} style={{
+                          alignItems: 'center', marginRight: 12, opacity: tier.week_number < weeklyProgress.week_number ? 0.5 : 1,
+                        }}>
+                          <View style={{
+                            width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
+                            backgroundColor: tier.week_number === weeklyProgress.week_number ? '#F59E0B' : tier.week_number < weeklyProgress.week_number ? '#4CAF50' : colors.border,
+                          }}>
+                            <Text style={{ color: tier.week_number <= weeklyProgress.week_number ? '#fff' : colors.textSecondary, fontSize: 11, fontWeight: '700' }}>{tier.week_number}</Text>
+                          </View>
+                          <Text style={{ color: colors.textSecondary, fontSize: 9, marginTop: 2 }}>{tier.required_trips}</Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* ── Bonus events history ── */}
             {loadingBonuses ? (
               <ActivityIndicator color={colors.primary} />
             ) : bonusEvents.length === 0 ? (
@@ -550,7 +712,7 @@ export default function ProfileScreen() {
                 <View key={ev.id || i} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: i < Math.min(bonusEvents.length, 10) - 1 ? 1 : 0, borderBottomColor: colors.border }}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                      {ev.bonus_type === 'cashback' ? '💰' : ev.bonus_type === 'night_bonus' ? '🌙' : ev.bonus_type === 'streak' ? '🔥' : '🏆'}{' '}
+                      {ev.bonus_type === 'cashback' ? '💰' : ev.bonus_type === 'night_bonus' ? '🌙' : ev.bonus_type === 'streak' ? '🔥' : ev.bonus_type === 'weekly_bonus' ? '🎯' : '🏆'}{' '}
                       {ev.description || ev.bonus_type}
                     </Text>
                     <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>{ev.created_at ? new Date(ev.created_at).toLocaleDateString('ru-RU') : ''}</Text>
@@ -769,26 +931,6 @@ export default function ProfileScreen() {
         </SafeAreaView>
       </Modal>
 
-      <Modal visible={langModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={[s.modalSheet, { backgroundColor: colors.background }]}>
-            <Text style={[s.modalTitle, { color: colors.text }]}>{t(lang,'selectLanguage')}</Text>
-            {[{ code:'ru', label:'🇺🇳 Русский' }, { code:'uz', label:"\ud83c\uddfa\ud83c\uddff O'zbek" }].map((item) => (
-              <TouchableOpacity key={item.code} style={s.langOption}
-                onPress={() => {
-                  setLang(item.code);
-                  setLangModal(false);
-                }}>
-                <Text style={[s.langLabel, { color: colors.text }]}>{item.label}</Text>
-                {lang === item.code && <Text style={{ color: colors.primary }}>✓</Text>}
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={() => setLangModal(false)}>
-              <Text style={{ color: colors.textSecondary }}>{t(lang,'close')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
       </ScrollView>
     </SafeAreaView>
   );

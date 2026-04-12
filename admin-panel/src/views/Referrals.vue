@@ -117,6 +117,39 @@
           </div>
         </div>
 
+        <!-- Weekly Bonus (Yandex-style progressive challenge) -->
+        <div class="bonus-group">
+          <div class="bonus-group-header">
+            <span class="bonus-group-title">🎯 Недельный челлендж (прогрессивный)</span>
+            <label class="toggle-wrap">
+              <input type="checkbox" v-model="bonus.weekly_bonus_enabled" class="toggle-input" />
+              <span class="toggle-slider"></span>
+              <span class="toggle-label">{{ bonus.weekly_bonus_enabled ? 'Включено' : 'Выключено' }}</span>
+            </label>
+          </div>
+          <p style="font-size:12px; color:#888; margin:8px 0 12px">
+            Каждую неделю водителю даётся новая цель. Если он выполнил предыдущую неделю — поднимается на следующий уровень.
+            Если нет — сбрасывается на неделю 1. Максимум 7 недель.
+          </p>
+          <div v-for="(tier, idx) in weeklyTiers" :key="tier.week_number" class="weekly-tier-row">
+            <span class="weekly-tier-label">Неделя {{ tier.week_number }}</span>
+            <div class="field" style="min-width:140px">
+              <label>Поездок</label>
+              <input v-model.number="weeklyTiers[idx].required_trips" type="number" min="1" step="10" class="form-input" :disabled="!bonus.weekly_bonus_enabled" />
+            </div>
+            <div class="field" style="min-width:160px">
+              <label>Бонус (сум)</label>
+              <input v-model.number="weeklyTiers[idx].bonus_amount" type="number" min="0" step="5000" class="form-input" :disabled="!bonus.weekly_bonus_enabled" />
+            </div>
+          </div>
+          <div class="actions" style="margin-top:12px">
+            <button class="save-btn" :disabled="savingTiers || !bonus.weekly_bonus_enabled" @click="saveTiers">
+              {{ savingTiers ? 'Сохранение...' : '💾 Сохранить недели' }}
+            </button>
+            <span v-if="tiersSaved" class="saved-msg">✅ Сохранено!</span>
+          </div>
+        </div>
+
         <div v-if="bonusError" class="error-msg">{{ bonusError }}</div>
         <div class="actions">
           <button class="save-btn" :disabled="savingBonus" @click="saveBonus">
@@ -232,11 +265,24 @@ const bonus = ref({
   streak_days_required: 7, streak_bonus_amount: 50000, streak_bonus_enabled: false,
   milestone_50_amount: 25000, milestone_100_amount: 50000,
   milestone_500_amount: 200000, milestone_1000_amount: 500000, milestones_enabled: false,
+  weekly_bonus_enabled: false,
 })
 const loadingBonus = ref(true)
 const savingBonus = ref(false)
 const bonusError = ref('')
 const bonusSaved = ref(false)
+
+const weeklyTiers = ref([
+  { week_number: 1, required_trips: 50, bonus_amount: 100000 },
+  { week_number: 2, required_trips: 100, bonus_amount: 150000 },
+  { week_number: 3, required_trips: 150, bonus_amount: 200000 },
+  { week_number: 4, required_trips: 200, bonus_amount: 250000 },
+  { week_number: 5, required_trips: 250, bonus_amount: 300000 },
+  { week_number: 6, required_trips: 300, bonus_amount: 350000 },
+  { week_number: 7, required_trips: 400, bonus_amount: 500000 },
+])
+const savingTiers = ref(false)
+const tiersSaved = ref(false)
 
 const bonusEvents = ref([])
 const loadingEvents = ref(true)
@@ -254,7 +300,7 @@ const filtered = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadSettings(), loadList(), loadBonusSettings(), loadBonusEvents()])
+  await Promise.all([loadSettings(), loadList(), loadBonusSettings(), loadBonusEvents(), loadWeeklyTiers()])
 })
 
 async function loadSettings() {
@@ -330,6 +376,28 @@ async function saveBonus() {
   }
 }
 
+async function loadWeeklyTiers() {
+  try {
+    const { data } = await adminAPI.getWeeklyBonusTiers()
+    if (data.tiers && data.tiers.length > 0) {
+      weeklyTiers.value = data.tiers
+    }
+  } catch {}
+}
+
+async function saveTiers() {
+  savingTiers.value = true
+  try {
+    await adminAPI.updateWeeklyBonusTiers({ tiers: weeklyTiers.value })
+    tiersSaved.value = true
+    setTimeout(() => { tiersSaved.value = false }, 3000)
+  } catch (e) {
+    bonusError.value = e.response?.data?.error || 'Ошибка сохранения недель'
+  } finally {
+    savingTiers.value = false
+  }
+}
+
 function eventLabel(type) {
   const labels = {
     cashback: '💰 Кэшбэк',
@@ -339,6 +407,7 @@ function eventLabel(type) {
     milestone_100: '🏆 100 поездок',
     milestone_500: '🏆 500 поездок',
     milestone_1000: '🏆 1000 поездок',
+    weekly_bonus: '🎯 Недельный',
   }
   return labels[type] || type
 }
@@ -348,6 +417,7 @@ function eventBadgeClass(type) {
   if (type === 'night_bonus') return 'commission'
   if (type === 'streak') return 'bonus'
   if (type?.startsWith('milestone')) return 'milestone'
+  if (type === 'weekly_bonus') return 'weekly'
   return 'none'
 }
 
@@ -425,7 +495,16 @@ function fmtDate(d) { return d ? new Date(d).toLocaleDateString('ru-RU') : '—'
 .badge.bonus { background: #f3e5f5; color: #7b1fa2; }
 .badge.cashback { background: #e8f5e9; color: #2e7d32; }
 .badge.milestone { background: #fff8e1; color: #f57f17; }
+.badge.weekly { background: #e0f2f1; color: #00695c; }
 .badge.none { color: #ccc; }
 .details-btn { color: #1565c0; font-size: 12px; text-decoration: none; }
 .details-btn:hover { text-decoration: underline; }
+
+/* Weekly tier rows */
+.weekly-tier-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 0; border-bottom: 1px solid #f0f0f0;
+}
+.weekly-tier-row:last-child { border-bottom: none; }
+.weekly-tier-label { font-weight: 700; font-size: 14px; color: #333; min-width: 90px; }
 </style>

@@ -704,7 +704,7 @@ export default function HomeScreen() {
     });
     socket.on('destination_reached', () => {
       // Server detected driver is near destination — show notification to passenger
-      Alert.alert('Прибытие', 'Водитель приближается к месту назначения');
+      Alert.alert(t(lang, 'arrival'), t(lang, 'driverNearDestination'));
     });
     return () => {
       socket.off('trip_completed');
@@ -851,7 +851,7 @@ export default function HomeScreen() {
       lockedPricePerKmRef.current = locked;
     } catch (e) {
       setOrderStatus(ORDER_STATUS.IDLE);
-      Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Ошибка создания заказа');
+      Alert.alert(t(lang, 'error'), e.response?.data?.error || t(lang, 'orderCreateError'));
     }
   }
 
@@ -1583,7 +1583,7 @@ export default function HomeScreen() {
                   try {
                     await orderAPI.rateDriver(completedOrderId, selectedRating);
                   } catch (e) {
-                    Alert.alert(t(lang, 'error'), e.response?.data?.error || 'Rating failed');
+                    Alert.alert(t(lang, 'error'), e.response?.data?.error || t(lang, 'ratingFailed'));
                   }
                 }
                 setRatingModalVisible(false);

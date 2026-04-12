@@ -7,7 +7,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '../context/ThemeContext';
 import { orderAPI } from '../services/api';
 import { t } from '../i18n';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STATUS_COLORS = {
   completed:  '#4CAF50',
@@ -47,16 +46,14 @@ function formatDate(dateStr, lang) {
 }
 
 export default function HistoryScreen() {
-  const { colors } = useTheme();
+  const { colors, lang } = useTheme();
   const insets = useSafeAreaInsets();
-  const [lang, setLang] = useState('ru');
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    AsyncStorage.getItem('language').then((l) => { if (l) setLang(l); });
     fetchHistory();
   }, []);
 

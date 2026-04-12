@@ -129,6 +129,9 @@ func main() {
 			// Bonus history for driver
 			protected.GET("/driver/bonus-history", orderHandler.GetBonusHistory)
 
+			// Driver balance
+			protected.GET("/driver/balance", orderHandler.GetDriverBalance)
+
 			// Friends
 			protected.GET("/drivers/search", friendsHandler.SearchDriver)
 			protected.POST("/driver/friends/request", friendsHandler.SendRequest)
@@ -184,6 +187,14 @@ func main() {
 			adminAPI.GET("/bonus-settings", adminHandler.GetBonusSettings)
 			adminAPI.PUT("/bonus-settings", adminHandler.UpdateBonusSettings)
 			adminAPI.GET("/bonus-events", adminHandler.GetBonusEvents)
+			adminAPI.GET("/weekly-bonus-tiers", adminHandler.GetWeeklyBonusTiers)
+			adminAPI.PUT("/weekly-bonus-tiers", adminHandler.UpdateWeeklyBonusTiers)
+
+			// Driver balance management
+			adminAPI.GET("/driver-balances", adminHandler.GetDriverBalances)
+			adminAPI.POST("/driver-balances/:id/top-up", adminHandler.TopUpDriverBalance)
+			adminAPI.PUT("/driver-balances/:id/exempt", adminHandler.SetDriverExempt)
+			adminAPI.GET("/balance-transactions", adminHandler.GetBalanceTransactions)
 		}
 
 		api.POST("/admin/login", adminHandler.Login)

@@ -63,7 +63,7 @@ type ReferralSettings struct {
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
-// BonusSettings controls night-shift, streak, and milestone bonuses.
+// BonusSettings controls night-shift, streak, milestone, and weekly bonuses.
 type BonusSettings struct {
 	ID                  int       `json:"id"`
 	NightBonusPct       float64   `json:"night_bonus_pct"`
@@ -76,6 +76,7 @@ type BonusSettings struct {
 	Milestone500Amount float64   `json:"milestone_500_amount"`
 	Milestone1000Amount float64  `json:"milestone_1000_amount"`
 	MilestonesEnabled  bool      `json:"milestones_enabled"`
+	WeeklyBonusEnabled bool      `json:"weekly_bonus_enabled"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
@@ -261,4 +262,21 @@ type QuizScore struct {
 	TotalQuestions int        `json:"total_questions"`
 	CorrectAnswers int        `json:"correct_answers"`
 	PlayedAt       time.Time  `json:"played_at"`
+}
+
+// WeeklyBonusTier configures one of 7 progressive weekly challenge tiers.
+type WeeklyBonusTier struct {
+	WeekNumber    int     `json:"week_number"`
+	RequiredTrips int     `json:"required_trips"`
+	BonusAmount   float64 `json:"bonus_amount"`
+}
+
+// DriverWeeklyProgress tracks a driver's trip count for one calendar week.
+type DriverWeeklyProgress struct {
+	ID             string  `json:"id"`
+	DriverID       string  `json:"driver_id"`
+	WeekStart      string  `json:"week_start"`
+	WeekNumber     int     `json:"week_number"`
+	TripsCompleted int     `json:"trips_completed"`
+	BonusPaid      bool    `json:"bonus_paid"`
 }

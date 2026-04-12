@@ -51,8 +51,6 @@ export default function ProfileScreen() {
   const [puzzleScores, setPuzzleScores] = useState([]);
   const [puzzleTotal, setPuzzleTotal] = useState(0);
   const [loadingPuzzle, setLoadingPuzzle] = useState(false);
-  const [progressExpanded, setProgressExpanded] = useState(false);
-  const [bonusExpanded, setBonusExpanded] = useState(false);
 
   useEffect(() => {
     setSharingLocation(user?.share_live_location !== false);
@@ -150,16 +148,6 @@ export default function ProfileScreen() {
 
   const s = makeStyles(colors);
 
-  const completedOrders = orders.filter(o => o.status === 'completed');
-  const totalTrips = completedOrders.length;
-  const milestones = [10, 50, 100, 250, 500, 1000];
-  const currentMilestone = milestones.find(m => totalTrips < m) || milestones[milestones.length - 1];
-  const prevMilestone = milestones[milestones.indexOf(currentMilestone) - 1] || 0;
-  const progressPct = currentMilestone > prevMilestone
-    ? Math.min(Math.round(((totalTrips - prevMilestone) / (currentMilestone - prevMilestone)) * 100), 100)
-    : 100;
-  const rank = totalTrips >= 1000 ? '🏆 Легенда' : totalTrips >= 500 ? '🥇 Профи' : totalTrips >= 250 ? '🥈 Мастер' : totalTrips >= 100 ? '🥉 Эксперт' : totalTrips >= 50 ? '⭐ Опытный' : totalTrips >= 10 ? '🚗 Активный' : '🆕 Новичок';
-
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <ScrollView style={s.container} contentContainerStyle={[s.content, { paddingTop: Math.max(insets.top, 12), paddingBottom: 40 + insets.bottom }]}>
@@ -198,7 +186,7 @@ export default function ProfileScreen() {
         <View style={[s.divider, { backgroundColor: colors.border }]} />
 
         {/* Language */}
-        <TouchableOpacity style={s.row} onPress={() => setLangModalVisible(true)}>
+        <TouchableOpacity style={s.row} onPress={() => setLangModalVisible(!langModalVisible)}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#30D15820' }]}>
               <Ionicons name="language-outline" size={18} color="#30D158" />
@@ -209,9 +197,22 @@ export default function ProfileScreen() {
             <Text style={{ color: colors.textSecondary, fontSize: 14 }}>
               {lang === 'ru' ? 'Русский' : "O'zbek"}
             </Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+            <Ionicons name={langModalVisible ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
           </View>
         </TouchableOpacity>
+
+        {langModalVisible && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+            {[{ code:'ru', label:'🇷🇺 Русский' }, { code:'uz', label:"🇺🇿 O'zbek" }].map((item) => (
+              <TouchableOpacity key={item.code}
+                style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12, borderRadius: 10, backgroundColor: lang === item.code ? (isDark ? 'rgba(255,204,0,0.1)' : '#FFF8E1') : 'transparent', marginBottom: 4 }}
+                onPress={() => handleLanguageChange(item.code)}>
+                <Text style={{ color: colors.text, fontSize: 16 }}>{item.label}</Text>
+                {lang === item.code && <Ionicons name="checkmark" size={20} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
         <View style={[s.divider, { backgroundColor: colors.border }]} />
 
         {/* Location sharing */}
@@ -236,137 +237,28 @@ export default function ProfileScreen() {
         </TouchableOpacity>
         <View style={[s.divider, { backgroundColor: colors.border }]} />
 
-        {/* ── My Progress (collapsible, closed by default, trip history inside) ── */}
-        <TouchableOpacity style={s.row} onPress={() => {
-          const next = !progressExpanded;
-          setProgressExpanded(next);
-          if (next) loadHistory();
-        }}>
-          <View style={s.rowLeft}>
-            <View style={[s.rowIconWrap, { backgroundColor: '#4CAF5020' }]}>
-              <Ionicons name="trending-up" size={18} color="#4CAF50" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'myProgress') || 'Мой прогресс'}</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                {totalTrips} {t(lang, 'ordersCompleted') || 'заказов выполнено'}
-              </Text>
-            </View>
-          </View>
-          <Ionicons name={progressExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        {progressExpanded && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-            {/* Level + progress bar */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 14 }}>{rank}</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{totalTrips} / {currentMilestone}</Text>
-            </View>
-            <View style={{ height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden' }}>
-              <View style={{ height: '100%', width: `${progressPct}%`, backgroundColor: '#4CAF50', borderRadius: 5 }} />
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{prevMilestone}</Text>
-              <Text style={{ color: '#4CAF50', fontSize: 12, fontWeight: '700' }}>{progressPct}%</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{currentMilestone}</Text>
-            </View>
-
-            {/* Trip history inline */}
-            <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14, marginTop: 16, marginBottom: 10 }}>
-              {t(lang, 'tripHistory')}
-            </Text>
-            {loadingHistory ? (
-              <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
-            ) : orders.length === 0 ? (
-              <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 8 }}>
-                {lang === 'uz' ? "Sayohatlar yo'q" : 'Нет поездок'}
-              </Text>
-            ) : (
-              orders.slice(0, 10).map((order) => (
-                <View key={order.id} style={[s.historyCard, { backgroundColor: colors.background }]}>
-                  <View style={s.orderCardHeader}>
-                    <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[order.status] || '#9E9E9E' }]}>
-                      <Text style={s.statusBadgeText}>{STATUS_LABELS[order.status] || order.status}</Text>
-                    </View>
-                    <Text style={[s.orderDate, { color: colors.textSecondary }]}>{formatDate(order.created_at)}</Text>
-                  </View>
-                  <View style={s.orderRoute}>
-                    <Text style={{ fontSize: 10, color: '#43A047', marginRight: 6 }}>●</Text>
-                    <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.pickup_address || '—'}</Text>
-                  </View>
-                  <View style={s.orderRoute}>
-                    <Text style={{ fontSize: 10, color: '#E53935', marginRight: 6 }}>■</Text>
-                    <Text style={[s.orderAddr, { color: colors.text }]} numberOfLines={1}>{order.destination_address || '—'}</Text>
-                  </View>
-                  {order.car_number ? (
-                    <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 4 }}>🚗 {order.car_number}</Text>
-                  ) : null}
-                  {order.total_price != null && (
-                    <Text style={[s.orderPrice, { color: colors.primary }]}>
-                      {parseFloat(order.total_price).toLocaleString()} {t(lang, 'sum')}
-                    </Text>
-                  )}
-                </View>
-              ))
-            )}
-          </View>
-        )}
-        <View style={[s.divider, { backgroundColor: colors.border }]} />
-
         {/* ── Referral ── */}
-        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang, 'referral') || 'Рефералка', t(lang, 'referralInfo') || 'Пригласите друзей и получайте бонусы!')}>
+        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang, 'referral'), t(lang, 'referralInfo'))}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#FF9F0A20' }]}>
               <Ionicons name="gift-outline" size={18} color="#FF9F0A" />
             </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'referral') || 'Рефералка'}</Text>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'referral')}</Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={[s.divider, { backgroundColor: colors.border }]} />
 
-        {/* ── Bonus History (collapsible) ── */}
-        <TouchableOpacity style={s.row} onPress={() => setBonusExpanded(!bonusExpanded)}>
+        {/* ── Bonus History ── */}
+        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang, 'bonusHistory'), t(lang, 'comingSoon'))}>
           <View style={s.rowLeft}>
             <View style={[s.rowIconWrap, { backgroundColor: '#F59E0B20' }]}>
               <Ionicons name="trophy-outline" size={18} color="#F59E0B" />
             </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'bonusHistory') || 'История бонусов'}</Text>
-          </View>
-          <Ionicons name={bonusExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        {bonusExpanded && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-            <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 8 }}>
-              {lang === 'uz' ? 'Bonuslar hali mavjud emas' : 'Бонусы пока недоступны'}
-            </Text>
-          </View>
-        )}
-        <View style={[s.divider, { backgroundColor: colors.border }]} />
-
-        {/* ── Friends placeholder ── */}
-        <TouchableOpacity style={s.row} onPress={() => Alert.alert(t(lang, 'friends') || 'Друзья', lang === 'uz' ? "Tez kunda" : 'Скоро будет доступно')}>
-          <View style={s.rowLeft}>
-            <View style={[s.rowIconWrap, { backgroundColor: '#5B8DEE20' }]}>
-              <Ionicons name="people-outline" size={18} color="#5B8DEE" />
-            </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'friends') || 'Друзья'}</Text>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'bonusHistory')}</Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
-        <View style={[s.divider, { backgroundColor: colors.border }]} />
-
-        {/* ── Ratings ── */}
-        <View style={s.row}>
-          <View style={s.rowLeft}>
-            <View style={[s.rowIconWrap, { backgroundColor: '#FFC10720' }]}>
-              <Ionicons name="star" size={18} color="#FFC107" />
-            </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'myRatings') || 'Мои оценки'}</Text>
-          </View>
-        </View>
 
       </View>
 
@@ -376,7 +268,7 @@ export default function ProfileScreen() {
           <Text style={{ fontSize: 28 }}>🧩</Text>
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
-              ВСЕГО ОЧКОВ
+              {t(lang, 'totalPoints')}
             </Text>
             {loadingPuzzle
               ? <ActivityIndicator size="small" color={colors.primary} style={{ alignSelf: 'flex-start' }} />
@@ -400,7 +292,7 @@ export default function ProfileScreen() {
             <View style={[s.rowIconWrap, { backgroundColor: '#FF6B0020' }]}>
               <Text style={{ fontSize: 16 }}>🎮</Text>
             </View>
-            <Text style={[s.rowLabel, { color: colors.text }]}>История игр</Text>
+            <Text style={[s.rowLabel, { color: colors.text }]}>{t(lang, 'gameHistory')}</Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             {loadingPuzzle
@@ -422,14 +314,14 @@ export default function ProfileScreen() {
         <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
           <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
             <TouchableOpacity onPress={() => setPuzzleModalVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-              <Text style={{ color: colors.primary, fontSize: 16 }}>← Назад</Text>
+              <Text style={{ color: colors.primary, fontSize: 16 }}>{t(lang, 'back')}</Text>
             </TouchableOpacity>
             <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1, textAlign: 'center', marginRight: 40 }}>
-              🧩 История игр
+              🧩 {t(lang, 'gameHistory')}
             </Text>
           </View>
           <View style={[s.puzzleModalTotal, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Всего очков набрано</Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{t(lang, 'totalPointsEarned')}</Text>
             <Text style={{ color: colors.primary, fontSize: 32, fontWeight: '900' }}>{puzzleTotal.toLocaleString()}</Text>
           </View>
 
@@ -441,15 +333,15 @@ export default function ProfileScreen() {
                 contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
                 ListEmptyComponent={
                   <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>
-                    Пока нет завершённых игр
+                    {t(lang, 'noGamesYet')}
                   </Text>
                 }
                 renderItem={({ item: sc, index }) => {
                   const diffLabel = (() => {
-                    if (sc.total_questions <= 9)  return { label: 'Легко',   color: '#43A047', grid: '3×3' };
-                    if (sc.total_questions <= 16) return { label: 'Средне',  color: '#1E88E5', grid: '4×4' };
-                    if (sc.total_questions <= 25) return { label: 'Сложно',  color: '#FB8C00', grid: '5×5' };
-                    return                               { label: 'Хардкор', color: '#E53935', grid: '6×6' };
+                    if (sc.total_questions <= 9)  return { label: t(lang, 'diffEasy'),     color: '#43A047', grid: '3×3' };
+                    if (sc.total_questions <= 16) return { label: t(lang, 'diffMedium'),    color: '#1E88E5', grid: '4×4' };
+                    if (sc.total_questions <= 25) return { label: t(lang, 'diffHard'),      color: '#FB8C00', grid: '5×5' };
+                    return                               { label: t(lang, 'diffHardcore'),  color: '#E53935', grid: '6×6' };
                   })();
                   return (
                     <View style={[s.puzzleCard, { backgroundColor: colors.card }]}>
@@ -467,7 +359,7 @@ export default function ProfileScreen() {
                           +{sc.score} pts
                         </Text>
                         <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                          {sc.total_questions} кусочков
+                          {sc.total_questions} {t(lang, 'pieces')}
                         </Text>
                         <Text style={{ color: colors.textSecondary, fontSize: 13, marginLeft: 'auto' }}>
                           #{index + 1}
@@ -481,27 +373,6 @@ export default function ProfileScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Language modal */}
-      <Modal visible={langModalVisible} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={[s.modalSheet, { backgroundColor: colors.background }]}>
-            <Text style={[s.modalTitle, { color: colors.text }]}>{t(lang,'selectLanguage')}</Text>
-            {[
-              { code: 'ru', label: '🇷🇺 Русский' },
-              { code: 'uz', label: "🇺🇿 O'zbek" },
-            ].map((item) => (
-              <TouchableOpacity key={item.code} style={s.langOption}
-                onPress={() => handleLanguageChange(item.code)}>
-                <Text style={[s.langLabel, { color: colors.text }]}>{item.label}</Text>
-                {lang === item.code && <Text style={{ color: colors.primary }}>✓</Text>}
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={s.closeBtn} onPress={() => setLangModalVisible(false)}>
-              <Text style={{ color: colors.textSecondary }}>{t(lang,'close')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
       </ScrollView>
     </SafeAreaView>
   );
