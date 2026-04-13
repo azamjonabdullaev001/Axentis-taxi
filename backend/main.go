@@ -132,6 +132,12 @@ func main() {
 			// Driver balance
 			protected.GET("/driver/balance", orderHandler.GetDriverBalance)
 
+			// Driver saved cards & self-top-up (demo)
+			protected.GET("/driver/cards", orderHandler.GetDriverCards)
+			protected.POST("/driver/cards", orderHandler.AddDriverCard)
+			protected.DELETE("/driver/cards/:id", orderHandler.DeleteDriverCard)
+			protected.POST("/driver/top-up", orderHandler.DriverSelfTopUp)
+
 			// Friends
 			protected.GET("/drivers/search", friendsHandler.SearchDriver)
 			protected.POST("/driver/friends/request", friendsHandler.SendRequest)

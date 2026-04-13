@@ -136,7 +136,7 @@ async function fetchRoadRoute(pickup, dest) {
   const c1 = new AbortController();
   const t1 = setTimeout(() => c1.abort(), 6000);
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true&radiuses=50;50`;
     const res = await fetch(url, { signal: c1.signal });
     clearTimeout(t1);
     const result = extractRouteCoords(await res.json(), dest);
@@ -1029,6 +1029,11 @@ export default function HomeScreen() {
   const s = makeStyles(colors);
   const routeColor = ROUTE_COLORS[orderStatus] || '#2196F3';
 
+  // Dynamic stroke width: thinner when zoomed out, thicker when zoomed in
+  const delta = region?.latitudeDelta || 0.02;
+  const strokeMain = Math.max(2, Math.min(7, 5 * (0.02 / delta)));
+  const strokeDash = Math.max(1.5, strokeMain * 0.75);
+
   return (
     <View style={s.container}>
       <MapView
@@ -1086,7 +1091,7 @@ export default function HomeScreen() {
           <Polyline
             coordinates={routePreviewCoords}
             strokeColor="#FFCC00"
-            strokeWidth={5}
+            strokeWidth={strokeMain}
             geodesic
             lineCap="round"
             lineJoin="round"
@@ -1104,7 +1109,7 @@ export default function HomeScreen() {
               key={`pickup-dash-${dashPhase}`}
               coordinates={[pickupCoords, firstPt]}
               strokeColor="#FFCC00"
-              strokeWidth={4}
+              strokeWidth={strokeDash}
               lineDashPattern={[10, 8]}
               lineDashPhase={dashPhase}
               geodesic
@@ -1125,7 +1130,7 @@ export default function HomeScreen() {
               key={`dest-dash-${dashPhase}`}
               coordinates={[lastPt, destCoords]}
               strokeColor="#FFCC00"
-              strokeWidth={4}
+              strokeWidth={strokeDash}
               lineDashPattern={[10, 8]}
               lineDashPhase={dashPhase}
               geodesic
@@ -1140,7 +1145,7 @@ export default function HomeScreen() {
           <Polyline
             coordinates={routeCoords}
             strokeColor={routeColor}
-            strokeWidth={5}
+            strokeWidth={strokeMain}
             geodesic
             lineCap="round"
             lineJoin="round"
@@ -1156,7 +1161,7 @@ export default function HomeScreen() {
             <Polyline
               coordinates={[lastPt, destCoords]}
               strokeColor={routeColor}
-              strokeWidth={4}
+              strokeWidth={strokeDash}
               lineDashPattern={[10, 8]}
               geodesic
               lineCap="round"

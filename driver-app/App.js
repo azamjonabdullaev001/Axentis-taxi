@@ -4,6 +4,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, ActivityIndicator, Image } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 const MAP_ICON = require('./assets/icons8-map-100.png');
 const ACCOUNT_ICON = require('./assets/icons8-account-100.png');
@@ -16,6 +17,7 @@ import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import RegisterScreen from './src/screens/RegisterScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
+import BalanceScreen from './src/screens/BalanceScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 
 const Stack = createStackNavigator();
@@ -74,6 +76,18 @@ function MainTabs() {
                 style={{ width: 22, height: 22, opacity: focused ? 1 : 0.5, tintColor: isDark ? '#f0f0f0' : undefined }}
                 resizeMode="contain"
               />
+            </View>
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Balance"
+        component={BalanceScreen}
+        options={{
+          tabBarLabel: lang === 'uz' ? 'Balans' : 'Баланс',
+          tabBarIcon: ({ focused }) => (
+            <View style={iconWrapStyle}>
+              <Ionicons name="wallet-outline" size={22} color={focused ? colors.primary : colors.textSecondary} />
             </View>
           ),
         }}

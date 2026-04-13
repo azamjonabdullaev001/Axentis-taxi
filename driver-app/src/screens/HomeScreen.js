@@ -239,7 +239,6 @@ export default function HomeScreen() {
 
   // Driver balance state
   const [driverBalance, setDriverBalance] = useState(null);  // { balance, balance_exempt, service_share_pct }
-  const [balanceLoading, setBalanceLoading] = useState(false);
 
   useEffect(() => {
     driverStatusRef.current = driverStatus;
@@ -666,14 +665,6 @@ export default function HomeScreen() {
     }
   }
 
-  async function fetchBalance() {
-    try {
-      setBalanceLoading(true);
-      const { data } = await driverAPI.getBalance();
-      setDriverBalance(data);
-    } catch {} finally { setBalanceLoading(false); }
-  }
-
   function goToMyLocation() {
     const loc = locationRef.current;
     if (loc) {
@@ -1038,29 +1029,10 @@ export default function HomeScreen() {
               <View style={[s.statusDot, { backgroundColor: '#888' }]} />
               <Text style={s.statusTitle}>{t(lang,'youOffline')}</Text>
             </View>
-            {driverBalance && driverBalance.balance <= 0 && !driverBalance.balance_exempt && (
-              <View style={s.balanceWarning}>
-                <Text style={s.balanceWarningIcon}>⚠️</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.balanceWarningText}>{t(lang,'balanceWarning')}</Text>
-                  <Text style={s.balanceWarningAmount}>{t(lang,'balance')}: {Math.round(driverBalance.balance).toLocaleString()} {t(lang,'sum')}</Text>
-                </View>
-              </View>
-            )}
-            {driverBalance && (driverBalance.balance > 0 || driverBalance.balance_exempt) && (
+            {driverBalance && driverBalance.balance <= 0 && !driverBalance.balance_exempt ? (
+              <Text style={[s.statusSub, { color: '#EF4444' }]}>⚠️ {t(lang,'balanceWarning')}</Text>
+            ) : (
               <Text style={s.statusSub}>{t(lang,'enableOnline')}</Text>
-            )}
-            {/* Balance display */}
-            {driverBalance && (
-              <View style={s.balanceRow}>
-                <Text style={s.balanceLabel}>💰 {t(lang,'balance')}:</Text>
-                <Text style={[s.balanceValue, driverBalance.balance <= 0 && !driverBalance.balance_exempt && { color: '#EF4444' }]}>
-                  {Math.round(driverBalance.balance).toLocaleString()} {t(lang,'sum')}
-                </Text>
-                {driverBalance.balance_exempt && (
-                  <View style={s.exemptBadge}><Text style={s.exemptBadgeText}>{t(lang,'balanceExempt')}</Text></View>
-                )}
-              </View>
             )}
             <TouchableOpacity style={[s.primaryBtn, driverBalance && driverBalance.balance <= 0 && !driverBalance.balance_exempt && { opacity: 0.5 }]} onPress={() => toggleOnline(true)}>
               <Text style={s.primaryBtnText}>{t(lang,'goOnline')}</Text>
@@ -1075,18 +1047,6 @@ export default function HomeScreen() {
               <View style={[s.statusDot, { backgroundColor: '#22C55E' }]} />
               <Text style={s.statusTitle}>{t(lang,'youOnline')}</Text>
             </View>
-            {/* Inline balance display */}
-            {driverBalance && (
-              <View style={s.balanceRow}>
-                <Text style={s.balanceLabel}>💰 {t(lang,'balance')}:</Text>
-                <Text style={[s.balanceValue, driverBalance.balance <= 20000 && !driverBalance.balance_exempt && { color: '#FF9800' }]}>
-                  {Math.round(driverBalance.balance).toLocaleString()} {t(lang,'sum')}
-                </Text>
-                {driverBalance.balance_exempt && (
-                  <View style={s.exemptBadge}><Text style={s.exemptBadgeText}>{t(lang,'balanceExempt')}</Text></View>
-                )}
-              </View>
-            )}
             <Text style={s.statusSub}>{t(lang,'searchingClients')}{'\n'}{t(lang,'keepAppOpen')}</Text>
             <TouchableOpacity style={s.offlineBtn} onPress={() => toggleOnline(false)}>
               <Text style={s.offlineBtnText}>{t(lang,'goOffline')}</Text>

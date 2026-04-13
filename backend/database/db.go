@@ -422,4 +422,17 @@ CREATE TABLE IF NOT EXISTS balance_transactions (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_balance_tx_driver ON balance_transactions (driver_id, created_at DESC);
+
+-- Saved payment cards (demo — no real payment provider)
+CREATE TABLE IF NOT EXISTS driver_cards (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+    card_number VARCHAR(19) NOT NULL,
+    card_holder VARCHAR(100) DEFAULT '',
+    expiry VARCHAR(5) NOT NULL,
+    card_type VARCHAR(20) DEFAULT 'unknown',
+    is_default BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_driver_cards ON driver_cards (driver_id);
 `

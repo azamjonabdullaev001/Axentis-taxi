@@ -82,6 +82,12 @@ export const driverAPI = {
     api.post('/referral/apply', { referral_code, benefit_type }),
   getBonusHistory: () => api.get('/driver/bonus-history'),
   getBalance: () => api.get('/driver/balance'),
+  getCards: () => api.get('/driver/cards'),
+  addCard: (card_number, card_holder, expiry) =>
+    api.post('/driver/cards', { card_number, card_holder, expiry }),
+  deleteCard: (id) => api.delete(`/driver/cards/${id}`),
+  selfTopUp: (amount, card_id) =>
+    api.post('/driver/top-up', { amount, card_id }),
 };
 
 export const friendsAPI = {

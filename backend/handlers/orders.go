@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"axentis-taxi/models"
@@ -1617,3 +1618,201 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 	return R * c
 }
 
+// ── Saved Cards (demo) ──────────────────────────────────────────────────────
+
+// GET /driver/cards — list driver's saved cards
+func (h *OrderHandler) GetDriverCards(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+	rows, err := h.db.Query(context.Background(),
+		`SELECT id, card_number, card_holder, expiry, card_type, is_default, created_at
+		 FROM driver_cards WHERE driver_id = $1 ORDER BY created_at DESC`, driverID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	type card struct {
+		ID         string `json:"id"`
+		Number     string `json:"card_number"`
+		Holder     string `json:"card_holder"`
+		Expiry     string `json:"expiry"`
+		CardType   string `json:"card_type"`
+		IsDefault  bool   `json:"is_default"`
+		CreatedAt  string `json:"created_at"`
+	}
+	cards := []card{}
+	for rows.Next() {
+		var cd card
+		var t time.Time
+		rows.Scan(&cd.ID, &cd.Number, &cd.Holder, &cd.Expiry, &cd.CardType, &cd.IsDefault, &t)
+		cd.CreatedAt = t.Format(time.RFC3339)
+		// Mask card number for display
+		if len(cd.Number) > 4 {
+			cd.Number = strings.Repeat("*", len(cd.Number)-4) + cd.Number[len(cd.Number)-4:]
+		}
+		cards = append(cards, cd)
+	}
+	c.JSON(http.StatusOK, gin.H{"cards": cards})
+}
+
+// POST /driver/cards — add a new card
+func (h *OrderHandler) AddDriverCard(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+	var body struct {
+		CardNumber string `json:"card_number"`
+		CardHolder string `json:"card_holder"`
+		Expiry     string `json:"expiry"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	// Basic validation
+	num := strings.ReplaceAll(body.CardNumber, " ", "")
+	if len(num) < 13 || len(num) > 19 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid card number"})
+		return
+	}
+	if len(body.Expiry) < 4 || len(body.Expiry) > 5 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid expiry (MM/YY)"})
+		return
+	}
+	// Detect card type by prefix
+	cardType := "unknown"
+	if strings.HasPrefix(num, "8600") {
+		cardType = "uzcard"
+	} else if strings.HasPrefix(num, "9860") {
+		cardType = "humo"
+	} else if strings.HasPrefix(num, "4") {
+		cardType = "visa"
+	} else if strings.HasPrefix(num, "5") {
+		cardType = "mastercard"
+	}
+	// Check duplicate
+	var exists bool
+	h.db.QueryRow(context.Background(),
+		`SELECT EXISTS(SELECT 1 FROM driver_cards WHERE driver_id = $1 AND card_number = $2)`,
+		driverID, num).Scan(&exists)
+	if exists {
+		c.JSON(http.StatusConflict, gin.H{"error": "Card already added"})
+		return
+	}
+	// If first card, make default
+	var cardCount int
+	h.db.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM driver_cards WHERE driver_id = $1`, driverID).Scan(&cardCount)
+	isDefault := cardCount == 0
+	var cardID string
+	err := h.db.QueryRow(context.Background(),
+		`INSERT INTO driver_cards (driver_id, card_number, card_holder, expiry, card_type, is_default)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		driverID, num, body.CardHolder, body.Expiry, cardType, isDefault).Scan(&cardID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": cardID, "card_type": cardType, "is_default": isDefault})
+}
+
+// DELETE /driver/cards/:id — remove a card
+func (h *OrderHandler) DeleteDriverCard(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+	cardID := c.Param("id")
+	tag, err := h.db.Exec(context.Background(),
+		`DELETE FROM driver_cards WHERE id = $1 AND driver_id = $2`, cardID, driverID)
+	if err != nil || tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Card not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+// POST /driver/top-up — demo self-top-up via saved card
+func (h *OrderHandler) DriverSelfTopUp(c *gin.Context) {
+	if c.GetString("user_role") != "driver" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Driver only"})
+		return
+	}
+	userID := c.GetString("user_id")
+	var driverID string
+	if err := h.db.QueryRow(context.Background(),
+		`SELECT id FROM drivers WHERE user_id = $1`, userID).Scan(&driverID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Driver not found"})
+		return
+	}
+	var body struct {
+		Amount float64 `json:"amount"`
+		CardID string  `json:"card_id"`
+	}
+	if err := c.BindJSON(&body); err != nil || body.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid amount"})
+		return
+	}
+	if body.Amount < 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Minimum 1000 sum"})
+		return
+	}
+	if body.Amount > 10000000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Maximum 10 000 000 sum"})
+		return
+	}
+	// Verify card belongs to driver
+	if body.CardID != "" {
+		var cardExists bool
+		h.db.QueryRow(context.Background(),
+			`SELECT EXISTS(SELECT 1 FROM driver_cards WHERE id = $1 AND driver_id = $2)`,
+			body.CardID, driverID).Scan(&cardExists)
+		if !cardExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Card not found"})
+			return
+		}
+	}
+	// Demo: instantly credit balance (no real payment API)
+	var newBalance float64
+	err := h.db.QueryRow(context.Background(),
+		`UPDATE drivers SET balance = balance + $1 WHERE id = $2 RETURNING balance`,
+		body.Amount, driverID).Scan(&newBalance)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// Log transaction
+	h.db.Exec(context.Background(),
+		`INSERT INTO balance_transactions (driver_id, amount, tx_type, description)
+		 VALUES ($1, $2, 'top_up', $3)`,
+		driverID, body.Amount, "Пополнение с карты (демо)")
+	// Notify via WS
+	msg, _ := json.Marshal(map[string]interface{}{"type": "balance_updated", "balance": newBalance})
+	h.hub.SendToUser(userID, msg)
+	c.JSON(http.StatusOK, gin.H{"new_balance": newBalance})
+}

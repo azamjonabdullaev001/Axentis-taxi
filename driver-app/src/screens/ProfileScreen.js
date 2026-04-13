@@ -221,39 +221,6 @@ export default function ProfileScreen() {
       {/* ══════ UNIFIED BLOCK ══════ */}
       <View style={[s.section, { backgroundColor: colors.card }]}>
 
-        {/* ── Referral code (top of block) ── */}
-        {driver?.referral_code ? (
-          <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 }}>
-            <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6, textAlign: 'center' }}>🎁 {lang === 'uz' ? 'Mening referal kodam' : 'Мой реферальный код'}</Text>
-            <View style={{ backgroundColor: colors.primary, borderRadius: 14, padding: 14, alignItems: 'center' }}>
-              <Text style={{ color: '#000', fontSize: 26, fontWeight: '900', letterSpacing: 6 }}>{driver.referral_code}</Text>
-              <View style={{ flexDirection: 'row', marginTop: 10, gap: 12 }}>
-                <TouchableOpacity
-                  onPress={() => {
-                    Clipboard.setString(driver.referral_code);
-                    Alert.alert('✅', lang === 'uz' ? 'Nusxalandi' : 'Скопировано');
-                  }}
-                  style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
-                >
-                  <Ionicons name="copy-outline" size={16} color="#000" />
-                  <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{lang === 'uz' ? 'Nusxalash' : 'Копировать'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={async () => {
-                    try {
-                      await Share.share({ message: `${lang === 'uz' ? "Mening referal kodam" : 'Мой реферальный код'}: ${driver.referral_code}` });
-                    } catch {}
-                  }}
-                  style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
-                >
-                  <Ionicons name="share-social-outline" size={16} color="#000" />
-                  <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{lang === 'uz' ? 'Ulashish' : 'Поделиться'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        ) : null}
-
         {/* ── Divider ── */}
         <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
 
@@ -426,6 +393,32 @@ export default function ProfileScreen() {
 
         {referralExpanded && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+            {/* ── My referral code ── */}
+            {driver?.referral_code ? (
+              <View style={{ marginBottom: 12 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6, textAlign: 'center' }}>🎁 {lang === 'uz' ? 'Mening referal kodam' : 'Мой реферальный код'}</Text>
+                <View style={{ backgroundColor: colors.primary, borderRadius: 14, padding: 14, alignItems: 'center' }}>
+                  <Text style={{ color: '#000', fontSize: 26, fontWeight: '900', letterSpacing: 6 }}>{driver.referral_code}</Text>
+                  <View style={{ flexDirection: 'row', marginTop: 10, gap: 12 }}>
+                    <TouchableOpacity
+                      onPress={() => { Clipboard.setString(driver.referral_code); Alert.alert('✅', lang === 'uz' ? 'Nusxalandi' : 'Скопировано'); }}
+                      style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                    >
+                      <Ionicons name="copy-outline" size={16} color="#000" />
+                      <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{lang === 'uz' ? 'Nusxalash' : 'Копировать'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={async () => { try { await Share.share({ message: `${lang === 'uz' ? "Mening referal kodam" : 'Мой реферальный код'}: ${driver.referral_code}` }); } catch {} }}
+                      style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                    >
+                      <Ionicons name="share-social-outline" size={16} color="#000" />
+                      <Text style={{ color: '#000', fontWeight: '700', fontSize: 13 }}>{lang === 'uz' ? 'Ulashish' : 'Поделиться'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+
             {driver?.referral_benefit_type ? (
               <View style={{ backgroundColor: '#E8F5E9', borderRadius: 10, padding: 12, marginBottom: 8 }}>
                 <Text style={{ color: '#2E7D32', fontWeight: '700', fontSize: 14 }}>
