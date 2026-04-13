@@ -11,6 +11,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { authAPI, driverAPI, friendsAPI } from '../services/api';
 import { buildAvatarUrl } from '../services/api';
+import socketService from '../services/socket';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../config';
 import { t } from '../i18n';
@@ -57,11 +58,123 @@ export default function ProfileScreen() {
   const [referralBenefitInfo, setReferralBenefitInfo] = useState({ type: '', referred_by: '' });
   const [loadingBonuses, setLoadingBonuses] = useState(false);
 
+  // Balance / Wallet
+  const [balanceExpanded, setBalanceExpanded] = useState(false);
+  const [balance, setBalance] = useState(0);
+  const [balanceExempt, setBalanceExempt] = useState(false);
+  const [balanceTransactions, setBalanceTransactions] = useState([]);
+  const [balanceCards, setBalanceCards] = useState([]);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [topUpVisible, setTopUpVisible] = useState(false);
+  const [topUpAmount, setTopUpAmount] = useState('');
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [topUpLoading, setTopUpLoading] = useState(false);
+  const [addCardVisible, setAddCardVisible] = useState(false);
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardHolder, setCardHolder] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [addCardLoading, setAddCardLoading] = useState(false);
+
   useEffect(() => {
     driverAPI.getDriverRatings().then(({ data }) => setRatingsData(data)).catch(() => {});
     loadHistory();
     loadBonusHistory();
   }, []);
+
+  // Balance socket listener
+  useEffect(() => {
+    const handler = (data) => {
+      if (data.balance !== undefined) setBalance(data.balance);
+    };
+    socketService.on('balance_updated', handler);
+    return () => socketService.off('balance_updated');
+  }, []);
+
+  async function loadBalanceData() {
+    setBalanceLoading(true);
+    try {
+      const [balRes, cardRes] = await Promise.all([
+        driverAPI.getBalance(),
+        driverAPI.getCards(),
+      ]);
+      setBalance(balRes.data.balance || 0);
+      setBalanceExempt(balRes.data.balance_exempt || false);
+      setBalanceTransactions(balRes.data.transactions || []);
+      setBalanceCards(cardRes.data.cards || []);
+    } catch {} finally { setBalanceLoading(false); }
+  }
+
+  function handleTopUp() {
+    const amt = parseInt(topUpAmount, 10);
+    if (!amt || amt < 1000) {
+      Alert.alert(t(lang, 'error'), lang === 'uz' ? 'Minimum 1 000 soʻm' : 'Минимум 1 000 сум');
+      return;
+    }
+    if (!selectedCard) {
+      Alert.alert(t(lang, 'error'), lang === 'uz' ? 'Kartani tanlang' : 'Выберите карту');
+      return;
+    }
+    setTopUpLoading(true);
+    driverAPI.selfTopUp(amt, selectedCard.id).then(({ data }) => {
+      setBalance(data.new_balance);
+      setTopUpVisible(false);
+      setTopUpAmount('');
+      Alert.alert('✅', lang === 'uz' ? 'Balans toʻldirildi!' : 'Баланс пополнен!');
+      loadBalanceData();
+    }).catch((e) => {
+      Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+    }).finally(() => setTopUpLoading(false));
+  }
+
+  function handleAddCard() {
+    const num = cardNumber.replace(/\s/g, '');
+    if (num.length < 13) {
+      Alert.alert(t(lang, 'error'), lang === 'uz' ? 'Karta raqami notoʻgʻri' : 'Неверный номер карты');
+      return;
+    }
+    if (cardExpiry.length < 4) {
+      Alert.alert(t(lang, 'error'), lang === 'uz' ? 'Amal qilish muddati notoʻgʻri' : 'Неверный срок действия');
+      return;
+    }
+    setAddCardLoading(true);
+    driverAPI.addCard(num, cardHolder, cardExpiry).then(() => {
+      setAddCardVisible(false);
+      setCardNumber(''); setCardHolder(''); setCardExpiry('');
+      Alert.alert('✅', lang === 'uz' ? 'Karta qoʻshildi!' : 'Карта добавлена!');
+      loadBalanceData();
+    }).catch((e) => {
+      Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка');
+    }).finally(() => setAddCardLoading(false));
+  }
+
+  function handleDeleteCard(card) {
+    Alert.alert(
+      lang === 'uz' ? 'Kartani oʻchirish' : 'Удалить карту',
+      `${card.card_type.toUpperCase()} •••• ${card.card_number.slice(-4)}`,
+      [
+        { text: lang === 'uz' ? 'Bekor qilish' : 'Отмена', style: 'cancel' },
+        { text: lang === 'uz' ? 'Oʻchirish' : 'Удалить', style: 'destructive',
+          onPress: () => driverAPI.deleteCard(card.id).then(() => loadBalanceData()).catch((e) => Alert.alert(t(lang, 'error'), e?.response?.data?.error || 'Ошибка')),
+        },
+      ]
+    );
+  }
+
+  const formatCardInput = (text) => {
+    const clean = text.replace(/\D/g, '').slice(0, 16);
+    return clean.replace(/(.{4})/g, '$1 ').trim();
+  };
+  const formatExpiryInput = (text) => {
+    const clean = text.replace(/\D/g, '').slice(0, 4);
+    if (clean.length >= 3) return clean.slice(0, 2) + '/' + clean.slice(2);
+    return clean;
+  };
+  const cardTypeIcon = (type) => {
+    switch (type) {
+      case 'uzcard': return '🏦'; case 'humo': return '🔵';
+      case 'visa': return '💳'; case 'mastercard': return '🟠'; default: return '💳';
+    }
+  };
 
   async function loadFriendsData() {
     setFriendsLoading(true);
@@ -277,6 +390,129 @@ export default function ProfileScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
+
+        <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
+
+        {/* ── Balance / Wallet (collapsible) ── */}
+        <TouchableOpacity style={s.row} onPress={() => {
+          const next = !balanceExpanded;
+          setBalanceExpanded(next);
+          if (next) loadBalanceData();
+        }}>
+          <View style={s.rowLeft}>
+            <View style={[s.rowIconWrap, { backgroundColor: '#FFCC0020' }]}>
+              <Ionicons name="wallet-outline" size={18} color="#FFCC00" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowLabel, { color: colors.text }]}>{lang === 'uz' ? 'Hamyon' : 'Кошелёк'}</Text>
+              <Text style={{ color: balance <= 0 && !balanceExempt ? '#EF4444' : colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                {Math.round(balance).toLocaleString('ru-RU')} {t(lang, 'sum')}
+              </Text>
+            </View>
+          </View>
+          <Ionicons name={balanceExpanded ? 'chevron-up' : 'chevron-forward'} size={16} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        {balanceExpanded && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+            {balanceLoading ? <ActivityIndicator color={colors.primary} /> : (
+              <>
+                {/* Balance card */}
+                <View style={{ backgroundColor: colors.background, borderRadius: 14, padding: 16, alignItems: 'center', marginBottom: 12 }}>
+                  <Text style={{ color: colors.text, fontSize: 32, fontWeight: '900' }}>
+                    {Math.round(balance).toLocaleString('ru-RU')} <Text style={{ fontSize: 16, fontWeight: '400', color: colors.textSecondary }}>{t(lang, 'sum')}</Text>
+                  </Text>
+                  {balanceExempt && (
+                    <View style={{ backgroundColor: '#E8F5E9', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4, marginTop: 6 }}>
+                      <Text style={{ color: '#2E7D32', fontSize: 12, fontWeight: '600' }}>✓ {lang === 'uz' ? 'Balansdan ozod' : 'Освобождён от баланса'}</Text>
+                    </View>
+                  )}
+                  {balance <= 0 && !balanceExempt && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEE2E2', borderRadius: 10, padding: 8, marginTop: 8, width: '100%' }}>
+                      <Ionicons name="warning" size={14} color="#EF4444" />
+                      <Text style={{ color: '#EF4444', fontSize: 11, flex: 1 }}>{lang === 'uz' ? 'Balans manfiy — buyurtmalar bloklanadi' : 'Баланс отрицательный — заказы заблокированы'}</Text>
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12, marginTop: 12 }}
+                    onPress={() => { setTopUpVisible(true); if (balanceCards.length > 0) setSelectedCard(balanceCards[0]); }}
+                  >
+                    <Ionicons name="add-circle" size={18} color="#000" />
+                    <Text style={{ color: '#000', fontWeight: '800', fontSize: 14 }}>{lang === 'uz' ? 'Toʻldirish' : 'Пополнить'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Cards */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>{lang === 'uz' ? 'Kartalarim' : 'Мои карты'}</Text>
+                  <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }} onPress={() => setAddCardVisible(true)}>
+                    <Ionicons name="add" size={16} color={colors.primary} />
+                    <Text style={{ color: colors.primary, fontWeight: '600', fontSize: 12 }}>{lang === 'uz' ? 'Qoʻshish' : 'Добавить'}</Text>
+                  </TouchableOpacity>
+                </View>
+                {balanceCards.length === 0 ? (
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, textAlign: 'center', paddingVertical: 8 }}>
+                    {lang === 'uz' ? 'Kartalar yoʻq' : 'Нет сохранённых карт'}
+                  </Text>
+                ) : (
+                  balanceCards.map((card) => (
+                    <View key={card.id} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Text style={{ fontSize: 20 }}>{cardTypeIcon(card.card_type)}</Text>
+                        <View>
+                          <Text style={{ color: colors.textSecondary, fontSize: 10, fontWeight: '600' }}>{card.card_type.toUpperCase()}</Text>
+                          <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700', letterSpacing: 1 }}>•••• {card.card_number.slice(-4)}</Text>
+                        </View>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{card.expiry}</Text>
+                        {card.is_default && (
+                          <View style={{ backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                            <Text style={{ color: '#2E7D32', fontSize: 9, fontWeight: '700' }}>{lang === 'uz' ? 'Asosiy' : 'Осн.'}</Text>
+                          </View>
+                        )}
+                        <TouchableOpacity onPress={() => handleDeleteCard(card)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                          <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))
+                )}
+
+                {/* Transactions */}
+                {balanceTransactions.length > 0 && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700', marginBottom: 6 }}>{lang === 'uz' ? 'Oxirgi operatsiyalar' : 'Последние операции'}</Text>
+                    {balanceTransactions.slice(0, 10).map((tx, i) => {
+                      const isPositive = tx.amount > 0;
+                      const icon = tx.tx_type === 'commission' ? '📉' : tx.tx_type === 'top_up' ? '💰' : tx.tx_type === 'bonus' ? '🎁' : '⚙️';
+                      const label = tx.tx_type === 'commission' ? (lang === 'uz' ? 'Komissiya' : 'Комиссия')
+                        : tx.tx_type === 'top_up' ? (lang === 'uz' ? 'Toʻldirish' : 'Пополнение')
+                        : tx.tx_type === 'bonus' ? (lang === 'uz' ? 'Bonus' : 'Бонус')
+                        : (lang === 'uz' ? 'Tuzatish' : 'Корректировка');
+                      return (
+                        <View key={tx.id || i} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: i < balanceTransactions.slice(0, 10).length - 1 ? 1 : 0, borderBottomColor: colors.border }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                            <Text style={{ fontSize: 16 }}>{icon}</Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.text, fontSize: 12, fontWeight: '600' }}>{label}</Text>
+                              <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 1 }}>
+                                {tx.created_at ? new Date(tx.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={{ color: isPositive ? '#22C55E' : '#EF4444', fontSize: 13, fontWeight: '800' }}>
+                            {isPositive ? '+' : ''}{Math.round(tx.amount).toLocaleString('ru-RU')} {t(lang, 'sum')}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        )}
 
         <View style={{ height: 1, backgroundColor: colors.border, marginHorizontal: 16 }} />
 
@@ -876,6 +1112,100 @@ export default function ProfileScreen() {
 
       {/* History modal */}
       <Modal visible={historyModalVisible} animationType="slide" onRequestClose={() => setHistoryModalVisible(false)}>
+
+      {/* ── Top-Up Modal ── */}
+      <Modal visible={topUpVisible} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, backgroundColor: colors.card }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800' }}>{lang === 'uz' ? 'Balansni toʻldirish' : 'Пополнить баланс'}</Text>
+              <TouchableOpacity onPress={() => setTopUpVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>{lang === 'uz' ? 'Karta tanlang' : 'Выберите карту'}</Text>
+            {balanceCards.length === 0 ? (
+              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.background, borderRadius: 12, padding: 14, marginBottom: 12 }} onPress={() => { setTopUpVisible(false); setAddCardVisible(true); }}>
+                <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+                <Text style={{ color: colors.primary, fontWeight: '600' }}>{lang === 'uz' ? 'Avval karta qoʻshing' : 'Сначала добавьте карту'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                {balanceCards.map((card) => (
+                  <TouchableOpacity key={card.id} onPress={() => setSelectedCard(card)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1.5, borderColor: selectedCard?.id === card.id ? colors.primary : colors.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginRight: 8, backgroundColor: selectedCard?.id === card.id ? colors.primary + '15' : 'transparent' }}>
+                    <Text style={{ fontSize: 16 }}>{cardTypeIcon(card.card_type)}</Text>
+                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>•••• {card.card_number.slice(-4)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 8 }}>{lang === 'uz' ? 'Summa' : 'Сумма'}</Text>
+            <TextInput
+              style={{ borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 22, fontWeight: '800', textAlign: 'center', color: colors.text, borderColor: colors.border, backgroundColor: colors.background }}
+              value={topUpAmount}
+              onChangeText={(v) => setTopUpAmount(v.replace(/\D/g, ''))}
+              keyboardType="numeric" placeholder="0" placeholderTextColor={colors.textSecondary}
+            />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+              {[10000, 50000, 100000, 200000, 500000].map((amt) => (
+                <TouchableOpacity key={amt} style={{ borderWidth: 1.5, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 }} onPress={() => setTopUpAmount(String(amt))}>
+                  <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>{(amt / 1000)}K</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={{ backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 20, opacity: (!topUpAmount || !selectedCard) ? 0.4 : 1 }}
+              disabled={!topUpAmount || !selectedCard || topUpLoading}
+              onPress={handleTopUp}
+            >
+              {topUpLoading ? <ActivityIndicator color="#000" /> : <Text style={{ color: '#000', fontWeight: '800', fontSize: 16 }}>{lang === 'uz' ? 'Toʻldirish' : 'Пополнить'}</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Add Card Modal ── */}
+      <Modal visible={addCardVisible} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, backgroundColor: colors.card }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800' }}>{lang === 'uz' ? 'Yangi karta' : 'Новая карта'}</Text>
+              <TouchableOpacity onPress={() => setAddCardVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>{lang === 'uz' ? 'Karta raqami' : 'Номер карты'}</Text>
+            <TextInput
+              style={{ borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 16, fontWeight: '600', color: colors.text, borderColor: colors.border, backgroundColor: colors.background }}
+              value={cardNumber} onChangeText={(v) => setCardNumber(formatCardInput(v))}
+              keyboardType="numeric" placeholder="0000 0000 0000 0000" placeholderTextColor={colors.textSecondary} maxLength={19}
+            />
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 12 }}>{lang === 'uz' ? 'Karta egasi' : 'Имя владельца'}</Text>
+            <TextInput
+              style={{ borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 16, fontWeight: '600', color: colors.text, borderColor: colors.border, backgroundColor: colors.background }}
+              value={cardHolder} onChangeText={setCardHolder}
+              placeholder="IVAN IVANOV" placeholderTextColor={colors.textSecondary} autoCapitalize="characters"
+            />
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 12 }}>{lang === 'uz' ? 'Amal qilish muddati' : 'Срок действия'}</Text>
+            <TextInput
+              style={{ borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 16, fontWeight: '600', color: colors.text, borderColor: colors.border, backgroundColor: colors.background }}
+              value={cardExpiry} onChangeText={(v) => setCardExpiry(formatExpiryInput(v))}
+              keyboardType="numeric" placeholder="MM/YY" placeholderTextColor={colors.textSecondary} maxLength={5}
+            />
+            <View style={{ backgroundColor: '#FFF8E1', borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 16 }}>
+              <Text style={{ color: '#F57F17', fontSize: 12 }}>⚠️ {lang === 'uz' ? 'Demo rejim — real toʻlov amalga oshirilmaydi' : 'Демо-режим — реальных списаний не будет'}</Text>
+            </View>
+            <TouchableOpacity
+              style={{ backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 16, alignItems: 'center', opacity: (!cardNumber || !cardExpiry) ? 0.4 : 1 }}
+              disabled={!cardNumber || !cardExpiry || addCardLoading}
+              onPress={handleAddCard}
+            >
+              {addCardLoading ? <ActivityIndicator color="#000" /> : <Text style={{ color: '#000', fontWeight: '800', fontSize: 16 }}>{lang === 'uz' ? 'Qoʻshish' : 'Добавить'}</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
         <SafeAreaView style={[{ flex: 1, backgroundColor: colors.background }]} edges={['top']}>
           <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
             <TouchableOpacity onPress={() => setHistoryModalVisible(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>

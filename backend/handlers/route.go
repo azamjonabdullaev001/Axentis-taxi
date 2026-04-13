@@ -47,7 +47,7 @@ func (h *RouteHandler) GetRoute(c *gin.Context) {
 	}
 
 	osrmURL := fmt.Sprintf(
-		"%s/route/v1/driving/%f,%f;%f,%f?overview=full&geometries=geojson&steps=true&continue_straight=true&radiuses=30;30",
+		"%s/route/v1/driving/%f,%f;%f,%f?overview=full&geometries=geojson&steps=true&continue_straight=true&radiuses=100;100",
 		h.osrmURL, pickupLng, pickupLat, destLng, destLat,
 	)
 

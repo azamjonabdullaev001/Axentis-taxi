@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert, Image, Animated, ScrollView, PanResponder, Vibration,
+  ActivityIndicator, Alert, Image, Animated, ScrollView, PanResponder, Vibration, Dimensions,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -1031,8 +1031,11 @@ export default function HomeScreen() {
 
   // Dynamic stroke width: thinner when zoomed out, thicker when zoomed in
   const delta = region?.latitudeDelta || 0.02;
-  const strokeMain = Math.max(2, Math.min(7, 5 * (0.02 / delta)));
-  const strokeDash = Math.max(1.5, strokeMain * 0.75);
+  // ~1 meter real-world width: scales naturally with zoom (nearly invisible when zoomed out)
+  const screenH = Dimensions.get('window').height;
+  const metersPerPixel = (delta * 111320) / screenH;
+  const strokeMain = Math.max(0.5, Math.min(10, 1 / metersPerPixel));
+  const strokeDash = Math.max(0.3, strokeMain * 0.7);
 
   return (
     <View style={s.container}>

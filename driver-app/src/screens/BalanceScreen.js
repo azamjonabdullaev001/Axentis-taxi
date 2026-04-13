@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { driverAPI } from '../services/api';
-import { connectSocket } from '../services/socket';
+import socketService from '../services/socket';
 import { t } from '../i18n';
 
 export default function BalanceScreen() {
@@ -53,12 +53,11 @@ export default function BalanceScreen() {
 
   useEffect(() => {
     loadData();
-    const socket = connectSocket();
     const handler = (data) => {
       if (data.balance !== undefined) setBalance(data.balance);
     };
-    socket.on('balance_updated', handler);
-    return () => socket.off('balance_updated', handler);
+    socketService.on('balance_updated', handler);
+    return () => socketService.off('balance_updated');
   }, [loadData]);
 
   const handleTopUp = async () => {
