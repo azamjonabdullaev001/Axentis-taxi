@@ -70,6 +70,36 @@ function extractRouteCoords(json, dest) {
 
 // Маршрут по реальным дорогам (OSRM)
 // Возвращает { coords, distanceKm }
+// Snap route coordinates onto roads via OSRM match API (post-processing).
+async function snapToRoad(coords) {
+  if (!coords || coords.length < 2) return coords;
+  let sampled = coords;
+  if (coords.length > 80) {
+    sampled = [];
+    const step = (coords.length - 1) / 79;
+    for (let i = 0; i < 79; i++) sampled.push(coords[Math.round(i * step)]);
+    sampled.push(coords[coords.length - 1]);
+  }
+  const body = { coordinates: sampled.map(c => [c.longitude, c.latitude]) };
+  try {
+    const ctrl = new AbortController();
+    const tm = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`${API_BASE}/route/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(tm);
+    if (!res.ok) return coords;
+    const data = await res.json();
+    if (data.code === 'Ok' && data.geometry?.coordinates?.length >= 2) {
+      return data.geometry.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
+    }
+  } catch {}
+  return coords;
+}
+
 async function fetchRoadRoute(pickup, dest) {
   const lng1 = pickup.longitude, lat1 = pickup.latitude;
   const lng2 = dest.longitude,   lat2 = dest.latitude;
@@ -82,7 +112,10 @@ async function fetchRoadRoute(pickup, dest) {
     clearTimeout(timer);
     if (res.ok) {
       const result = extractRouteCoords(await res.json(), dest);
-      if (result) return result;
+      if (result) {
+        result.coords = await snapToRoad(result.coords);
+        return result;
+      }
     }
   } catch { clearTimeout(timer); }
 
@@ -94,7 +127,10 @@ async function fetchRoadRoute(pickup, dest) {
     const res = await fetch(url, { signal: c2.signal });
     clearTimeout(t2);
     const result = extractRouteCoords(await res.json(), dest);
-    if (result) return result;
+    if (result) {
+      result.coords = await snapToRoad(result.coords);
+      return result;
+    }
   } catch { clearTimeout(t2); }
 
   return { coords: [pickup, dest], distanceKm: 0 };

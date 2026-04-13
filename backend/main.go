@@ -82,6 +82,7 @@ func main() {
 	{
 		// OSRM route proxy (no auth — lightweight, needed before login too)
 		api.GET("/route", routeHandler.GetRoute)
+		api.POST("/route/match", routeHandler.MatchRoute)
 
 		auth := api.Group("/auth")
 		{

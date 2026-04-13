@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput,
-  ActivityIndicator, Alert, Image, Animated, ScrollView, PanResponder, Vibration, Dimensions,
+  ActivityIndicator, Alert, Image, Animated, ScrollView, PanResponder, Vibration,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -112,6 +112,38 @@ function extractRouteCoords(json, dest) {
   return { coords: clipRouteAtDestination(coords, dest), distanceKm };
 }
 
+// Snap route coordinates onto roads via OSRM match API (post-processing).
+// Returns snapped coords, or original if match fails.
+async function snapToRoad(coords) {
+  if (!coords || coords.length < 2) return coords;
+  // Sample up to 80 points evenly for the match API
+  let sampled = coords;
+  if (coords.length > 80) {
+    sampled = [];
+    const step = (coords.length - 1) / 79;
+    for (let i = 0; i < 79; i++) sampled.push(coords[Math.round(i * step)]);
+    sampled.push(coords[coords.length - 1]);
+  }
+  const body = { coordinates: sampled.map(c => [c.longitude, c.latitude]) };
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`${API_BASE}/route/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (!res.ok) return coords;
+    const data = await res.json();
+    if (data.code === 'Ok' && data.geometry?.coordinates?.length >= 2) {
+      return data.geometry.coordinates.map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
+    }
+  } catch {}
+  return coords;
+}
+
 // Маршрут по реальным дорогам: сначала свой OSRM (через backend-прокси),
 // затем публичный OSRM, в крайнем случае — прямая линия.
 // Возвращает { coords, distanceKm }.
@@ -128,7 +160,10 @@ async function fetchRoadRoute(pickup, dest) {
     clearTimeout(t0);
     if (res.ok) {
       const result = extractRouteCoords(await res.json(), dest);
-      if (result) return result;
+      if (result) {
+        result.coords = await snapToRoad(result.coords);
+        return result;
+      }
     }
   } catch { clearTimeout(t0); }
 
@@ -140,7 +175,10 @@ async function fetchRoadRoute(pickup, dest) {
     const res = await fetch(url, { signal: c1.signal });
     clearTimeout(t1);
     const result = extractRouteCoords(await res.json(), dest);
-    if (result) return result;
+    if (result) {
+      result.coords = await snapToRoad(result.coords);
+      return result;
+    }
   } catch { clearTimeout(t1); }
 
   // 3. Last resort: straight line
@@ -1031,11 +1069,9 @@ export default function HomeScreen() {
 
   // Dynamic stroke width: thinner when zoomed out, thicker when zoomed in
   const delta = region?.latitudeDelta || 0.02;
-  // ~1 meter real-world width: scales naturally with zoom (nearly invisible when zoomed out)
-  const screenH = Dimensions.get('window').height;
-  const metersPerPixel = (delta * 111320) / screenH;
-  const strokeMain = Math.max(0.5, Math.min(10, 1 / metersPerPixel));
-  const strokeDash = Math.max(0.3, strokeMain * 0.7);
+  // Polyline width: ~4px at street zoom, grows up to ~8px when zoomed out (≈2x)
+  const strokeMain = Math.max(4, Math.min(8, 3 + delta * 120));
+  const strokeDash = Math.max(3, strokeMain * 0.75);
 
   return (
     <View style={s.container}>
