@@ -557,17 +557,6 @@ export default function ProfileScreen() {
 
         {bonusExpanded && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
-              <View style={{ flex: 1, backgroundColor: colors.background, borderRadius: 10, padding: 12, alignItems: 'center' }}>
-                <Text style={{ color: '#F59E0B', fontSize: 24, fontWeight: '900' }}>{bonusStats.streak_days}</Text>
-                <Text style={{ color: colors.textSecondary, fontSize: 11 }}>🔥 {t(lang, 'streakDays')}</Text>
-              </View>
-              <View style={{ flex: 1, backgroundColor: colors.background, borderRadius: 10, padding: 12, alignItems: 'center' }}>
-                <Text style={{ color: '#10B981', fontSize: 24, fontWeight: '900' }}>{bonusStats.lifetime_trips}</Text>
-                <Text style={{ color: colors.textSecondary, fontSize: 11 }}>🚕 {t(lang, 'lifetimeTrips')}</Text>
-              </View>
-            </View>
-
             {/* ── Active bonuses list ── */}
             {bonusSettings && (
               <View style={{ marginBottom: 12 }}>
@@ -602,17 +591,34 @@ export default function ProfileScreen() {
                 )}
 
                 {bonusSettings.milestones_enabled && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
-                    <Text style={{ fontSize: 16 }}>🏆</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{t(lang, 'milestone')}</Text>
-                      <Text style={{ color: colors.textSecondary, fontSize: 11 }}>
-                        50 / 100 / 500 / 1000 {t(lang, 'lifetimeTrips')}
-                      </Text>
+                  <View style={{ paddingVertical: 6 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <Text style={{ fontSize: 16 }}>🏆</Text>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', flex: 1 }}>{t(lang, 'milestone')}</Text>
+                      <View style={{ backgroundColor: '#4CAF5020', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                        <Text style={{ color: '#4CAF50', fontSize: 11, fontWeight: '700' }}>ON</Text>
+                      </View>
                     </View>
-                    <View style={{ backgroundColor: '#4CAF5020', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
-                      <Text style={{ color: '#4CAF50', fontSize: 11, fontWeight: '700' }}>ON</Text>
-                    </View>
+                    {[50, 100, 500, 1000].map((target) => {
+                      const trips = bonusStats.lifetime_trips || 0;
+                      const done = trips >= target;
+                      const pct = done ? 100 : Math.min((trips / target) * 100, 100);
+                      return (
+                        <View key={target} style={{ marginBottom: 8 }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+                            <Text style={{ color: done ? '#4CAF50' : colors.text, fontSize: 12, fontWeight: '600' }}>
+                              {done ? '✅' : '🎯'} {target} {t(lang, 'lifetimeTrips')}
+                            </Text>
+                            <Text style={{ color: done ? '#4CAF50' : colors.textSecondary, fontSize: 11, fontWeight: '700' }}>
+                              {done ? (lang === 'uz' ? 'Bajarildi' : 'Выполнено') : `${trips} / ${target}`}
+                            </Text>
+                          </View>
+                          <View style={{ height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                            <View style={{ height: '100%', width: `${pct}%`, backgroundColor: done ? '#4CAF50' : '#F59E0B', borderRadius: 3 }} />
+                          </View>
+                        </View>
+                      );
+                    })}
                   </View>
                 )}
 

@@ -107,10 +107,6 @@
           <label>Сумма пополнения</label>
           <input v-model.number="topUpAmount" type="number" min="1000" step="1000" placeholder="Сумма" class="form-input" />
         </div>
-        <div class="form-group">
-          <label>Описание (необязательно)</label>
-          <input v-model="topUpDescription" type="text" placeholder="Причина пополнения" class="form-input" />
-        </div>
         <div class="quick-amounts">
           <button v-for="amt in [10000, 50000, 100000, 200000, 500000]" :key="amt" @click="topUpAmount = amt" class="quick-btn">
             {{ formatSum(amt) }}
@@ -158,7 +154,6 @@ const search = ref('')
 
 const topUpModal = ref(null)
 const topUpAmount = ref(50000)
-const topUpDescription = ref('')
 const historyModal = ref(null)
 
 const zeroBalanceCount = computed(() => drivers.value.filter(d => d.balance <= 0 && !d.exempt).length)
@@ -208,13 +203,12 @@ async function loadTransactions(driverId) {
 function openTopUp(d) {
   topUpModal.value = d
   topUpAmount.value = 50000
-  topUpDescription.value = ''
 }
 
 async function submitTopUp() {
   if (!topUpModal.value || !topUpAmount.value || topUpAmount.value <= 0) return
   try {
-    const { data } = await adminAPI.topUpDriverBalance(topUpModal.value.driver_id, topUpAmount.value, topUpDescription.value)
+    const { data } = await adminAPI.topUpDriverBalance(topUpModal.value.driver_id, topUpAmount.value, '')
     const d = drivers.value.find(x => x.driver_id === topUpModal.value.driver_id)
     if (d) d.balance = data.new_balance
     topUpModal.value = null

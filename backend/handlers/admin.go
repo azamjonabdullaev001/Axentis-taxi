@@ -1301,9 +1301,10 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 	defer earningsRows.Close()
 
 	type dailyEntry struct {
-		Date    string  `json:"date"`
-		Revenue float64 `json:"revenue"`
-		Orders  int     `json:"orders"`
+		Date       string  `json:"date"`
+		Revenue    float64 `json:"revenue"`
+		Orders     int     `json:"orders"`
+		Commission float64 `json:"commission"`
 	}
 	var daily []dailyEntry
 	var totalRevenue float64
@@ -1319,8 +1320,71 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		daily = []dailyEntry{}
 	}
 
-	companyShare := totalRevenue * commissionPct / 100
+	// Actual per-order commission from balance_transactions (locked at completion time)
+	var companyShare float64
+	if period == "custom" && dateFrom != "" && dateTo != "" {
+		h.db.QueryRow(context.Background(),
+			`SELECT COALESCE(ABS(SUM(amount)), 0)
+			 FROM balance_transactions
+			 WHERE driver_id = $1 AND tx_type = 'commission'
+			   AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`,
+			driverID, dateFrom, dateTo,
+		).Scan(&companyShare)
+	} else {
+		h.db.QueryRow(context.Background(),
+			`SELECT COALESCE(ABS(SUM(amount)), 0)
+			 FROM balance_transactions
+			 WHERE driver_id = $1 AND tx_type = 'commission'
+			   AND created_at >= NOW() - $2::interval`,
+			driverID, interval,
+		).Scan(&companyShare)
+	}
+
+	// Per-day actual commission for daily breakdown
+	dailyCommMap := map[string]float64{}
+	var commRows interface{ Next() bool; Scan(...interface{}) error; Close() }
+	if period == "custom" && dateFrom != "" && dateTo != "" {
+		commRows, err = h.db.Query(context.Background(),
+			`SELECT DATE(created_at)::text, COALESCE(ABS(SUM(amount)), 0)
+			 FROM balance_transactions
+			 WHERE driver_id = $1 AND tx_type = 'commission'
+			   AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')
+			 GROUP BY DATE(created_at)`,
+			driverID, dateFrom, dateTo,
+		)
+	} else {
+		commRows, err = h.db.Query(context.Background(),
+			`SELECT DATE(created_at)::text, COALESCE(ABS(SUM(amount)), 0)
+			 FROM balance_transactions
+			 WHERE driver_id = $1 AND tx_type = 'commission'
+			   AND created_at >= NOW() - $2::interval
+			 GROUP BY DATE(created_at)`,
+			driverID, interval,
+		)
+	}
+	if err == nil {
+		defer commRows.Close()
+		for commRows.Next() {
+			var dt string
+			var amt float64
+			commRows.Scan(&dt, &amt)
+			dailyCommMap[dt] = amt
+		}
+	}
+	for i := range daily {
+		daily[i].Commission = dailyCommMap[daily[i].Date]
+	}
+
 	driverEarnings := totalRevenue - companyShare
+
+	// Total company earnings from this driver (all-time)
+	var totalCompanyEarnings float64
+	h.db.QueryRow(context.Background(),
+		`SELECT COALESCE(ABS(SUM(amount)), 0)
+		 FROM balance_transactions
+		 WHERE driver_id = $1 AND tx_type = 'commission'`,
+		driverID,
+	).Scan(&totalCompanyEarnings)
 
 	// Count how many drivers this driver referred
 	var referralCount int
@@ -1352,6 +1416,7 @@ func (h *AdminHandler) GetDriverAnalytics(c *gin.Context) {
 		"total_orders":          totalOrders,
 		"company_share":         companyShare,
 		"driver_earnings":       driverEarnings,
+		"total_company_earnings": totalCompanyEarnings,
 		"referral_count":        referralCount,
 		"lifetime_trips":        lifetimeTrips,
 		"daily":                 daily,

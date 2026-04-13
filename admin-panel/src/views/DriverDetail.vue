@@ -58,6 +58,21 @@
         </div>
       </div>
 
+      <!-- Company earnings from this driver (all-time) -->
+      <div class="section-card company-earnings">
+        <h3>💼 Заработок системы от этого водителя</h3>
+        <div class="cards-row">
+          <div class="stat-card">
+            <div class="stat-label">Комиссия за период</div>
+            <div class="stat-value red">{{ fmt(info.company_share) }} <small>сум</small></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Комиссия за всё время</div>
+            <div class="stat-value" style="color: #E65100">{{ fmt(info.total_company_earnings) }} <small>сум</small></div>
+          </div>
+        </div>
+      </div>
+
       <!-- Progress section -->
       <div class="section-card progress-section">
         <h3>📊 Прогресс водителя</h3>
@@ -170,8 +185,8 @@
               <td>{{ fmtDate(d.date) }}</td>
               <td>{{ d.orders }}</td>
               <td>{{ fmt(d.revenue) }} сум</td>
-              <td class="red-text">{{ fmt(d.revenue * info.commission_pct / 100) }} сум</td>
-              <td class="green-text"><b>{{ fmt(d.revenue * (1 - info.commission_pct / 100)) }} сум</b></td>
+              <td class="red-text">{{ fmt(d.commission) }} сум</td>
+              <td class="green-text"><b>{{ fmt(d.revenue - d.commission) }} сум</b></td>
             </tr>
           </tbody>
           <tfoot>
